@@ -7,7 +7,7 @@ set -e
 
 REPO_URL=$1
 if [ -z "$REPO_URL" ]; then
-  echo "Usage: bash server_setup.sh https://github.com/yourname/tfii.git"
+  echo "Usage: bash server_setup.sh https://github.com/sherifrahim/TFII.git"
   exit 1
 fi
 
