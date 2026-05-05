@@ -1,0 +1,66 @@
+name: Deploy TFII
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            set -e
+            echo "=== TFII Deploy at $(date) ==="
+
+            cd /home/ubuntu/threatfeed-repo
+            git pull origin main
+            echo "✓ Code pulled"
+
+            # Backend
+            if ! diff -q backend/main.py /home/ubuntu/threatfeed/main.py > /dev/null 2>&1; then
+              cp backend/main.py /home/ubuntu/threatfeed/main.py
+              source /home/ubuntu/threatfeed/venv/bin/activate
+              pip install -r backend/requirements.txt --quiet
+              sudo systemctl restart threatfeed
+              sleep 2
+              if sudo systemctl is-active --quiet threatfeed; then
+                echo "✓ Backend deployed and running"
+              else
+                sudo journalctl -u threatfeed -n 20 --no-pager
+                exit 1
+              fi
+            else
+              echo "~ Backend unchanged"
+            fi
+
+            # Frontend
+            FRONTEND_CHANGED=false
+            for f in frontend/src/App.js frontend/public/index.html; do
+              dest="/home/ubuntu/threatfeed-ui/${f#frontend/}"
+              if ! diff -q "$f" "$dest" > /dev/null 2>&1; then
+                cp "$f" "$dest"
+                FRONTEND_CHANGED=true
+                echo "✓ Updated: $f"
+              fi
+            done
+
+            if [ "$FRONTEND_CHANGED" = true ]; then
+              cd /home/ubuntu/threatfeed-ui && npm run build
+              echo "✓ Frontend built"
+            else
+              echo "~ Frontend unchanged"
+            fi
+
+            echo "=== Done ==="
