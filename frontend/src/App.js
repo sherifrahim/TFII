@@ -36,6 +36,60 @@ const THEMES = {
   light:{name:"Light",font:"'Inter',sans-serif",bg:"#f4f6fb",surface:"#ffffff",surfaceHi:"#f0f3fa",border:"#e2e6f0",accent:"#2563eb",accentDim:"#2563eb12",accentText:"#2563eb",text:"#374151",muted:"#9ca3af",white:"#111827",green:"#16a34a",amber:"#d97706",red:"#dc2626",purple:"#7c3aed",inputBg:"#ffffff",inputBorder:"#d1d5db",inputText:"#111827",shadow:"0 2px 16px #0000001a",badge:"#f0f3fa"},
 };
 
+// ── MODE NAV DEFINITIONS ──────────────────────────────────────────────────────
+const IOC_NAV=[
+  {id:"dashboard",label:"Dashboard",    icon:"▦"},
+  {id:"feed",     label:"IOC Feed",     icon:"◈"},
+  {id:"add",      label:"Add IOC",      icon:"＋"},
+  {id:"campaigns",label:"Campaigns",    icon:"◎"},
+  {id:"map",      label:"Geo Map",      icon:"🗺"},
+  {id:"public",   label:"Public Lookup",icon:"🌐"},
+  {id:"import",   label:"Import",       icon:"↓"},
+  {id:"export",   label:"Export",       icon:"↑"},
+];
+const CVE_NAV=[
+  {id:"dashboard",label:"Dashboard",    icon:"▦"},
+  {id:"cve",      label:"CVE Monitor",  icon:"🛡️"},
+  {id:"intel",    label:"Intel Wall",   icon:"📡"},
+  {id:"actors",   label:"Threat Actors",icon:"⚡"},
+  {id:"osint",    label:"OSINT",        icon:"🔍"},
+];
+const ADMIN_NAV=[
+  {id:"settings", label:"Settings",     icon:"⚙"},
+  {id:"users",    label:"Users",        icon:"👥"},
+  {id:"invites",  label:"Invites",      icon:"✉"},
+];
+const USER_NAV=[
+  {id:"settings", label:"Settings",     icon:"⚙"},
+];
+
+// ── CVE SUMMARY STRIP (shown on dashboard regardless of mode) ─────────────────
+function CVESummaryStrip({token,C}){
+  const [summary,setSummary]=useState(null);
+  useEffect(()=>{
+    api("/cves/stats/summary",{},token).then(r=>r.ok?r.json():null).then(d=>{if(d)setSummary(d);});
+  },[token]);
+  if(!summary||summary.total===0)return null;
+  return(
+    <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+      padding:"14px 20px",marginBottom:20,display:"flex",gap:24,alignItems:"center",
+      flexWrap:"wrap",boxShadow:C.shadow}}>
+      <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1,
+        textTransform:"uppercase",marginRight:4}}>CVE Monitor</div>
+      {[[`${summary.total} Total`,C.accentText],[`${summary.unpatched} Unpatched`,C.red],
+        [`${summary.kev_unpatched} KEV`,C.red],[`${summary.patched} Patched`,C.green],
+      ].map(([label,color])=>(
+        <div key={label} style={{fontSize:13,fontWeight:700,color}}>{label}</div>
+      ))}
+      {summary.last_poll&&(
+        <div style={{fontSize:11,color:C.muted,marginLeft:"auto"}}>
+          Last poll: {new Date(summary.last_poll).toLocaleString()}
+        </div>
+      )}
+    </div>
+  );
+}
+
 async function api(path,opts={},token=null){
   const headers={"Content-Type":"application/json",...(opts.headers||{})};
   if(token)headers["Authorization"]=`Bearer ${token}`;
@@ -1221,6 +1275,8 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me}){
 export default function App(){
   const [themeName,setThemeName]=useState(()=>localStorage.getItem("tf_theme")||"operator");
   const C=THEMES[themeName]||THEMES.operator;
+  const [mode,setMode]=useState(()=>localStorage.getItem("tf_mode")||"ioc");
+  function switchMode(m){setMode(m);localStorage.setItem("tf_mode",m);setView("dashboard");}
   const [session,setSession]=useState(()=>{const t=localStorage.getItem("tf_token");return t?{token:t}:null;});
   const [me,setMe]=useState(null);
   const [iocs,setIocs]=useState([]); const [campaigns,setCampaigns]=useState([]);
@@ -1312,14 +1368,8 @@ export default function App(){
   });
 
   const NAV=[
-    {id:"dashboard",label:"Dashboard",icon:"▦"},{id:"feed",label:"IOC Feed",icon:"◈"},
-    {id:"add",label:"Add IOC",icon:"＋"},{id:"campaigns",label:"Campaigns",icon:"◎"},
-    {id:"cve",label:"CVE Monitor",icon:"🛡️"},{id:"map",label:"Geo Map",icon:"🗺"},
-    {id:"actors",label:"Threat Actors",icon:"⚡"},{id:"intel",label:"Intel Wall",icon:"📡"},
-    {id:"osint",label:"OSINT",icon:"🔍"},{id:"public",label:"Public Lookup",icon:"🌐"},
-    {id:"import",label:"Import",icon:"↓"},{id:"export",label:"Export",icon:"↑"},
-    {id:"settings",label:"Settings",icon:"⚙"},
-    ...(me?.role==="admin"?[{id:"users",label:"Users",icon:"👥"},{id:"invites",label:"Invites",icon:"✉"}]:[]),
+    ...(mode==="ioc"?IOC_NAV:CVE_NAV),
+    ...(me?.role==="admin"?ADMIN_NAV:USER_NAV),
   ];
 
   if(!session){
@@ -1352,9 +1402,22 @@ export default function App(){
 
       {/* Sidebar */}
       <div className="sidebar" style={{width:200,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
-        <div style={{padding:"18px 16px 14px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{fontSize:16,fontWeight:700,letterSpacing:2,color:C.accentText}}>TFII</div>
-          <div className="sidebar-label" style={{color:C.muted,fontSize:10,letterSpacing:1,marginTop:2}}>THREATFEED INTEL</div>
+        <div style={{padding:"14px 12px",borderBottom:`1px solid ${C.border}`}}>
+          <div style={{fontSize:15,fontWeight:700,letterSpacing:2,color:C.accentText,marginBottom:10}}>TFII</div>
+          <div style={{display:"flex",background:C.surfaceHi,borderRadius:8,padding:2,gap:2}}>
+            {[["ioc","IOC","◈"],["cve","CVE","🛡️"]].map(([m,label,icon])=>(
+              <button key={m} onClick={()=>switchMode(m)} style={{
+                flex:1,padding:"6px 4px",borderRadius:6,border:"none",cursor:"pointer",
+                fontSize:11,fontFamily:"inherit",fontWeight:700,
+                background:mode===m?C.accent:"transparent",
+                color:mode===m?"#fff":C.muted,
+                transition:"all .15s",display:"flex",alignItems:"center",
+                justifyContent:"center",gap:4,
+              }}>
+                <span>{icon}</span>{label}
+              </button>
+            ))}
+          </div>
         </div>
         <nav style={{padding:"6px",flex:1,overflowY:"auto"}}>
           {NAV.map(n=>{const active=view===n.id;return(
@@ -1386,7 +1449,7 @@ export default function App(){
         </div>
 
         <div style={{flex:1,overflow:"auto",padding:20}}>
-          {view==="dashboard"&&<Dashboard token={token} C={C}/>}
+          {view==="dashboard"&&<><Dashboard token={token} C={C}/><CVESummaryStrip token={token} C={C}/></>}
           {view==="cve"&&<CVEDashboard token={token} C={C}/>}
           {view==="map"&&<GeoMap token={token} C={C}/>}
           {view==="intel"&&<IntelNews token={token} C={C}/>}
