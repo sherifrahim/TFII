@@ -27,6 +27,7 @@ ABUSEIPDB_API_KEY  = os.getenv("ABUSEIPDB_API_KEY", "")
 HIBP_API_KEY       = os.getenv("HIBP_API_KEY", "")
 SHODAN_API_KEY     = os.getenv("SHODAN_API_KEY", "")
 NVD_API_KEY        = os.getenv("NVD_API_KEY", "")
+GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
 CACHE_HOURS        = 24
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -1711,3 +1712,117 @@ def taxii_objects(collection_id: str, user=Depends(get_current_user), conn=Depen
     rows = cur.fetchall()
     return JSONResponse(content={"more":False,"next":None,"objects":[row_to_stix(r) for r in rows]},
         media_type="application/taxii+json;version=2.1")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SPL / KQL GENERATOR — powered by Groq (free, llama3-70b)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class QueryGenRequest(BaseModel):
+    use_case: str
+    query_type: str      # "spl" | "kql"
+    context: Optional[str] = ""   # optional: log source, product, field names
+
+SYSTEM_PROMPT_SPL = """You are a security engineer expert in Splunk SPL (Search Processing Language).
+The user will describe a detection use case or investigation need.
+You will respond with:
+1. A ready-to-use SPL query
+2. A brief explanation of what each clause does
+3. Any important notes about tuning or prerequisites (index names, sourcetypes etc.)
+
+Format your response exactly like this:
+QUERY:
+```spl
+<the query here>
+```
+EXPLANATION:
+<line by line explanation>
+NOTES:
+<tuning tips, required sourcetypes/indexes, field dependencies>"""
+
+SYSTEM_PROMPT_KQL = """You are a security engineer expert in KQL (Kusto Query Language) for Microsoft Sentinel and Defender.
+The user will describe a detection use case or investigation need.
+You will respond with:
+1. A ready-to-use KQL query
+2. A brief explanation of what each clause does
+3. Any important notes about tuning or prerequisites (tables, connectors needed etc.)
+
+Format your response exactly like this:
+QUERY:
+```kql
+<the query here>
+```
+EXPLANATION:
+<line by line explanation>
+NOTES:
+<tuning tips, required tables/connectors, field dependencies>"""
+
+@app.post("/query-gen/generate")
+async def generate_query(body: QueryGenRequest, user=Depends(get_current_user)):
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=503,
+            detail="GROQ_API_KEY not configured. Add it to .env and restart the backend.")
+
+    system_prompt = SYSTEM_PROMPT_KQL if body.query_type == "kql" else SYSTEM_PROMPT_SPL
+
+    user_message = body.use_case
+    if body.context:
+        user_message += f"\n\nAdditional context: {body.context}"
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "llama3-70b-8192",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_message},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 1500,
+                },
+            )
+        if r.status_code != 200:
+            raise HTTPException(status_code=502,
+                detail=f"Groq API error: {r.status_code} — {r.text[:200]}")
+
+        content = r.json()["choices"][0]["message"]["content"]
+
+        # Parse the structured response
+        query    = ""
+        explanation = ""
+        notes    = ""
+
+        if "QUERY:" in content:
+            after_query = content.split("QUERY:", 1)[1]
+            code_match = re.search(r"```(?:spl|kql)?\n(.*?)```", after_query, re.DOTALL)
+            if code_match:
+                query = code_match.group(1).strip()
+
+        if "EXPLANATION:" in content:
+            after_exp = content.split("EXPLANATION:", 1)[1]
+            notes_split = after_exp.split("NOTES:", 1)
+            explanation = notes_split[0].strip()
+            if len(notes_split) > 1:
+                notes = notes_split[1].strip()
+
+        if not query:
+            # fallback — return raw if parsing failed
+            return {"raw": content, "query": "", "explanation": content, "notes": ""}
+
+        return {
+            "query":       query,
+            "explanation": explanation,
+            "notes":       notes,
+            "query_type":  body.query_type,
+            "raw":         content,
+        }
+
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Groq API timed out. Try again.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

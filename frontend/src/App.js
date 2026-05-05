@@ -53,6 +53,7 @@ const CVE_NAV=[
   {id:"intel",    label:"Intel Wall",   icon:"📡"},
   {id:"actors",   label:"Threat Actors",icon:"⚡"},
   {id:"osint",    label:"OSINT",        icon:"🔍"},
+  {id:"querygen", label:"Query Builder",icon:"⌨"},
 ];
 const ADMIN_NAV=[
   {id:"settings", label:"Settings",     icon:"⚙"},
@@ -1110,6 +1111,194 @@ function OSINTTool({token,C}){
 }
 
 // ── GLOBAL SEARCH ─────────────────────────────────────────────────────────────
+// ── SPL / KQL GENERATOR ───────────────────────────────────────────────────────
+function QueryGenerator({token,C}){
+  const [queryType,setQueryType]=useState("kql");
+  const [useCase,setUseCase]=useState("");
+  const [context,setContext]=useState("");
+  const [result,setResult]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+  const [copied,setCopied]=useState(false);
+
+  const EXAMPLES={
+    kql:[
+      "Detect brute force login attempts against Azure AD",
+      "Find PowerShell downloading files from the internet",
+      "Alert on lateral movement using PsExec",
+      "Detect DNS tunneling via unusually long queries",
+      "Hunt for LOLBin execution (certutil, mshta, wscript)",
+      "Detect privilege escalation via token impersonation",
+      "Find failed MFA attempts followed by successful login",
+    ],
+    spl:[
+      "Detect multiple failed SSH logins from same IP",
+      "Alert on large outbound data transfers",
+      "Find new admin accounts created on Windows hosts",
+      "Detect Mimikatz-style credential dumping",
+      "Hunt for beaconing via regular outbound intervals",
+      "Alert on processes spawning cmd.exe or powershell.exe",
+      "Detect web shell activity on IIS servers",
+    ],
+  };
+
+  async function generate(){
+    if(!useCase.trim())return;
+    setLoading(true);setErr("");setResult(null);setCopied(false);
+    const r=await api("/query-gen/generate",{method:"POST",
+      body:JSON.stringify({use_case:useCase,query_type:queryType,context})},token);
+    if(r.ok){setResult(await r.json());}
+    else{const e=await r.json();setErr(e.detail||"Generation failed.");}
+    setLoading(false);
+  }
+
+  function copy(){
+    if(!result?.query)return;
+    navigator.clipboard.writeText(result.query);
+    setCopied(true);setTimeout(()=>setCopied(false),2000);
+  }
+
+  return(
+    <div style={{maxWidth:900}}>
+      {/* Header */}
+      <div style={{marginBottom:20,padding:14,background:C.accentDim,
+        border:`1px solid ${C.accent}28`,borderRadius:10,fontSize:13,
+        color:C.accentText,lineHeight:1.6}}>
+        Generate detection and hunting queries for <strong>Splunk (SPL)</strong> or{" "}
+        <strong>Microsoft Sentinel / Defender (KQL)</strong>. Powered by Groq — free, no API quota used on your end.
+      </div>
+
+      {/* Type selector */}
+      <div style={{display:"flex",gap:4,background:C.surfaceHi,borderRadius:10,
+        padding:3,width:"fit-content",marginBottom:20}}>
+        {[["kql","KQL","Microsoft Sentinel / Defender"],["spl","SPL","Splunk"]].map(([t,label,sub])=>(
+          <button key={t} onClick={()=>{setQueryType(t);setResult(null);setErr("");}}
+            style={{padding:"10px 20px",borderRadius:8,border:"none",cursor:"pointer",
+              fontFamily:"inherit",fontWeight:700,transition:"all .15s",
+              background:queryType===t?C.accent:"transparent",
+              color:queryType===t?"#fff":C.muted}}>
+            <div style={{fontSize:13}}>{label}</div>
+            <div style={{fontSize:10,opacity:.7,fontWeight:400}}>{sub}</div>
+          </button>
+        ))}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:20,alignItems:"start"}}>
+        {/* Left — input */}
+        <div>
+          <Field label="Describe your use case or detection goal" C={C}>
+            <textarea value={useCase} onChange={e=>setUseCase(e.target.value)}
+              rows={4} placeholder={`e.g. "${EXAMPLES[queryType][0]}"`}
+              style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                color:C.inputText,padding:"12px 14px",borderRadius:8,fontSize:14,
+                outline:"none",fontFamily:"inherit",resize:"vertical",boxSizing:"border-box"}}/>
+          </Field>
+          <Field label="Additional context (optional)" C={C}>
+            <input value={context} onChange={e=>setContext(e.target.value)}
+              placeholder="e.g. field names, log sources, index names, specific product versions..."
+              style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                color:C.inputText,padding:"10px 14px",borderRadius:8,fontSize:13,
+                outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
+          </Field>
+          <Btn onClick={generate} disabled={!useCase.trim()||loading} C={C}>
+            {loading?`Generating ${queryType.toUpperCase()}...`:`Generate ${queryType.toUpperCase()} Query`}
+          </Btn>
+          {err&&(
+            <div style={{marginTop:12,padding:"10px 14px",background:C.red+"10",
+              border:`1px solid ${C.red}30`,borderRadius:8,fontSize:13,color:C.red}}>
+              {err}
+            </div>
+          )}
+        </div>
+
+        {/* Right — examples */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:16,boxShadow:C.shadow}}>
+          <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:.5,
+            textTransform:"uppercase",marginBottom:12}}>Example Prompts</div>
+          {EXAMPLES[queryType].map((ex,i)=>(
+            <div key={i} onClick={()=>{setUseCase(ex);setResult(null);}}
+              style={{fontSize:12,color:C.text,padding:"8px 10px",borderRadius:6,
+                cursor:"pointer",marginBottom:4,lineHeight:1.4,transition:"background .1s",
+                border:`1px solid transparent`}}
+              onMouseEnter={e=>{e.currentTarget.style.background=C.surfaceHi;e.currentTarget.style.borderColor=C.border;}}
+              onMouseLeave={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.borderColor="transparent";}}>
+              {ex}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Result */}
+      {result&&(
+        <div style={{marginTop:24}}>
+          {/* Query block */}
+          <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,
+            overflow:"hidden",boxShadow:C.shadow,marginBottom:16}}>
+            <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}`,
+              display:"flex",justifyContent:"space-between",alignItems:"center",
+              background:C.surfaceHi}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
+                  background:queryType==="kql"?C.purple+"30":C.amber+"30",
+                  color:queryType==="kql"?C.purple:C.amber,
+                  border:`1px solid ${queryType==="kql"?C.purple:C.amber}40`}}>
+                  {queryType.toUpperCase()}
+                </span>
+                <span style={{fontSize:12,color:C.muted}}>Generated query</span>
+              </div>
+              <button onClick={copy} style={{padding:"5px 14px",background:copied?C.green+"20":C.accentDim,
+                border:`1px solid ${copied?C.green:C.accent}40`,color:copied?C.green:C.accentText,
+                borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600,
+                transition:"all .2s"}}>
+                {copied?"✓ Copied!":"Copy Query"}
+              </button>
+            </div>
+            <pre style={{margin:0,padding:"16px 18px",fontSize:13,color:C.accentText,
+              fontFamily:"'Space Mono',monospace",overflowX:"auto",lineHeight:1.6,
+              whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
+              {result.query}
+            </pre>
+          </div>
+
+          {/* Explanation */}
+          {result.explanation&&(
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+              padding:18,marginBottom:14,boxShadow:C.shadow}}>
+              <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:.5,
+                textTransform:"uppercase",marginBottom:10}}>How it works</div>
+              <div style={{fontSize:13,color:C.text,lineHeight:1.8,whiteSpace:"pre-line"}}>
+                {result.explanation}
+              </div>
+            </div>
+          )}
+
+          {/* Notes */}
+          {result.notes&&(
+            <div style={{background:C.amber+"08",border:`1px solid ${C.amber}30`,
+              borderRadius:12,padding:18,boxShadow:C.shadow}}>
+              <div style={{fontSize:11,color:C.amber,fontWeight:700,letterSpacing:.5,
+                textTransform:"uppercase",marginBottom:10}}>⚠ Tuning Notes</div>
+              <div style={{fontSize:13,color:C.text,lineHeight:1.8,whiteSpace:"pre-line"}}>
+                {result.notes}
+              </div>
+            </div>
+          )}
+
+          {/* Regenerate */}
+          <div style={{marginTop:16,display:"flex",gap:8}}>
+            <Btn onClick={generate} variant="ghost" C={C} disabled={loading}>
+              {loading?"Regenerating...":"↻ Regenerate"}
+            </Btn>
+            <Btn onClick={()=>{setUseCase("");setResult(null);setContext("");}} variant="ghost" C={C}>
+              New Query
+            </Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GlobalSearch({token,C,onSelect}){
   const [q,setQ]=useState(""); const [results,setResults]=useState(null); const [loading,setLoading]=useState(false); const [open,setOpen]=useState(false);
   const ref=useRef(null);
@@ -1455,6 +1644,7 @@ export default function App(){
           {view==="intel"&&<IntelNews token={token} C={C}/>}
           {view==="actors"&&<ThreatActors token={token} C={C}/>}
           {view==="osint"&&<OSINTTool token={token} C={C}/>}
+          {view==="querygen"&&<QueryGenerator token={token} C={C}/>}
           {view==="public"&&<PublicSearch C={C}/>}
           {view==="settings"&&<SettingsPage themeName={themeName} setThemeName={setThemeName} token={token} onLogout={logout} C={C} me={me}/>}
 
