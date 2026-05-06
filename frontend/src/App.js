@@ -360,108 +360,118 @@ function CVEDetail({cve,token,onClose,C}){
 // ── ASSET MANAGER ─────────────────────────────────────────────────────────────
 function AssetManager({token,C,onChanged}){
   const [assets,setAssets]=useState([]);
-  const [form,setForm]=useState({name:"",vendor:"",version:"",asset_type:"application",criticality:"high",cpe:"",description:""});
-  const [cpeSearch,setCpeSearch]=useState(""); const [cpeSuggestions,setCpeSuggestions]=useState([]);
-  const [cpeLoading,setCpeLoading]=useState(false); const [saving,setSaving]=useState(false);
+  const [form,setForm]=useState({name:"",vendor:"",version:"",asset_type:"application"});
+  const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState(""); const [err,setErr]=useState("");
   const ASSET_TYPES=["application","os","firmware","cloud_service","hardware","library","database"];
-  const CRITICALITIES=["critical","high","medium","low"];
 
   const load=useCallback(()=>api("/assets",{},token).then(r=>r.ok?r.json():[]).then(setAssets),[token]);
   useEffect(()=>{load();},[load]);
 
-  async function searchCPE(){
-    if(!cpeSearch.trim())return;setCpeLoading(true);setErr("");
-    try{
-      const r=await api(`/assets/cpe-search?q=${encodeURIComponent(cpeSearch)}`,{},token);
-      if(r.ok){const d=await r.json();setCpeSuggestions(d.results||[]);}
-      else{const e=await r.json();setErr(`CPE search failed: ${e.detail||r.status}`);}
-    }catch(e){setErr("CPE search failed: cannot reach server");}
-    setCpeLoading(false);
-  }
   async function addAsset(){
     if(!form.name.trim())return;
     setSaving(true);setMsg("");setErr("");
     try{
-      const r=await api("/assets",{method:"POST",body:JSON.stringify(form)},token);
+      const r=await api("/assets",{method:"POST",body:JSON.stringify({...form,cpe:"",criticality:"high",description:""})},token);
       if(r.ok){
-        setMsg("Asset added. CVE monitoring starts at next poll.");
-        setForm({name:"",vendor:"",version:"",asset_type:"application",criticality:"high",cpe:"",description:""});
-        setCpeSuggestions([]);setCpeSearch("");
+        const d=await r.json();
+        setMsg(`✓ "${form.name}" added and queued for CVE monitoring.`);
+        setForm({name:"",vendor:"",version:"",asset_type:"application"});
         load();if(onChanged)onChanged();
       }else{
         const e=await r.json();
-        setErr(`Failed to add asset: ${e.detail||r.status}`);
+        setErr(`Failed: ${e.detail||r.status}`);
       }
-    }catch(e){
-      setErr("Failed to add asset: cannot reach server");
-    }
+    }catch(e){setErr("Cannot reach server — is the backend running?");}
     setSaving(false);
-  }
-  async function removeAsset(id){
-    await api(`/assets/${id}`,{method:"DELETE"},token);load();if(onChanged)onChanged();
   }
 
   return(
     <div style={{maxWidth:800}}>
       <Card C={C} style={{marginBottom:24}}>
-        <div style={{fontSize:13,fontWeight:700,color:C.white,marginBottom:16}}>Add Software / Service to Monitor</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Field label="Name *" C={C}><Inp value={form.name} onChange={v=>setForm(p=>({...p,name:v}))} placeholder="e.g. Apache Log4j" C={C}/></Field>
-          <Field label="Vendor" C={C}><Inp value={form.vendor} onChange={v=>setForm(p=>({...p,vendor:v}))} placeholder="e.g. Apache" C={C}/></Field>
-          <Field label="Version" C={C}><Inp value={form.version} onChange={v=>setForm(p=>({...p,version:v}))} placeholder="e.g. 2.14.1 (blank = all versions)" C={C}/></Field>
+        <div style={{fontSize:14,fontWeight:700,color:C.white,marginBottom:4}}>
+          Add Software / Service to Monitor
+        </div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:20,lineHeight:1.6}}>
+          Enter the name and optionally the vendor and version. The system will automatically
+          identify the correct CVE identifiers and begin monitoring NVD for new vulnerabilities.
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:4}}>
+          <Field label="Name *" C={C}>
+            <Inp value={form.name} onChange={v=>setForm(p=>({...p,name:v}))}
+              placeholder="e.g. Chrome, Nginx, OpenSSL, Windows Server" C={C}/>
+          </Field>
+          <Field label="Vendor" C={C}>
+            <Inp value={form.vendor} onChange={v=>setForm(p=>({...p,vendor:v}))}
+              placeholder="e.g. Google, Microsoft, Apache" C={C}/>
+          </Field>
+          <Field label="Version (optional — blank monitors all versions)" C={C}>
+            <Inp value={form.version} onChange={v=>setForm(p=>({...p,version:v}))}
+              placeholder="e.g. 124.0.6367.60" C={C}/>
+          </Field>
           <Field label="Type" C={C}>
-            <select value={form.asset_type} onChange={e=>setForm(p=>({...p,asset_type:e.target.value}))} style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}>
+            <select value={form.asset_type} onChange={e=>setForm(p=>({...p,asset_type:e.target.value}))}
+              style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}>
               {ASSET_TYPES.map(t=><option key={t} value={t}>{t.replace("_"," ")}</option>)}
             </select>
           </Field>
         </div>
-        <Field label="CPE Identifier (required for NVD matching)" C={C}>
-          <Inp value={form.cpe} onChange={v=>setForm(p=>({...p,cpe:v}))} placeholder="e.g. cpe:2.3:a:apache:log4j:2.14.1:*:*:*:*:*:*:*" C={C}/>
-          <div style={{display:"flex",gap:8,marginTop:8}}>
-            <input value={cpeSearch} onChange={e=>setCpeSearch(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")searchCPE();}}
-              placeholder="Search NVD CPE dictionary (e.g. 'log4j', 'nginx')..."
-              style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"8px 12px",borderRadius:8,fontSize:13,outline:"none",fontFamily:"inherit"}}/>
-            <Btn onClick={searchCPE} disabled={cpeLoading||!cpeSearch.trim()} variant="dim" C={C} sm>{cpeLoading?"Searching...":"Search CPE"}</Btn>
-          </div>
-          {cpeSuggestions.length>0&&(
-            <div style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:8,marginTop:6,overflow:"hidden"}}>
-              {cpeSuggestions.map((s,i)=>(
-                <div key={i} onClick={()=>{setForm(p=>({...p,cpe:s.cpe}));setCpeSuggestions([]);}}
-                  style={{padding:"10px 14px",cursor:"pointer",borderBottom:i<cpeSuggestions.length-1?`1px solid ${C.border}`:"none"}}
-                  onMouseEnter={e=>e.currentTarget.style.background=C.surface}
-                  onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                  <div style={{fontSize:12,color:C.accentText,fontFamily:"monospace"}}>{s.cpe}</div>
-                  {s.title&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>{s.title}</div>}
-                </div>
-              ))}
-            </div>
-          )}
-        </Field>
-        {err&&<div style={{fontSize:12,color:C.red,marginBottom:12,padding:"8px 12px",background:C.red+"10",borderRadius:6,border:`1px solid ${C.red}30`}}>{err}</div>}
-        {msg&&<div style={{fontSize:12,color:C.green,marginBottom:12,padding:"8px 12px",background:C.green+"10",borderRadius:6,border:`1px solid ${C.green}30`}}>{msg}</div>}
-        <Btn onClick={addAsset} disabled={!form.name.trim()||saving} C={C}>{saving?"Adding...":"Add to Monitor List"}</Btn>
+        {err&&<div style={{fontSize:12,color:C.red,margin:"12px 0",padding:"10px 14px",
+          background:C.red+"10",borderRadius:6,border:`1px solid ${C.red}30`}}>{err}</div>}
+        {msg&&<div style={{fontSize:12,color:C.green,margin:"12px 0",padding:"10px 14px",
+          background:C.green+"10",borderRadius:6,border:`1px solid ${C.green}30`}}>{msg}</div>}
+        <Btn onClick={addAsset} disabled={!form.name.trim()||saving} C={C}>
+          {saving?"Adding...":"Add to Monitor List"}
+        </Btn>
       </Card>
-      <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",marginBottom:12}}>Monitored Assets ({assets.length})</div>
-      {assets.length===0&&<div style={{textAlign:"center",padding:40,color:C.muted,fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:12}}>No assets yet. Add software above to start CVE monitoring.</div>}
+
+      <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,
+        textTransform:"uppercase",marginBottom:12}}>
+        Monitored Assets ({assets.length})
+      </div>
+      {assets.length===0&&(
+        <div style={{textAlign:"center",padding:40,color:C.muted,fontSize:13,
+          background:C.surface,border:`1px solid ${C.border}`,borderRadius:12}}>
+          No assets yet. Add a software or service above to start CVE monitoring.
+        </div>
+      )}
       {assets.map(asset=>(
-        <div key={asset.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:18,marginBottom:12,boxShadow:C.shadow}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
-            <div>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+        <div key={asset.id} style={{background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:12,padding:18,marginBottom:12,boxShadow:C.shadow}}>
+          <div style={{display:"flex",justifyContent:"space-between",
+            alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
                 <span style={{fontSize:15,fontWeight:700,color:C.white}}>{asset.name}</span>
                 {asset.vendor&&<span style={{fontSize:12,color:C.muted}}>{asset.vendor}</span>}
-                {asset.version&&<span style={{fontSize:11,padding:"1px 6px",borderRadius:3,background:C.badge,color:C.muted,fontFamily:"monospace"}}>v{asset.version}</span>}
-                <span style={{fontSize:11,padding:"1px 6px",borderRadius:3,background:C.surfaceHi,color:C.accentText}}>{asset.asset_type?.replace("_"," ")}</span>
+                {asset.version&&(
+                  <span style={{fontSize:11,padding:"1px 7px",borderRadius:3,
+                    background:C.badge,color:C.muted,fontFamily:"monospace"}}>v{asset.version}</span>
+                )}
+                <span style={{fontSize:11,padding:"1px 7px",borderRadius:3,
+                  background:C.surfaceHi,color:C.accentText}}>
+                  {asset.asset_type?.replace("_"," ")}
+                </span>
               </div>
-              {asset.cpe&&<div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:6}}>{asset.cpe}</div>}
-              <div style={{display:"flex",gap:12,fontSize:12,flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:14,fontSize:12,flexWrap:"wrap",marginBottom:4}}>
                 <span style={{color:C.text}}>{asset.cve_count||0} CVEs found</span>
-                {(asset.kev_unpatched||0)>0&&<span style={{color:C.red,fontWeight:700}}>🚨 {asset.kev_unpatched} KEV unpatched</span>}
-                {(asset.critical_unpatched||0)>0&&<span style={{color:C.amber,fontWeight:600}}>⚠ {asset.critical_unpatched} critical unpatched</span>}
+                {(asset.kev_unpatched||0)>0&&(
+                  <span style={{color:C.red,fontWeight:700}}>🚨 {asset.kev_unpatched} KEV unpatched</span>
+                )}
+                {(asset.critical_unpatched||0)>0&&(
+                  <span style={{color:C.amber,fontWeight:600}}>⚠ {asset.critical_unpatched} critical unpatched</span>
+                )}
               </div>
+              {asset.cpe&&(
+                <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",
+                  marginTop:2,wordBreak:"break-all",opacity:.7}}>
+                  {asset.cpe}
+                </div>
+              )}
             </div>
-            <Btn onClick={()=>removeAsset(asset.id)} variant="danger" C={C} sm>Remove</Btn>
+            <Btn onClick={()=>{api(`/assets/${asset.id}`,{method:"DELETE"},token).then(()=>{load();if(onChanged)onChanged();});}}
+              variant="danger" C={C} sm>Remove</Btn>
           </div>
         </div>
       ))}

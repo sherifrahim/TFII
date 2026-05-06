@@ -1095,13 +1095,56 @@ def list_assets(user=Depends(get_current_user), conn=Depends(get_db)):
     return cur.fetchall()
 
 @app.post("/assets", status_code=201)
-def create_asset(body: AssetIn, user=Depends(get_current_user), conn=Depends(get_db)):
+async def create_asset(body: AssetIn, user=Depends(get_current_user), conn=Depends(get_db)):
     aid = f"asset--{uuid.uuid4()}"
+    cpe = body.cpe or ""
+
+    # Auto-resolve CPE from name+vendor if not provided
+    if not cpe and body.name:
+        try:
+            headers = {"User-Agent":"ThreatFeed-CTI/1.0"}
+            if NVD_API_KEY: headers["apiKey"] = NVD_API_KEY
+            query = f"{body.vendor} {body.name}".strip() if body.vendor else body.name
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get("https://services.nvd.nist.gov/rest/json/cpes/2.0",
+                                params={"keywordSearch": query, "resultsPerPage": 5},
+                                headers=headers)
+            if r.status_code == 200:
+                products = r.json().get("products", [])
+                if products:
+                    # Pick the most specific match — prefer ones with version wildcards
+                    best = products[0].get("cpe", {}).get("cpeName", "")
+                    # Prefer entries matching vendor name if provided
+                    if body.vendor:
+                        for p in products:
+                            cpe_name = p.get("cpe", {}).get("cpeName", "").lower()
+                            if body.vendor.lower() in cpe_name:
+                                best = p.get("cpe", {}).get("cpeName", "")
+                                break
+                    # Normalise to wildcard version for broad matching
+                    parts = best.split(":")
+                    if len(parts) >= 6:
+                        parts[5] = "*"  # version → wildcard unless user specified one
+                        if body.version:
+                            parts[5] = body.version
+                        best = ":".join(parts)
+                    cpe = best
+        except Exception as e:
+            print(f"[cpe-autoresolve] {e}")
+        # If NVD lookup fails, build a best-effort CPE from the name
+        if not cpe:
+            safe_vendor = re.sub(r'[^a-z0-9_]', '_', (body.vendor or body.name).lower())
+            safe_name   = re.sub(r'[^a-z0-9_]', '_', body.name.lower())
+            version_part = body.version if body.version else "*"
+            cpe = f"cpe:2.3:a:{safe_vendor}:{safe_name}:{version_part}:*:*:*:*:*:*:*"
+
     cur = conn.cursor()
     cur.execute("""INSERT INTO assets (id,name,vendor,version,asset_type,criticality,cpe,description,created_by)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-        (aid,body.name,body.vendor,body.version,body.asset_type,body.criticality,body.cpe,body.description,user["id"]))
-    conn.commit(); return {"id":aid,"name":body.name}
+        (aid, body.name, body.vendor, body.version, body.asset_type,
+         body.criticality, cpe, body.description, user["id"]))
+    conn.commit()
+    return {"id": aid, "name": body.name, "cpe_resolved": cpe}
 
 # NOTE: /assets/cpe-search MUST be before /assets/{asset_id} — FastAPI matches routes top-down
 # and would otherwise treat "cpe-search" as an asset_id path parameter.
