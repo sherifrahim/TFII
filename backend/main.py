@@ -1103,12 +1103,8 @@ def create_asset(body: AssetIn, user=Depends(get_current_user), conn=Depends(get
         (aid,body.name,body.vendor,body.version,body.asset_type,body.criticality,body.cpe,body.description,user["id"]))
     conn.commit(); return {"id":aid,"name":body.name}
 
-@app.delete("/assets/{asset_id}")
-def delete_asset(asset_id: str, admin=Depends(require_admin), conn=Depends(get_db)):
-    cur = conn.cursor()
-    cur.execute("UPDATE assets SET active = FALSE WHERE id = %s", (asset_id,))
-    conn.commit(); return {"status":"deactivated"}
-
+# NOTE: /assets/cpe-search MUST be before /assets/{asset_id} — FastAPI matches routes top-down
+# and would otherwise treat "cpe-search" as an asset_id path parameter.
 @app.get("/assets/cpe-search")
 async def cpe_search(q: str, user=Depends(get_current_user)):
     try:
@@ -1125,6 +1121,12 @@ async def cpe_search(q: str, user=Depends(get_current_user)):
     except Exception as e:
         return {"results":[],"error":str(e)}
 
+@app.delete("/assets/{asset_id}")
+def delete_asset(asset_id: str, admin=Depends(require_admin), conn=Depends(get_db)):
+    cur = conn.cursor()
+    cur.execute("UPDATE assets SET active = FALSE WHERE id = %s", (asset_id,))
+    conn.commit(); return {"status":"deactivated"}
+
 @app.get("/cves")
 def list_cves(asset_id: Optional[str]=None, patch_available: Optional[bool]=None,
               kev_only: bool=False, min_score: Optional[float]=None,
@@ -1140,17 +1142,7 @@ def list_cves(asset_id: Optional[str]=None, patch_available: Optional[bool]=None
     query += " ORDER BY cf.kev_listed DESC, cf.cvss_score DESC NULLS LAST, cf.created_at DESC"
     cur.execute(query, params); return cur.fetchall()
 
-@app.get("/cves/{cve_id}")
-def get_cve(cve_id: str, user=Depends(get_current_user), conn=Depends(get_db)):
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("""SELECT cf.*, a.name as asset_name FROM cve_findings cf
-        LEFT JOIN assets a ON cf.asset_id = a.id WHERE cf.cve_id = %s""", (cve_id,))
-    cve = cur.fetchone()
-    if not cve: raise HTTPException(status_code=404, detail="CVE not found")
-    cur.execute("""SELECT i.* FROM iocs i JOIN cve_ioc_links l ON i.id = l.ioc_id WHERE l.cve_id = %s""", (cve_id,))
-    cve["linked_iocs"] = cur.fetchall()
-    return cve
-
+# NOTE: poll-now and stats/summary MUST be before /{cve_id} — specific routes first
 @app.post("/cves/poll-now")
 async def poll_now(admin=Depends(require_admin), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1213,6 +1205,17 @@ def cve_summary(user=Depends(get_current_user), conn=Depends(get_db)):
     return {"total":total,"unpatched":unpatched,"patched":patched,"kev_unpatched":kev_unpatched,
             "critical_unpatched":critical_unpatched,"by_severity":by_severity,"by_asset":by_asset,
             "last_poll":last_poll["polled_at"].isoformat() if last_poll else None}
+
+@app.get("/cves/{cve_id}")
+def get_cve(cve_id: str, user=Depends(get_current_user), conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""SELECT cf.*, a.name as asset_name FROM cve_findings cf
+        LEFT JOIN assets a ON cf.asset_id = a.id WHERE cf.cve_id = %s""", (cve_id,))
+    cve = cur.fetchone()
+    if not cve: raise HTTPException(status_code=404, detail="CVE not found")
+    cur.execute("""SELECT i.* FROM iocs i JOIN cve_ioc_links l ON i.id = l.ioc_id WHERE l.cve_id = %s""", (cve_id,))
+    cve["linked_iocs"] = cur.fetchall()
+    return cve
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DASHBOARD + GEO
