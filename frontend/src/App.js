@@ -1544,86 +1544,161 @@ function ApiKeyModal({token, C, onClose}){
 }
 
 // ── API KEYS SECTION IN SETTINGS ──────────────────────────────────────────────
+const STATIC_SERVICES=[
+  {service:"virustotal", name:"VirusTotal",    url:"https://www.virustotal.com/gui/my-apikey",          placeholder:"Enter your VT API key",    desc:"IOC enrichment — malware & IP reputation"},
+  {service:"abuseipdb",  name:"AbuseIPDB",     url:"https://www.abuseipdb.com/account/api",             placeholder:"Enter your AbuseIPDB key",  desc:"IP abuse confidence scoring"},
+  {service:"groq",       name:"Groq",          url:"https://console.groq.com/keys",                     placeholder:"gsk_xxxxxxxxxxxx",           desc:"SPL/KQL query generation (free)"},
+  {service:"shodan",     name:"Shodan",        url:"https://account.shodan.io/",                        placeholder:"Enter your Shodan key",     desc:"Port scan & OSINT host lookup"},
+  {service:"hibp",       name:"HaveIBeenPwned",url:"https://haveibeenpwned.com/API/Key",                placeholder:"Enter your HIBP key",       desc:"Email breach lookup in OSINT"},
+  {service:"nvd",        name:"NVD",           url:"https://nvd.nist.gov/developers/request-an-api-key",placeholder:"Enter your NVD key",        desc:"CVE monitoring (higher rate limit)"},
+];
+
 function ApiKeysSection({token,C}){
-  const [keyData,setKeyData]=useState([]);
+  const [keyData,setKeyData]=useState(null); // null = loading, [] = failed/empty
   const [editing,setEditing]=useState({});
   const [saving,setSaving]=useState({});
   const [msg,setMsg]=useState({});
+  const [err,setErr]=useState({});
 
-  const load=()=>api("/users/me/api-keys",{},token).then(r=>r.ok?r.json():[]).then(setKeyData);
+  const load=()=>{
+    api("/users/me/api-keys",{},token)
+      .then(r=>r.ok?r.json():null)
+      .then(d=>setKeyData(Array.isArray(d)?d:null))
+      .catch(()=>setKeyData(null));
+  };
   useEffect(()=>{load();},[token]);
 
   async function saveKey(svc){
-    const k=(editing[svc]||"").trim();if(!k)return;
+    const k=(editing[svc]||"").trim();
+    if(!k)return;
     setSaving(p=>({...p,[svc]:true}));
-    const r=await api(`/users/me/api-keys/${svc}`,{method:"POST",body:JSON.stringify({api_key:k})},token);
-    if(r.ok){setMsg(p=>({...p,[svc]:"Saved"}));setEditing(p=>({...p,[svc]:""}));load();}
-    else{const e=await r.json();setMsg(p=>({...p,[svc]:e.detail||"Failed"}));}
+    setErr(p=>({...p,[svc]:""}));
+    try{
+      const r=await api(`/users/me/api-keys/${svc}`,{method:"POST",body:JSON.stringify({api_key:k})},token);
+      if(r.ok){
+        setMsg(p=>({...p,[svc]:"✓ Saved"}));
+        setEditing(p=>({...p,[svc]:""}));
+        load();
+      }else{
+        const e=await r.json();
+        setErr(p=>({...p,[svc]:e.detail||"Failed to save"}));
+      }
+    }catch{
+      setErr(p=>({...p,[svc]:"Cannot reach server — deploy the backend first"}));
+    }
     setSaving(p=>({...p,[svc]:false}));
     setTimeout(()=>setMsg(p=>({...p,[svc]:""})),3000);
   }
+
   async function removeKey(svc){
-    await api(`/users/me/api-keys/${svc}`,{method:"DELETE"},token);
-    setMsg(p=>({...p,[svc]:"Removed"}));load();
-    setTimeout(()=>setMsg(p=>({...p,[svc]:""})),3000);
+    try{
+      await api(`/users/me/api-keys/${svc}`,{method:"DELETE"},token);
+      setMsg(p=>({...p,[svc]:"✓ Removed"}));
+      load();
+      setTimeout(()=>setMsg(p=>({...p,[svc]:""})),3000);
+    }catch{
+      setErr(p=>({...p,[svc]:"Cannot reach server"}));
+    }
   }
+
+  // Merge static list with live data from backend
+  const services = STATIC_SERVICES.map(s=>{
+    const live = keyData?.find(k=>k.service===s.service);
+    return {...s, ...live};
+  });
+
+  const backendDown = keyData === null;
 
   return(
     <div style={{marginBottom:28}}>
-      <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,
-        textTransform:"uppercase",marginBottom:6}}>My API Keys</div>
-      <div style={{fontSize:12,color:C.muted,marginBottom:14,lineHeight:1.6}}>
-        Personal keys are used for enrichment instead of the shared platform quota
-        ({DAILY_FREE_QUOTA} free checks/day per service). Stored encrypted, never shared.
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+        <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase"}}>
+          My API Keys
+        </div>
+        {backendDown&&(
+          <span style={{fontSize:11,color:C.amber,fontWeight:600}}>
+            ⚠ Backend offline — keys shown below won't save until server is running
+          </span>
+        )}
       </div>
-      {keyData.map(k=>(
-        <div key={k.service} style={{background:C.surface,border:`1px solid ${k.has_key?C.green+"60":C.border}`,
+      <div style={{fontSize:12,color:C.muted,marginBottom:14,lineHeight:1.6}}>
+        Add your personal API keys to remove the {DAILY_FREE_QUOTA} free checks/day limit.
+        Keys are encrypted at rest and only used for your account's queries.
+      </div>
+
+      {services.map(k=>(
+        <div key={k.service} style={{background:C.surface,
+          border:`1px solid ${k.has_key?C.green+"50":C.border}`,
           borderRadius:10,padding:"14px 16px",marginBottom:10,boxShadow:C.shadow}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:k.has_key?8:10,flexWrap:"wrap",gap:8}}>
+
+          {/* Header row */}
+          <div style={{display:"flex",justifyContent:"space-between",
+            alignItems:"flex-start",marginBottom:10,flexWrap:"wrap",gap:8}}>
             <div>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
                 <span style={{fontSize:13,fontWeight:700,color:C.white}}>{k.name}</span>
                 {k.has_key
-                  ?<span style={{fontSize:11,color:C.green,fontWeight:700}}>✓ Personal key active</span>
-                  :<span style={{fontSize:11,padding:"1px 7px",borderRadius:3,
-                      background:k.quota_remaining<=3?C.red+"20":C.accentDim,
-                      color:k.quota_remaining<=3?C.red:C.accentText,fontWeight:600}}>
-                    {k.unlimited?"Unlimited (admin)":
-                     k.quota_remaining!=null?`${k.quota_remaining}/${k.quota_total} free today`:"No quota"}
-                  </span>
+                  ? <span style={{fontSize:11,color:C.green,fontWeight:700}}>✓ Personal key active</span>
+                  : <span style={{fontSize:11,padding:"1px 7px",borderRadius:3,
+                      background:C.accentDim,color:C.accentText,fontWeight:600}}>
+                      {k.unlimited?"Unlimited":
+                       k.quota_remaining!=null?`${k.quota_remaining}/${k.quota_total} free today`:
+                       `${DAILY_FREE_QUOTA} free/day`}
+                    </span>
                 }
               </div>
-              {k.has_key&&<div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginTop:2}}>{k.masked}</div>}
-              {k.updated_at&&<div style={{fontSize:10,color:C.muted,marginTop:2}}>Updated: {new Date(k.updated_at).toLocaleDateString()}</div>}
+              <div style={{fontSize:11,color:C.muted}}>{k.desc}</div>
+              {k.has_key&&k.masked&&(
+                <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginTop:3}}>{k.masked}</div>
+              )}
+              {k.updated_at&&(
+                <div style={{fontSize:10,color:C.muted}}>Updated: {new Date(k.updated_at).toLocaleDateString()}</div>
+              )}
             </div>
             <div style={{display:"flex",gap:8,alignItems:"center"}}>
-              {msg[k.service]&&<span style={{fontSize:12,color:msg[k.service]==="Removed"||msg[k.service]==="Saved"?C.green:C.red}}>{msg[k.service]}</span>}
               <a href={k.url} target="_blank" rel="noreferrer"
-                style={{fontSize:11,color:C.accentText,fontWeight:600}}>Get key →</a>
+                style={{fontSize:11,color:C.accentText,fontWeight:600,whiteSpace:"nowrap"}}>
+                Get free key →
+              </a>
               {k.has_key&&(
                 <button onClick={()=>removeKey(k.service)}
                   style={{fontSize:11,padding:"3px 10px",background:"none",
                     border:`1px solid ${C.red}40`,color:C.red,borderRadius:5,
-                    cursor:"pointer",fontFamily:"inherit"}}>Remove</button>
+                    cursor:"pointer",fontFamily:"inherit"}}>
+                  Remove
+                </button>
               )}
             </div>
           </div>
-          {/* Edit / add row */}
+
+          {/* Input row */}
           <div style={{display:"flex",gap:8}}>
-            <input value={editing[k.service]||""} onChange={e=>setEditing(p=>({...p,[k.service]:e.target.value}))}
+            <input
+              value={editing[k.service]||""}
+              onChange={e=>setEditing(p=>({...p,[k.service]:e.target.value}))}
               onKeyDown={e=>{if(e.key==="Enter")saveKey(k.service);}}
-              placeholder={k.has_key?"Replace with new key...":k.placeholder}
+              placeholder={k.has_key?"Paste new key to replace...":k.placeholder}
               style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-                color:C.inputText,padding:"7px 12px",borderRadius:7,fontSize:12,
+                color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:12,
                 outline:"none",fontFamily:"monospace"}}/>
             <button onClick={()=>saveKey(k.service)}
               disabled={saving[k.service]||!editing[k.service]?.trim()}
-              style={{padding:"7px 14px",background:C.accent,border:"none",color:"#fff",
+              style={{padding:"8px 16px",background:C.accent,border:"none",color:"#fff",
                 borderRadius:7,cursor:"pointer",fontSize:12,fontFamily:"inherit",
                 fontWeight:600,opacity:saving[k.service]||!editing[k.service]?.trim()?0.4:1}}>
-              {saving[k.service]?"...":(k.has_key?"Update":"Save")}
+              {saving[k.service]?"Saving...":(k.has_key?"Update":"Save")}
             </button>
           </div>
+
+          {/* Feedback */}
+          {msg[k.service]&&(
+            <div style={{fontSize:12,color:C.green,marginTop:6,fontWeight:600}}>
+              {msg[k.service]}
+            </div>
+          )}
+          {err[k.service]&&(
+            <div style={{fontSize:12,color:C.red,marginTop:6}}>{err[k.service]}</div>
+          )}
         </div>
       ))}
     </div>
@@ -1632,7 +1707,7 @@ function ApiKeysSection({token,C}){
 
 const DAILY_FREE_QUOTA = 10;
 
-function SettingsPage({themeName,setThemeName,token,onLogout,C,me}){
+function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}){
   const [showPw,setShowPw]=useState(false); const [cur,setCur]=useState(""); const [next,setNext]=useState("");
   const [pwMsg,setPwMsg]=useState(""); const [pwErr,setPwErr]=useState("");
   const [auditLog,setAuditLog]=useState([]); const [auditLoaded,setAuditLoaded]=useState(false);
@@ -1657,6 +1732,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me}){
           <div style={{marginBottom:14}}><div style={{fontSize:12,color:C.muted,fontWeight:600}}>Signed in as</div><div style={{fontSize:15,color:C.white,fontWeight:700}}>{me?.username} <span style={{fontSize:12,color:C.muted,fontWeight:400}}>({me?.role})</span></div></div>
           <div style={{display:"flex",gap:8,marginBottom:showPw?16:0,flexWrap:"wrap"}}>
             <Btn onClick={()=>setShowPw(p=>!p)} variant="dim" C={C}>{showPw?"Cancel":"Change Password"}</Btn>
+            <Btn onClick={onOpenApiKeys} variant="dim" C={C}>🔑 API Keys Setup</Btn>
             <Btn onClick={onLogout} variant="danger" C={C}>Sign Out</Btn>
           </div>
           {showPw&&(
@@ -1753,14 +1829,11 @@ export default function App(){
     api("/auth/me",{},token).then(r=>r.ok?r.json():null).then(d=>{
       if(d){
         setMe(d);
-        // Show API key setup modal if user hasn't dismissed it this session
-        const dismissed=sessionStorage.getItem("apiKeyModalDismissed");
-        if(!dismissed){
-          api("/users/me/api-keys",{},token).then(r=>r.ok?r.json():[]).then(keys=>{
-            const hasAny=keys.some(k=>k.has_key);
-            if(!hasAny)setShowApiKeyModal(true);
-          });
-        }
+        // Show API key modal on every login until they have at least one key saved
+        api("/users/me/api-keys",{},token).then(r=>r.ok?r.json():[]).then(keys=>{
+          const hasAny = Array.isArray(keys) && keys.some(k=>k.has_key);
+          if(!hasAny) setShowApiKeyModal(true);
+        }).catch(()=>{}); // backend not deployed yet — fail silently
       }
     });
   },[token]);
@@ -1852,7 +1925,7 @@ export default function App(){
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');*{box-sizing:border-box;}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:${C.bg};}::-webkit-scrollbar-thumb{background:${C.border};border-radius:2px;}select option{background:${C.surface};color:${C.text};}input::placeholder,textarea::placeholder{color:${C.muted};}textarea{resize:vertical;}button:disabled{opacity:.4;cursor:not-allowed!important;}a{text-decoration:none;}@media(max-width:700px){.sidebar{width:52px!important;}.sidebar-label{display:none!important;}}`}</style>
 
       {selectedIOC&&<EnrichmentPanel ioc={selectedIOC} token={token} onClose={()=>setSelectedIOC(null)} C={C} me={me}/>}
-      {showApiKeyModal&&<ApiKeyModal token={token} C={C} onClose={()=>{setShowApiKeyModal(false);sessionStorage.setItem("apiKeyModalDismissed","1");}}/>}
+      {showApiKeyModal&&<ApiKeyModal token={token} C={C} onClose={()=>setShowApiKeyModal(false)}/>}
 
       {/* Sidebar */}
       <div className="sidebar" style={{width:200,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
@@ -1911,7 +1984,7 @@ export default function App(){
           {view==="osint"&&<OSINTTool token={token} C={C}/>}
           {view==="querygen"&&<QueryGenerator token={token} C={C}/>}
           {view==="public"&&<PublicSearch C={C}/>}
-          {view==="settings"&&<SettingsPage themeName={themeName} setThemeName={setThemeName} token={token} onLogout={logout} C={C} me={me}/>}
+          {view==="settings"&&<SettingsPage themeName={themeName} setThemeName={setThemeName} token={token} onLogout={logout} C={C} me={me} onOpenApiKeys={()=>setShowApiKeyModal(true)}/>}
 
           {view==="feed"&&(
             <>

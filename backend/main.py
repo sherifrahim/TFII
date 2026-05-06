@@ -80,34 +80,53 @@ def get_user_daily_usage(conn, user_id: str, service: str) -> int:
 def resolve_api_key(conn, service: str, user: dict) -> tuple:
     """
     Returns (key, using_personal_key, quota_remaining).
-    Priority: user personal key → admin platform key → quota check → platform key.
+    
+    Admin priority:
+      1. Admin's own personal key
+      2. Platform .env key
+      3. Any other user's key (pooled fallback — admin only)
+    
+    Regular user priority:
+      1. User's own personal key (unlimited)
+      2. Platform key within daily quota (10/day)
+      3. Quota exhausted → empty string
     """
-    user_id = user["id"]
+    user_id  = user["id"]
     is_admin = user["role"] == "admin"
+    cur      = conn.cursor()
 
-    # 1. Check user's personal key
-    cur = conn.cursor()
+    # 1. Check user's own personal key
     cur.execute("SELECT api_key_encrypted FROM user_api_keys WHERE user_id=%s AND service=%s",
                 (user_id, service))
     row = cur.fetchone()
     if row and row[0]:
         key = decrypt_key(row[0])
-        if key:
-            return key, True, None   # personal key, unlimited
+        if key: return key, True, None
 
-    # 2. Admin always gets platform key, no quota
+    # 2. Admin: try platform key
     if is_admin:
         platform_key = PLATFORM_KEYS.get(service, "")
-        return platform_key, False, None
+        if platform_key: return platform_key, False, None
 
-    # 3. Regular user — check daily quota
-    used = get_user_daily_usage(conn, user_id, service)
+        # 3. Admin fallback: use any other user's key from the pool
+        cur.execute("""SELECT api_key_encrypted FROM user_api_keys
+            WHERE service=%s AND user_id != %s AND api_key_encrypted != ''
+            ORDER BY updated_at DESC LIMIT 1""", (service, user_id))
+        pool_row = cur.fetchone()
+        if pool_row:
+            pool_key = decrypt_key(pool_row[0])
+            if pool_key: return pool_key, False, None
+
+        return "", False, None  # admin but no keys available anywhere
+
+    # 4. Regular user: check daily quota
+    used      = get_user_daily_usage(conn, user_id, service)
     remaining = max(0, DAILY_FREE_QUOTA - used)
     if remaining > 0:
         platform_key = PLATFORM_KEYS.get(service, "")
         return platform_key, False, remaining
     else:
-        return "", False, 0   # quota exhausted
+        return "", False, 0  # quota exhausted
 
 def get_all_quota_status(conn, user_id: str, is_admin: bool) -> dict:
     """Returns quota info for all services for a user."""
