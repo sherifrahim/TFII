@@ -24,21 +24,13 @@ jobs:
             set -e
             echo "=== TFII Deploy at $(date) ==="
 
-script: |
-            set -e
-            echo "=== TFII Deploy at $(date) ==="
-
-            # Fix ownership in case repo was cloned as root
             sudo chown -R ubuntu:ubuntu /home/ubuntu/threatfeed-repo 2>/dev/null || true
-
-            # Fix git safe directory (prevents "dubious ownership" error)
             git config --global --add safe.directory /home/ubuntu/threatfeed-repo 2>/dev/null || true
 
             cd /home/ubuntu/threatfeed-repo
             git pull origin master
             echo "✓ Code pulled"
 
-            # Backend
             if ! diff -q backend/main.py /home/ubuntu/threatfeed/main.py > /dev/null 2>&1; then
               cp backend/main.py /home/ubuntu/threatfeed/main.py
               source /home/ubuntu/threatfeed/venv/bin/activate
@@ -55,45 +47,6 @@ script: |
               echo "~ Backend unchanged"
             fi
 
-            # Frontend
-            FRONTEND_CHANGED=false
-            for f in frontend/src/App.js frontend/public/index.html; do
-              dest="/home/ubuntu/threatfeed-ui/${f#frontend/}"
-              if ! diff -q "$f" "$dest" > /dev/null 2>&1; then
-                cp "$f" "$dest"
-                FRONTEND_CHANGED=true
-                echo "✓ Updated: $f"
-              fi
-            done
-
-            if [ "$FRONTEND_CHANGED" = true ]; then
-              cd /home/ubuntu/threatfeed-ui && npm run build
-              echo "✓ Frontend built"
-            else
-              echo "~ Frontend unchanged"
-            fi
-
-            echo "=== Done ==="            git pull origin master
-            echo "✓ Code pulled"
-
-            # Backend
-            if ! diff -q backend/main.py /home/ubuntu/threatfeed/main.py > /dev/null 2>&1; then
-              cp backend/main.py /home/ubuntu/threatfeed/main.py
-              source /home/ubuntu/threatfeed/venv/bin/activate
-              pip install -r backend/requirements.txt --quiet
-              sudo systemctl restart threatfeed
-              sleep 2
-              if sudo systemctl is-active --quiet threatfeed; then
-                echo "✓ Backend deployed and running"
-              else
-                sudo journalctl -u threatfeed -n 20 --no-pager
-                exit 1
-              fi
-            else
-              echo "~ Backend unchanged"
-            fi
-
-            # Frontend
             FRONTEND_CHANGED=false
             for f in frontend/src/App.js frontend/public/index.html; do
               dest="/home/ubuntu/threatfeed-ui/${f#frontend/}"
