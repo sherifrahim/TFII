@@ -8,3 +8,4 @@ python-multipart
 httpx
 apscheduler
 bcrypt==4.0.1
+cryptography

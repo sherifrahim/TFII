@@ -28,7 +28,108 @@ HIBP_API_KEY       = os.getenv("HIBP_API_KEY", "")
 SHODAN_API_KEY     = os.getenv("SHODAN_API_KEY", "")
 NVD_API_KEY        = os.getenv("NVD_API_KEY", "")
 GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
+ENCRYPTION_KEY     = os.getenv("ENCRYPTION_KEY", "")  # generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+DAILY_FREE_QUOTA   = 10   # free platform-key checks per user per day (no personal key)
 CACHE_HOURS        = 24
+
+# Platform keys map — used when user has no personal key
+PLATFORM_KEYS = {
+    "virustotal":  VT_API_KEY,
+    "abuseipdb":   ABUSEIPDB_API_KEY,
+    "hibp":        HIBP_API_KEY,
+    "shodan":      SHODAN_API_KEY,
+    "nvd":         NVD_API_KEY,
+    "groq":        GROQ_API_KEY,
+}
+
+# ── ENCRYPTION ────────────────────────────────────────────────────────────────
+def _get_fernet():
+    from cryptography.fernet import Fernet
+    if ENCRYPTION_KEY:
+        return Fernet(ENCRYPTION_KEY.encode())
+    # Derive a key from SECRET_KEY as fallback (less secure but functional)
+    import base64, hashlib
+    key = base64.urlsafe_b64encode(hashlib.sha256(SECRET_KEY.encode()).digest())
+    return Fernet(key)
+
+def encrypt_key(plaintext: str) -> str:
+    if not plaintext: return ""
+    return _get_fernet().encrypt(plaintext.encode()).decode()
+
+def decrypt_key(ciphertext: str) -> str:
+    if not ciphertext: return ""
+    try:
+        return _get_fernet().decrypt(ciphertext.encode()).decode()
+    except Exception:
+        return ""
+
+def mask_key(key: str) -> str:
+    """Show only first 4 and last 4 characters."""
+    if not key or len(key) < 10: return "••••••••"
+    return key[:4] + "••••••••" + key[-4:]
+
+# ── KEY RESOLUTION + QUOTA ────────────────────────────────────────────────────
+def get_user_daily_usage(conn, user_id: str, service: str) -> int:
+    """How many platform-key calls has this user made today for this service."""
+    cur = conn.cursor()
+    cur.execute("""SELECT COUNT(*) FROM api_usage_log
+        WHERE user_id = %s AND api_name = %s AND cache_hit = FALSE
+        AND created_at >= CURRENT_DATE""", (user_id, service))
+    return cur.fetchone()[0]
+
+def resolve_api_key(conn, service: str, user: dict) -> tuple:
+    """
+    Returns (key, using_personal_key, quota_remaining).
+    Priority: user personal key → admin platform key → quota check → platform key.
+    """
+    user_id = user["id"]
+    is_admin = user["role"] == "admin"
+
+    # 1. Check user's personal key
+    cur = conn.cursor()
+    cur.execute("SELECT api_key_encrypted FROM user_api_keys WHERE user_id=%s AND service=%s",
+                (user_id, service))
+    row = cur.fetchone()
+    if row and row[0]:
+        key = decrypt_key(row[0])
+        if key:
+            return key, True, None   # personal key, unlimited
+
+    # 2. Admin always gets platform key, no quota
+    if is_admin:
+        platform_key = PLATFORM_KEYS.get(service, "")
+        return platform_key, False, None
+
+    # 3. Regular user — check daily quota
+    used = get_user_daily_usage(conn, user_id, service)
+    remaining = max(0, DAILY_FREE_QUOTA - used)
+    if remaining > 0:
+        platform_key = PLATFORM_KEYS.get(service, "")
+        return platform_key, False, remaining
+    else:
+        return "", False, 0   # quota exhausted
+
+def get_all_quota_status(conn, user_id: str, is_admin: bool) -> dict:
+    """Returns quota info for all services for a user."""
+    services = ["virustotal","abuseipdb","shodan","hibp","groq","nvd"]
+    result = {}
+    cur = conn.cursor()
+    for svc in services:
+        # check personal key
+        cur.execute("SELECT api_key_encrypted FROM user_api_keys WHERE user_id=%s AND service=%s",
+                    (user_id, svc))
+        has_personal = bool(cur.fetchone())
+        if is_admin or has_personal:
+            result[svc] = {"has_personal_key": has_personal, "quota_remaining": None,
+                           "quota_total": None, "unlimited": True}
+        else:
+            used = get_user_daily_usage(conn, user_id, svc)
+            result[svc] = {"has_personal_key": False,
+                           "quota_used": used,
+                           "quota_remaining": max(0, DAILY_FREE_QUOTA - used),
+                           "quota_total": DAILY_FREE_QUOTA,
+                           "unlimited": False}
+    return result
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2  = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -155,6 +256,14 @@ async def startup():
             read BOOLEAN DEFAULT FALSE,
             metadata JSONB,
             created_at TIMESTAMP DEFAULT NOW())""",
+        """CREATE TABLE IF NOT EXISTS user_api_keys (
+            id SERIAL PRIMARY KEY,
+            user_id VARCHAR(100) NOT NULL,
+            service VARCHAR(50) NOT NULL,
+            api_key_encrypted TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(user_id, service))""",
         """CREATE TABLE IF NOT EXISTS assets (
             id VARCHAR(100) PRIMARY KEY, name VARCHAR(200) NOT NULL,
             vendor VARCHAR(200), version VARCHAR(100),
@@ -195,6 +304,10 @@ async def startup():
     ]:
         try: cur.execute(f"ALTER TABLE iocs ADD COLUMN IF NOT EXISTS {col} {defn}")
         except Exception: conn.rollback()
+
+    # add user_id to api_usage_log if missing
+    try: cur.execute("ALTER TABLE api_usage_log ADD COLUMN IF NOT EXISTS user_id VARCHAR(100)")
+    except Exception: conn.rollback()
 
     cur.execute("SELECT COUNT(*) FROM users")
     if cur.fetchone()[0] == 0:
@@ -342,11 +455,11 @@ def mark_all_read(admin=Depends(require_admin), conn=Depends(get_db)):
     conn.commit(); return {"status": "ok"}
 
 # ── API USAGE ─────────────────────────────────────────────────────────────────
-def log_api_call(conn, api_name: str, ioc_value: str, cache_hit: bool):
+def log_api_call(conn, api_name: str, ioc_value: str, cache_hit: bool, user_id: str = None):
     try:
         cur = conn.cursor()
-        cur.execute("INSERT INTO api_usage_log (api_name,ioc_value,cache_hit) VALUES (%s,%s,%s)",
-                    (api_name, ioc_value, cache_hit))
+        cur.execute("INSERT INTO api_usage_log (api_name,ioc_value,cache_hit,user_id) VALUES (%s,%s,%s,%s)",
+                    (api_name, ioc_value, cache_hit, user_id))
     except Exception: pass
 
 def is_cache_fresh(enrichment_data: dict) -> bool:
@@ -359,11 +472,12 @@ def is_cache_fresh(enrichment_data: dict) -> bool:
     except Exception: return False
 
 # ── ENRICHMENT ────────────────────────────────────────────────────────────────
-async def vt_ip(ip, conn=None):
-    if not VT_API_KEY: return {"source":"VirusTotal","skipped":True}
-    if conn: log_api_call(conn,"virustotal",ip,False)
+async def vt_ip(ip, conn=None, key: str = None, user_id: str = None):
+    k = key if key is not None else VT_API_KEY
+    if not k: return {"source":"VirusTotal","skipped":True}
+    if conn: log_api_call(conn,"virustotal",ip,False,user_id)
     async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.get(f"https://www.virustotal.com/api/v3/ip_addresses/{ip}", headers={"x-apikey":VT_API_KEY})
+        r = await c.get(f"https://www.virustotal.com/api/v3/ip_addresses/{ip}", headers={"x-apikey":k})
     if r.status_code != 200: return {"source":"VirusTotal","error":f"HTTP {r.status_code}"}
     attrs = r.json().get("data",{}).get("attributes",{})
     stats = attrs.get("last_analysis_stats",{})
@@ -372,11 +486,12 @@ async def vt_ip(ip, conn=None):
             "country":attrs.get("country","?"),"asn":str(attrs.get("asn","?")),
             "link":f"https://www.virustotal.com/gui/ip-address/{ip}"}
 
-async def vt_domain(domain, conn=None):
-    if not VT_API_KEY: return {"source":"VirusTotal","skipped":True}
-    if conn: log_api_call(conn,"virustotal",domain,False)
+async def vt_domain(domain, conn=None, key: str = None, user_id: str = None):
+    k = key if key is not None else VT_API_KEY
+    if not k: return {"source":"VirusTotal","skipped":True}
+    if conn: log_api_call(conn,"virustotal",domain,False,user_id)
     async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.get(f"https://www.virustotal.com/api/v3/domains/{domain}", headers={"x-apikey":VT_API_KEY})
+        r = await c.get(f"https://www.virustotal.com/api/v3/domains/{domain}", headers={"x-apikey":k})
     if r.status_code != 200: return {"source":"VirusTotal","error":f"HTTP {r.status_code}"}
     attrs = r.json().get("data",{}).get("attributes",{})
     stats = attrs.get("last_analysis_stats",{})
@@ -384,11 +499,12 @@ async def vt_domain(domain, conn=None):
     return {"source":"VirusTotal","malicious":mal,"total":total,"vt_score":round((mal/total)*100),
             "country":attrs.get("country","?"),"link":f"https://www.virustotal.com/gui/domain/{domain}"}
 
-async def vt_hash(h, conn=None):
-    if not VT_API_KEY: return {"source":"VirusTotal","skipped":True}
-    if conn: log_api_call(conn,"virustotal",h,False)
+async def vt_hash(h, conn=None, key: str = None, user_id: str = None):
+    k = key if key is not None else VT_API_KEY
+    if not k: return {"source":"VirusTotal","skipped":True}
+    if conn: log_api_call(conn,"virustotal",h,False,user_id)
     async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.get(f"https://www.virustotal.com/api/v3/files/{h}", headers={"x-apikey":VT_API_KEY})
+        r = await c.get(f"https://www.virustotal.com/api/v3/files/{h}", headers={"x-apikey":k})
     if r.status_code == 404: return {"source":"VirusTotal","found":False,"vt_score":0}
     if r.status_code != 200: return {"source":"VirusTotal","error":f"HTTP {r.status_code}"}
     attrs = r.json().get("data",{}).get("attributes",{})
@@ -398,12 +514,13 @@ async def vt_hash(h, conn=None):
             "file_name":attrs.get("meaningful_name","unknown"),
             "vt_score":round((mal/total)*100),"link":f"https://www.virustotal.com/gui/file/{h}"}
 
-async def vt_url_lookup(url_val, conn=None):
-    if not VT_API_KEY: return {"source":"VirusTotal","skipped":True}
-    if conn: log_api_call(conn,"virustotal",url_val,False)
+async def vt_url_lookup(url_val, conn=None, key: str = None, user_id: str = None):
+    k = key if key is not None else VT_API_KEY
+    if not k: return {"source":"VirusTotal","skipped":True}
+    if conn: log_api_call(conn,"virustotal",url_val,False,user_id)
     url_id = base64.urlsafe_b64encode(url_val.encode()).decode().rstrip("=")
     async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.get(f"https://www.virustotal.com/api/v3/urls/{url_id}", headers={"x-apikey":VT_API_KEY})
+        r = await c.get(f"https://www.virustotal.com/api/v3/urls/{url_id}", headers={"x-apikey":k})
     if r.status_code == 404: return {"source":"VirusTotal","found":False,"vt_score":0}
     if r.status_code != 200: return {"source":"VirusTotal","error":f"HTTP {r.status_code}"}
     stats = r.json().get("data",{}).get("attributes",{}).get("last_analysis_stats",{})
@@ -411,12 +528,13 @@ async def vt_url_lookup(url_val, conn=None):
     return {"source":"VirusTotal","malicious":mal,"total":total,
             "vt_score":round((mal/total)*100),"link":f"https://www.virustotal.com/gui/url/{url_id}"}
 
-async def abuseipdb_lookup(ip, conn=None):
-    if not ABUSEIPDB_API_KEY: return {"source":"AbuseIPDB","skipped":True}
-    if conn: log_api_call(conn,"abuseipdb",ip,False)
+async def abuseipdb_lookup(ip, conn=None, key: str = None, user_id: str = None):
+    k = key if key is not None else ABUSEIPDB_API_KEY
+    if not k: return {"source":"AbuseIPDB","skipped":True}
+    if conn: log_api_call(conn,"abuseipdb",ip,False,user_id)
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.get("https://api.abuseipdb.com/api/v2/check",
-            headers={"Key":ABUSEIPDB_API_KEY,"Accept":"application/json"},
+            headers={"Key":k,"Accept":"application/json"},
             params={"ipAddress":ip,"maxAgeInDays":90})
     if r.status_code != 200: return {"source":"AbuseIPDB","error":f"HTTP {r.status_code}"}
     d = r.json().get("data",{})
@@ -424,8 +542,8 @@ async def abuseipdb_lookup(ip, conn=None):
             "total_reports":d.get("totalReports",0),"country":d.get("countryCode","?"),
             "isp":d.get("isp","?"),"link":f"https://www.abuseipdb.com/check/{ip}"}
 
-async def urlhaus_url_lookup(url_val, conn=None):
-    if conn: log_api_call(conn,"urlhaus",url_val,False)
+async def urlhaus_url_lookup(url_val, conn=None, user_id: str = None):
+    if conn: log_api_call(conn,"urlhaus",url_val,False,user_id)
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.post("https://urlhaus-api.abuse.ch/v1/url/", data={"url":url_val})
     if r.status_code != 200: return {"source":"URLhaus","error":f"HTTP {r.status_code}"}
@@ -434,8 +552,8 @@ async def urlhaus_url_lookup(url_val, conn=None):
     return {"source":"URLhaus","found":True,"threat":d.get("threat","?"),
             "url_status":d.get("url_status","?"),"link":d.get("urlhaus_reference","")}
 
-async def urlhaus_host_lookup(domain, conn=None):
-    if conn: log_api_call(conn,"urlhaus",domain,False)
+async def urlhaus_host_lookup(domain, conn=None, user_id: str = None):
+    if conn: log_api_call(conn,"urlhaus",domain,False,user_id)
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.post("https://urlhaus-api.abuse.ch/v1/host/", data={"host":domain})
     if r.status_code != 200: return {"source":"URLhaus","error":f"HTTP {r.status_code}"}
@@ -463,31 +581,55 @@ def calc_confidence(results: dict, base: int) -> tuple:
     if not reasons: reasons.append("No external sources returned data — using base confidence")
     return min(max(score,5),99), reasons
 
-async def enrich(ioc_type: str, value: str, base: int, conn=None, force: bool=False, existing: dict=None) -> dict:
+async def enrich(ioc_type: str, value: str, base: int, conn=None,
+                 force: bool = False, existing: dict = None, user: dict = None) -> dict:
     if not force and existing and is_cache_fresh(existing):
-        if conn: log_api_call(conn,"cache",value,True)
+        if conn and user:
+            log_api_call(conn, "cache", value, True, user.get("id"))
         return existing
+
     results = {}
+    user_id = user.get("id") if user else None
+
+    def get_key(svc):
+        if conn and user:
+            key, personal, quota = resolve_api_key(conn, svc, user)
+            return key, quota
+        # fallback to platform key if no user context
+        return PLATFORM_KEYS.get(svc, ""), None
+
+    def quota_error(svc):
+        return {"source": svc, "error": f"Daily quota of {DAILY_FREE_QUOTA} free checks reached. Add your personal {svc} API key in Settings to continue."}
+
     try:
         if ioc_type in ("IPv4","IPv6"):
-            vt_r, ab_r = await asyncio.gather(vt_ip(value,conn), abuseipdb_lookup(value,conn), return_exceptions=True)
-            results["virustotal"] = vt_r if not isinstance(vt_r,Exception) else {"error":str(vt_r)}
-            results["abuseipdb"]  = ab_r if not isinstance(ab_r,Exception) else {"error":str(ab_r)}
+            vt_key, vt_quota  = get_key("virustotal")
+            ab_key, ab_quota  = get_key("abuseipdb")
+            vt_r = await vt_ip(value, conn, vt_key, user_id) if vt_key else ({"skipped":True} if vt_quota is None else quota_error("VirusTotal"))
+            ab_r = await abuseipdb_lookup(value, conn, ab_key, user_id) if ab_key else ({"skipped":True} if ab_quota is None else quota_error("AbuseIPDB"))
+            if not isinstance(vt_r, Exception): results["virustotal"] = vt_r
+            if not isinstance(ab_r, Exception): results["abuseipdb"] = ab_r
         elif ioc_type == "Domain":
-            vt_r, uh_r = await asyncio.gather(vt_domain(value,conn), urlhaus_host_lookup(value,conn), return_exceptions=True)
-            results["virustotal"] = vt_r if not isinstance(vt_r,Exception) else {"error":str(vt_r)}
-            results["urlhaus"]    = uh_r if not isinstance(uh_r,Exception) else {"error":str(uh_r)}
+            vt_key, vt_quota = get_key("virustotal")
+            vt_r = await vt_domain(value, conn, vt_key, user_id) if vt_key else ({"skipped":True} if vt_quota is None else quota_error("VirusTotal"))
+            uh_r = await urlhaus_host_lookup(value, conn, user_id)
+            if not isinstance(vt_r, Exception): results["virustotal"] = vt_r
+            if not isinstance(uh_r, Exception): results["urlhaus"] = uh_r
         elif ioc_type == "URL":
-            vt_r, uh_r = await asyncio.gather(vt_url_lookup(value,conn), urlhaus_url_lookup(value,conn), return_exceptions=True)
-            results["virustotal"] = vt_r if not isinstance(vt_r,Exception) else {"error":str(vt_r)}
-            results["urlhaus"]    = uh_r if not isinstance(uh_r,Exception) else {"error":str(uh_r)}
+            vt_key, vt_quota = get_key("virustotal")
+            vt_r = await vt_url_lookup(value, conn, vt_key, user_id) if vt_key else ({"skipped":True} if vt_quota is None else quota_error("VirusTotal"))
+            uh_r = await urlhaus_url_lookup(value, conn, user_id)
+            if not isinstance(vt_r, Exception): results["virustotal"] = vt_r
+            if not isinstance(uh_r, Exception): results["urlhaus"] = uh_r
         elif ioc_type in ("MD5","SHA1","SHA256"):
-            vt_r = await vt_hash(value,conn)
-            results["virustotal"] = vt_r if not isinstance(vt_r,Exception) else {"error":str(vt_r)}
+            vt_key, vt_quota = get_key("virustotal")
+            vt_r = await vt_hash(value, conn, vt_key, user_id) if vt_key else ({"skipped":True} if vt_quota is None else quota_error("VirusTotal"))
+            if not isinstance(vt_r, Exception): results["virustotal"] = vt_r
         else:
             results["note"] = f"No enrichment for type {ioc_type}"
     except Exception as e:
         results["error"] = str(e)
+
     final_score, reasons = calc_confidence(results, base)
     results["calculated_confidence"] = final_score
     results["confidence_reasons"]    = reasons
@@ -829,6 +971,74 @@ def change_password(body: PasswordChange, user=Depends(get_current_user), conn=D
     cur.execute("UPDATE users SET password = %s WHERE id = %s", (pwd_ctx.hash(body.new_password), user["id"]))
     conn.commit(); return {"status":"password updated"}
 
+# ── USER API KEYS ─────────────────────────────────────────────────────────────
+
+ALLOWED_SERVICES = {"virustotal","abuseipdb","shodan","hibp","groq","nvd"}
+SERVICE_LABELS = {
+    "virustotal": {"name":"VirusTotal",   "url":"https://www.virustotal.com/gui/my-apikey",    "placeholder":"Enter your VirusTotal API key"},
+    "abuseipdb":  {"name":"AbuseIPDB",    "url":"https://www.abuseipdb.com/account/api",        "placeholder":"Enter your AbuseIPDB API key"},
+    "shodan":     {"name":"Shodan",       "url":"https://account.shodan.io/",                   "placeholder":"Enter your Shodan API key"},
+    "hibp":       {"name":"HaveIBeenPwned","url":"https://haveibeenpwned.com/API/Key",           "placeholder":"Enter your HIBP API key"},
+    "groq":       {"name":"Groq",         "url":"https://console.groq.com/keys",                "placeholder":"gsk_xxxxxxxxxxxx"},
+    "nvd":        {"name":"NVD",          "url":"https://nvd.nist.gov/developers/request-an-api-key","placeholder":"Enter your NVD API key"},
+}
+
+@app.get("/users/me/api-keys")
+def get_my_api_keys(user=Depends(get_current_user), conn=Depends(get_db)):
+    """Return user's saved API keys (masked) + quota status."""
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT service, api_key_encrypted, updated_at FROM user_api_keys WHERE user_id = %s",
+                (user["id"],))
+    rows = {r["service"]: r for r in cur.fetchall()}
+    quota = get_all_quota_status(conn, user["id"], user["role"] == "admin")
+    result = []
+    for svc, label in SERVICE_LABELS.items():
+        row = rows.get(svc)
+        has_key = bool(row and row["api_key_encrypted"])
+        result.append({
+            "service":      svc,
+            "name":         label["name"],
+            "url":          label["url"],
+            "placeholder":  label["placeholder"],
+            "has_key":      has_key,
+            "masked":       mask_key(decrypt_key(row["api_key_encrypted"])) if has_key else None,
+            "updated_at":   row["updated_at"].isoformat() if has_key and row.get("updated_at") else None,
+            **quota.get(svc, {}),
+        })
+    return result
+
+@app.post("/users/me/api-keys/{service}")
+def save_api_key(service: str, body: dict, user=Depends(get_current_user), conn=Depends(get_db)):
+    """Save or update a personal API key for a service."""
+    if service not in ALLOWED_SERVICES:
+        raise HTTPException(status_code=400, detail=f"Unknown service: {service}")
+    key = body.get("api_key","").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="api_key cannot be empty")
+    encrypted = encrypt_key(key)
+    cur = conn.cursor()
+    cur.execute("""INSERT INTO user_api_keys (user_id, service, api_key_encrypted, updated_at)
+        VALUES (%s,%s,%s,NOW())
+        ON CONFLICT (user_id, service) DO UPDATE
+        SET api_key_encrypted = EXCLUDED.api_key_encrypted, updated_at = NOW()""",
+        (user["id"], service, encrypted))
+    conn.commit()
+    return {"status":"saved","service":service,"masked":mask_key(key)}
+
+@app.delete("/users/me/api-keys/{service}")
+def delete_api_key(service: str, user=Depends(get_current_user), conn=Depends(get_db)):
+    """Remove a personal API key."""
+    if service not in ALLOWED_SERVICES:
+        raise HTTPException(status_code=400, detail=f"Unknown service: {service}")
+    cur = conn.cursor()
+    cur.execute("DELETE FROM user_api_keys WHERE user_id = %s AND service = %s", (user["id"], service))
+    conn.commit(); return {"status":"deleted","service":service}
+
+@app.get("/users/me/quota")
+def get_quota(user=Depends(get_current_user), conn=Depends(get_db)):
+    """Return daily quota status for current user."""
+    return get_all_quota_status(conn, user["id"], user["role"] == "admin")
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # USERS + INVITES
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -950,7 +1160,7 @@ def check_duplicate(body: dict, user=Depends(get_current_user), conn=Depends(get
 @app.post("/iocs", status_code=201)
 async def add_ioc(ioc: IOCIn, user=Depends(get_current_user), conn=Depends(get_db)):
     canonical = refang(ioc.value.strip()); defanged = defang(canonical, ioc.type)
-    enrichment = await enrich(ioc.type, canonical, ioc.confidence, conn)
+    enrichment = await enrich(ioc.type, canonical, ioc.confidence, conn, user=user)
     final_confidence = enrichment.get("calculated_confidence", ioc.confidence)
     reasons = enrichment.get("confidence_reasons", [])
     ioc_id = f"indicator--{uuid.uuid4()}"
@@ -992,7 +1202,7 @@ async def re_enrich(ioc_id: str, user=Depends(get_current_user), conn=Depends(ge
     ioc = cur.fetchone()
     if not ioc: raise HTTPException(status_code=404, detail="IOC not found")
     old_score = ioc["confidence"]
-    enrichment = await enrich(ioc["type"],ioc["value"],ioc["confidence"],conn,force=True,existing=ioc.get("enrichment"))
+    enrichment = await enrich(ioc["type"],ioc["value"],ioc["confidence"],conn,force=True,existing=ioc.get("enrichment"),user=user)
     new_score = enrichment.get("calculated_confidence", old_score)
     reasons   = enrichment.get("confidence_reasons", [])
     cur2 = conn.cursor()

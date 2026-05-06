@@ -1417,6 +1417,221 @@ function Dashboard({token,C}){
 }
 
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
+// ── API KEY SETUP MODAL (shown after login) ───────────────────────────────────
+function ApiKeyModal({token, C, onClose}){
+  const [keys,setKeys]=useState({});
+  const [saving,setSaving]=useState({});
+  const [saved,setSaved]=useState({});
+  const [quota,setQuota]=useState(null);
+
+  const SERVICES=[
+    {id:"virustotal", name:"VirusTotal",    url:"https://www.virustotal.com/gui/my-apikey",       desc:"Malware & IP reputation",     placeholder:"Enter your VT API key"},
+    {id:"abuseipdb",  name:"AbuseIPDB",     url:"https://www.abuseipdb.com/account/api",          desc:"IP abuse confidence scoring",  placeholder:"Enter your AbuseIPDB key"},
+    {id:"groq",       name:"Groq",          url:"https://console.groq.com/keys",                  desc:"SPL/KQL query generation",     placeholder:"gsk_xxxxxxxxxxxx"},
+    {id:"shodan",     name:"Shodan",        url:"https://account.shodan.io/",                     desc:"Port scan & host lookup",      placeholder:"Enter your Shodan key"},
+    {id:"hibp",       name:"HaveIBeenPwned",url:"https://haveibeenpwned.com/API/Key",              desc:"Email breach lookup",          placeholder:"Enter your HIBP key"},
+    {id:"nvd",        name:"NVD",           url:"https://nvd.nist.gov/developers/request-an-api-key","desc":"CVE database (higher rate limit)","placeholder":"Enter your NVD key"},
+  ];
+
+  useEffect(()=>{
+    api("/users/me/quota",{},token).then(r=>r.ok?r.json():null).then(q=>{if(q)setQuota(q);});
+  },[token]);
+
+  async function saveKey(svc){
+    const k=keys[svc]?.trim();
+    if(!k)return;
+    setSaving(p=>({...p,[svc]:true}));
+    const r=await api(`/users/me/api-keys/${svc}`,{method:"POST",body:JSON.stringify({api_key:k})},token);
+    if(r.ok){setSaved(p=>({...p,[svc]:true}));setKeys(p=>({...p,[svc]:""}));}
+    setSaving(p=>({...p,[svc]:false}));
+  }
+
+  const anyQuotaLow = quota && Object.values(quota).some(q=>!q.unlimited && q.quota_remaining<=3);
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"#000000b0",display:"flex",
+      alignItems:"center",justifyContent:"center",zIndex:700,padding:16}}>
+      <div style={{width:"100%",maxWidth:560,maxHeight:"92vh",overflowY:"auto",
+        background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,
+        boxShadow:C.shadow,fontFamily:C.font||"inherit"}}>
+
+        {/* Header */}
+        <div style={{padding:"24px 24px 0"}}>
+          <div style={{fontSize:18,fontWeight:700,color:C.white,marginBottom:6}}>
+            Add Your API Keys
+          </div>
+          <div style={{fontSize:13,color:C.muted,lineHeight:1.6,marginBottom:16}}>
+            Your personal keys are used for enrichment instead of the platform's shared quota.
+            Without them you get <strong style={{color:C.accentText}}>10 free checks/day</strong> per service.
+            Keys are encrypted and only accessible by your account.
+          </div>
+
+          {/* Quota banner if running low */}
+          {anyQuotaLow&&(
+            <div style={{padding:"10px 14px",background:C.amber+"15",border:`1px solid ${C.amber}40`,
+              borderRadius:8,fontSize:12,color:C.amber,marginBottom:16}}>
+              ⚠ You're running low on free daily checks. Add your API keys to continue without limits.
+            </div>
+          )}
+        </div>
+
+        {/* Service list */}
+        <div style={{padding:"0 24px"}}>
+          {SERVICES.map(svc=>(
+            <div key={svc.id} style={{marginBottom:16,padding:14,background:C.surfaceHi,
+              border:`1px solid ${saved[svc.id]?C.green:C.border}`,borderRadius:10,
+              transition:"border-color .2s"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                <div>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:13,fontWeight:700,color:C.white}}>{svc.name}</span>
+                    {saved[svc.id]&&<span style={{fontSize:11,color:C.green,fontWeight:700}}>✓ Saved</span>}
+                    {quota&&quota[svc.id]&&!quota[svc.id].unlimited&&!saved[svc.id]&&(
+                      <span style={{fontSize:11,padding:"1px 6px",borderRadius:3,
+                        background:quota[svc.id].quota_remaining<=3?C.red+"20":C.accentDim,
+                        color:quota[svc.id].quota_remaining<=3?C.red:C.accentText,fontWeight:600}}>
+                        {quota[svc.id].quota_remaining}/{quota[svc.id].quota_total} free today
+                      </span>
+                    )}
+                    {quota&&quota[svc.id]?.unlimited&&!saved[svc.id]&&(
+                      <span style={{fontSize:11,color:C.green,fontWeight:600}}>✓ Key active</span>
+                    )}
+                  </div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>{svc.desc}</div>
+                </div>
+                <a href={svc.url} target="_blank" rel="noreferrer"
+                  style={{fontSize:11,color:C.accentText,fontWeight:600,whiteSpace:"nowrap",marginLeft:8}}>
+                  Get key →
+                </a>
+              </div>
+              {!saved[svc.id]&&(
+                <div style={{display:"flex",gap:8}}>
+                  <input value={keys[svc.id]||""} onChange={e=>setKeys(p=>({...p,[svc.id]:e.target.value}))}
+                    onKeyDown={e=>{if(e.key==="Enter")saveKey(svc.id);}}
+                    placeholder={svc.placeholder}
+                    style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                      color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:12,
+                      outline:"none",fontFamily:"monospace"}}/>
+                  <button onClick={()=>saveKey(svc.id)}
+                    disabled={saving[svc.id]||!keys[svc.id]?.trim()}
+                    style={{padding:"8px 14px",background:C.accent,border:"none",color:"#fff",
+                      borderRadius:7,cursor:"pointer",fontSize:12,fontFamily:"inherit",
+                      fontWeight:600,opacity:saving[svc.id]||!keys[svc.id]?.trim()?0.4:1}}>
+                    {saving[svc.id]?"Saving...":"Save"}
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:"16px 24px",borderTop:`1px solid ${C.border}`,
+          display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{fontSize:11,color:C.muted}}>
+            🔒 Keys are encrypted at rest. You can update them anytime in Settings.
+          </div>
+          <button onClick={onClose}
+            style={{padding:"8px 20px",background:C.accentDim,border:`1px solid ${C.accent}40`,
+              color:C.accentText,borderRadius:8,cursor:"pointer",fontSize:13,
+              fontFamily:"inherit",fontWeight:600}}>
+            {Object.keys(saved).length>0?"Done":"Skip for now"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── API KEYS SECTION IN SETTINGS ──────────────────────────────────────────────
+function ApiKeysSection({token,C}){
+  const [keyData,setKeyData]=useState([]);
+  const [editing,setEditing]=useState({});
+  const [saving,setSaving]=useState({});
+  const [msg,setMsg]=useState({});
+
+  const load=()=>api("/users/me/api-keys",{},token).then(r=>r.ok?r.json():[]).then(setKeyData);
+  useEffect(()=>{load();},[token]);
+
+  async function saveKey(svc){
+    const k=(editing[svc]||"").trim();if(!k)return;
+    setSaving(p=>({...p,[svc]:true}));
+    const r=await api(`/users/me/api-keys/${svc}`,{method:"POST",body:JSON.stringify({api_key:k})},token);
+    if(r.ok){setMsg(p=>({...p,[svc]:"Saved"}));setEditing(p=>({...p,[svc]:""}));load();}
+    else{const e=await r.json();setMsg(p=>({...p,[svc]:e.detail||"Failed"}));}
+    setSaving(p=>({...p,[svc]:false}));
+    setTimeout(()=>setMsg(p=>({...p,[svc]:""})),3000);
+  }
+  async function removeKey(svc){
+    await api(`/users/me/api-keys/${svc}`,{method:"DELETE"},token);
+    setMsg(p=>({...p,[svc]:"Removed"}));load();
+    setTimeout(()=>setMsg(p=>({...p,[svc]:""})),3000);
+  }
+
+  return(
+    <div style={{marginBottom:28}}>
+      <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,
+        textTransform:"uppercase",marginBottom:6}}>My API Keys</div>
+      <div style={{fontSize:12,color:C.muted,marginBottom:14,lineHeight:1.6}}>
+        Personal keys are used for enrichment instead of the shared platform quota
+        ({DAILY_FREE_QUOTA} free checks/day per service). Stored encrypted, never shared.
+      </div>
+      {keyData.map(k=>(
+        <div key={k.service} style={{background:C.surface,border:`1px solid ${k.has_key?C.green+"60":C.border}`,
+          borderRadius:10,padding:"14px 16px",marginBottom:10,boxShadow:C.shadow}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:k.has_key?8:10,flexWrap:"wrap",gap:8}}>
+            <div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:13,fontWeight:700,color:C.white}}>{k.name}</span>
+                {k.has_key
+                  ?<span style={{fontSize:11,color:C.green,fontWeight:700}}>✓ Personal key active</span>
+                  :<span style={{fontSize:11,padding:"1px 7px",borderRadius:3,
+                      background:k.quota_remaining<=3?C.red+"20":C.accentDim,
+                      color:k.quota_remaining<=3?C.red:C.accentText,fontWeight:600}}>
+                    {k.unlimited?"Unlimited (admin)":
+                     k.quota_remaining!=null?`${k.quota_remaining}/${k.quota_total} free today`:"No quota"}
+                  </span>
+                }
+              </div>
+              {k.has_key&&<div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginTop:2}}>{k.masked}</div>}
+              {k.updated_at&&<div style={{fontSize:10,color:C.muted,marginTop:2}}>Updated: {new Date(k.updated_at).toLocaleDateString()}</div>}
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              {msg[k.service]&&<span style={{fontSize:12,color:msg[k.service]==="Removed"||msg[k.service]==="Saved"?C.green:C.red}}>{msg[k.service]}</span>}
+              <a href={k.url} target="_blank" rel="noreferrer"
+                style={{fontSize:11,color:C.accentText,fontWeight:600}}>Get key →</a>
+              {k.has_key&&(
+                <button onClick={()=>removeKey(k.service)}
+                  style={{fontSize:11,padding:"3px 10px",background:"none",
+                    border:`1px solid ${C.red}40`,color:C.red,borderRadius:5,
+                    cursor:"pointer",fontFamily:"inherit"}}>Remove</button>
+              )}
+            </div>
+          </div>
+          {/* Edit / add row */}
+          <div style={{display:"flex",gap:8}}>
+            <input value={editing[k.service]||""} onChange={e=>setEditing(p=>({...p,[k.service]:e.target.value}))}
+              onKeyDown={e=>{if(e.key==="Enter")saveKey(k.service);}}
+              placeholder={k.has_key?"Replace with new key...":k.placeholder}
+              style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                color:C.inputText,padding:"7px 12px",borderRadius:7,fontSize:12,
+                outline:"none",fontFamily:"monospace"}}/>
+            <button onClick={()=>saveKey(k.service)}
+              disabled={saving[k.service]||!editing[k.service]?.trim()}
+              style={{padding:"7px 14px",background:C.accent,border:"none",color:"#fff",
+                borderRadius:7,cursor:"pointer",fontSize:12,fontFamily:"inherit",
+                fontWeight:600,opacity:saving[k.service]||!editing[k.service]?.trim()?0.4:1}}>
+              {saving[k.service]?"...":(k.has_key?"Update":"Save")}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const DAILY_FREE_QUOTA = 10;
+
 function SettingsPage({themeName,setThemeName,token,onLogout,C,me}){
   const [showPw,setShowPw]=useState(false); const [cur,setCur]=useState(""); const [next,setNext]=useState("");
   const [pwMsg,setPwMsg]=useState(""); const [pwErr,setPwErr]=useState("");
@@ -1455,6 +1670,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me}){
           )}
         </Card>
       </div>
+      <ApiKeysSection token={token} C={C}/>
       <div style={{marginBottom:28}}>
         <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",marginBottom:14}}>Platform</div>
         <Card C={C}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,fontSize:13}}>{[["API","YOUR_DOMAIN"],["Enrichment Cache","24 hours"],["Token Expiry","8 hours"],["STIX","2.1"],["CVE Poll","Every 6 hours"]].map(([k,v])=><div key={k}><span style={{color:C.muted,fontWeight:600}}>{k}: </span><span style={{color:C.text}}>{v}</span></div>)}</div></Card>
@@ -1498,6 +1714,7 @@ export default function App(){
   const C=THEMES[themeName]||THEMES.operator;
   const [mode,setMode]=useState(()=>localStorage.getItem("tf_mode")||"ioc");
   function switchMode(m){setMode(m);localStorage.setItem("tf_mode",m);setView("dashboard");}
+  const [showApiKeyModal,setShowApiKeyModal]=useState(false);
   const [session,setSession]=useState(()=>{const t=localStorage.getItem("tf_token");return t?{token:t}:null;});
   const [me,setMe]=useState(null);
   const [iocs,setIocs]=useState([]); const [campaigns,setCampaigns]=useState([]);
@@ -1531,7 +1748,22 @@ export default function App(){
 
   const token=session?.token;
 
-  useEffect(()=>{if(!token)return;api("/auth/me",{},token).then(r=>r.ok?r.json():null).then(d=>{if(d)setMe(d);});},[token]);
+  useEffect(()=>{
+    if(!token)return;
+    api("/auth/me",{},token).then(r=>r.ok?r.json():null).then(d=>{
+      if(d){
+        setMe(d);
+        // Show API key setup modal if user hasn't dismissed it this session
+        const dismissed=sessionStorage.getItem("apiKeyModalDismissed");
+        if(!dismissed){
+          api("/users/me/api-keys",{},token).then(r=>r.ok?r.json():[]).then(keys=>{
+            const hasAny=keys.some(k=>k.has_key);
+            if(!hasAny)setShowApiKeyModal(true);
+          });
+        }
+      }
+    });
+  },[token]);
 
   const fetchIOCs=useCallback(async()=>{
     if(!token)return;setLoading(true);
@@ -1620,6 +1852,7 @@ export default function App(){
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');*{box-sizing:border-box;}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:${C.bg};}::-webkit-scrollbar-thumb{background:${C.border};border-radius:2px;}select option{background:${C.surface};color:${C.text};}input::placeholder,textarea::placeholder{color:${C.muted};}textarea{resize:vertical;}button:disabled{opacity:.4;cursor:not-allowed!important;}a{text-decoration:none;}@media(max-width:700px){.sidebar{width:52px!important;}.sidebar-label{display:none!important;}}`}</style>
 
       {selectedIOC&&<EnrichmentPanel ioc={selectedIOC} token={token} onClose={()=>setSelectedIOC(null)} C={C} me={me}/>}
+      {showApiKeyModal&&<ApiKeyModal token={token} C={C} onClose={()=>{setShowApiKeyModal(false);sessionStorage.setItem("apiKeyModalDismissed","1");}}/>}
 
       {/* Sidebar */}
       <div className="sidebar" style={{width:200,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
