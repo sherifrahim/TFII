@@ -362,7 +362,8 @@ function AssetManager({token,C,onChanged}){
   const [assets,setAssets]=useState([]);
   const [form,setForm]=useState({name:"",vendor:"",version:"",asset_type:"application",criticality:"high",cpe:"",description:""});
   const [cpeSearch,setCpeSearch]=useState(""); const [cpeSuggestions,setCpeSuggestions]=useState([]);
-  const [cpeLoading,setCpeLoading]=useState(false); const [saving,setSaving]=useState(false); const [msg,setMsg]=useState("");
+  const [cpeLoading,setCpeLoading]=useState(false); const [saving,setSaving]=useState(false);
+  const [msg,setMsg]=useState(""); const [err,setErr]=useState("");
   const ASSET_TYPES=["application","os","firmware","cloud_service","hardware","library","database"];
   const CRITICALITIES=["critical","high","medium","low"];
 
@@ -370,15 +371,31 @@ function AssetManager({token,C,onChanged}){
   useEffect(()=>{load();},[load]);
 
   async function searchCPE(){
-    if(!cpeSearch.trim())return;setCpeLoading(true);
-    const r=await api(`/assets/cpe-search?q=${encodeURIComponent(cpeSearch)}`,{},token);
-    if(r.ok){const d=await r.json();setCpeSuggestions(d.results||[]);}
+    if(!cpeSearch.trim())return;setCpeLoading(true);setErr("");
+    try{
+      const r=await api(`/assets/cpe-search?q=${encodeURIComponent(cpeSearch)}`,{},token);
+      if(r.ok){const d=await r.json();setCpeSuggestions(d.results||[]);}
+      else{const e=await r.json();setErr(`CPE search failed: ${e.detail||r.status}`);}
+    }catch(e){setErr("CPE search failed: cannot reach server");}
     setCpeLoading(false);
   }
   async function addAsset(){
-    if(!form.name.trim())return;setSaving(true);setMsg("");
-    const r=await api("/assets",{method:"POST",body:JSON.stringify(form)},token);
-    if(r.ok){setMsg("Asset added. CVE monitoring starts at next poll.");setForm({name:"",vendor:"",version:"",asset_type:"application",criticality:"high",cpe:"",description:""});setCpeSuggestions([]);setCpeSearch("");load();if(onChanged)onChanged();}
+    if(!form.name.trim())return;
+    setSaving(true);setMsg("");setErr("");
+    try{
+      const r=await api("/assets",{method:"POST",body:JSON.stringify(form)},token);
+      if(r.ok){
+        setMsg("Asset added. CVE monitoring starts at next poll.");
+        setForm({name:"",vendor:"",version:"",asset_type:"application",criticality:"high",cpe:"",description:""});
+        setCpeSuggestions([]);setCpeSearch("");
+        load();if(onChanged)onChanged();
+      }else{
+        const e=await r.json();
+        setErr(`Failed to add asset: ${e.detail||r.status}`);
+      }
+    }catch(e){
+      setErr("Failed to add asset: cannot reach server");
+    }
     setSaving(false);
   }
   async function removeAsset(id){
@@ -421,6 +438,7 @@ function AssetManager({token,C,onChanged}){
             </div>
           )}
         </Field>
+        {err&&<div style={{fontSize:12,color:C.red,marginBottom:12,padding:"8px 12px",background:C.red+"10",borderRadius:6,border:`1px solid ${C.red}30`}}>{err}</div>}
         {msg&&<div style={{fontSize:12,color:C.green,marginBottom:12,padding:"8px 12px",background:C.green+"10",borderRadius:6,border:`1px solid ${C.green}30`}}>{msg}</div>}
         <Btn onClick={addAsset} disabled={!form.name.trim()||saving} C={C}>{saving?"Adding...":"Add to Monitor List"}</Btn>
       </Card>
