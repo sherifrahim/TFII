@@ -623,13 +623,25 @@ async def fetch_nvd_cves(cpe: str, days_back: int = 90) -> list:
     headers = {"User-Agent":"ThreatFeed-CTI/1.0"}
     if NVD_API_KEY: headers["apiKey"] = NVD_API_KEY
     end = datetime.now(timezone.utc); start = end - timedelta(days=days_back)
-    params = {"cpeName":cpe,"pubStartDate":start.strftime("%Y-%m-%dT%H:%M:%S.000"),
-              "pubEndDate":end.strftime("%Y-%m-%dT%H:%M:%S.000"),"resultsPerPage":50}
+    params = {
+        "cpeName":      cpe,
+        "pubStartDate": start.strftime("%Y-%m-%dT%H:%M:%S.000"),
+        "pubEndDate":   end.strftime("%Y-%m-%dT%H:%M:%S.000"),
+        "resultsPerPage": 50,
+        "isVulnerable": "true",   # only CVEs that actually affect this CPE/version
+    }
     try:
         async with httpx.AsyncClient(timeout=20) as c:
             r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
                             params=params, headers=headers)
         if r.status_code == 200: return r.json().get("vulnerabilities",[])
+        # isVulnerable param not supported on all versions — fall back without it
+        if r.status_code == 400:
+            params.pop("isVulnerable", None)
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
+                                params=params, headers=headers)
+            if r.status_code == 200: return r.json().get("vulnerabilities",[])
     except Exception as e:
         print(f"[nvd] Error for {cpe}: {e}")
     return []
@@ -1121,12 +1133,13 @@ async def create_asset(body: AssetIn, user=Depends(get_current_user), conn=Depen
                             if body.vendor.lower() in cpe_name:
                                 best = p.get("cpe", {}).get("cpeName", "")
                                 break
-                    # Normalise to wildcard version for broad matching
+                    # Keep exact version if user specified it, else wildcard for broad match
                     parts = best.split(":")
                     if len(parts) >= 6:
-                        parts[5] = "*"  # version → wildcard unless user specified one
                         if body.version:
-                            parts[5] = body.version
+                            parts[5] = body.version   # exact version → NVD filters to affected CVEs
+                        else:
+                            parts[5] = "*"            # no version → monitor all versions
                         best = ":".join(parts)
                     cpe = best
         except Exception as e:
@@ -1823,7 +1836,7 @@ async def generate_query(body: QueryGenRequest, user=Depends(get_current_user)):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "llama3-70b-8192",
+                    "model": "llama-3.3-70b-versatile",
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user",   "content": user_message},

@@ -393,8 +393,9 @@ function AssetManager({token,C,onChanged}){
           Add Software / Service to Monitor
         </div>
         <div style={{fontSize:12,color:C.muted,marginBottom:20,lineHeight:1.6}}>
-          Enter the name and optionally the vendor and version. The system will automatically
-          identify the correct CVE identifiers and begin monitoring NVD for new vulnerabilities.
+          Enter the software name, vendor, and your <strong style={{color:C.text}}>currently installed version</strong>.
+          The system will monitor NVD for CVEs that specifically affect that version.
+          Leave version blank to monitor all versions of the software.
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:4}}>
           <Field label="Name *" C={C}>
@@ -405,9 +406,9 @@ function AssetManager({token,C,onChanged}){
             <Inp value={form.vendor} onChange={v=>setForm(p=>({...p,vendor:v}))}
               placeholder="e.g. Google, Microsoft, Apache" C={C}/>
           </Field>
-          <Field label="Version (optional — blank monitors all versions)" C={C}>
+          <Field label="Installed Version" C={C}>
             <Inp value={form.version} onChange={v=>setForm(p=>({...p,version:v}))}
-              placeholder="e.g. 124.0.6367.60" C={C}/>
+              placeholder="e.g. 124.0.6367.60 — enter your installed version" C={C}/>
           </Field>
           <Field label="Type" C={C}>
             <select value={form.asset_type} onChange={e=>setForm(p=>({...p,asset_type:e.target.value}))}
@@ -456,6 +457,9 @@ function AssetManager({token,C,onChanged}){
               </div>
               <div style={{display:"flex",gap:14,fontSize:12,flexWrap:"wrap",marginBottom:4}}>
                 <span style={{color:C.text}}>{asset.cve_count||0} CVEs found</span>
+                <span style={{color:C.muted}}>
+                  {asset.version ? `Monitoring v${asset.version} only` : "Monitoring all versions"}
+                </span>
                 {(asset.kev_unpatched||0)>0&&(
                   <span style={{color:C.red,fontWeight:700}}>🚨 {asset.kev_unpatched} KEV unpatched</span>
                 )}
