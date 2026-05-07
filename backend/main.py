@@ -300,7 +300,7 @@ async def startup():
             published_date TEXT, modified_date TEXT,
             patch_available BOOLEAN DEFAULT FALSE, patch_url TEXT,
             patch_detected_at TIMESTAMP,
-            references JSONB, iocs_extracted TEXT[],
+            "references" JSONB, iocs_extracted TEXT[],
             created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())""",
         """CREATE TABLE IF NOT EXISTS cve_ioc_links (
             cve_id VARCHAR(50), ioc_id VARCHAR(100), PRIMARY KEY (cve_id, ioc_id))""",
@@ -862,7 +862,7 @@ async def poll_cves_for_asset(asset: dict, kev_catalog: dict, conn) -> dict:
             cur2.execute("""INSERT INTO cve_findings
                 (id,cve_id,asset_id,title,description,cvss_score,cvss_severity,cvss_vector,
                  epss_score,epss_percentile,kev_listed,kev_date,cwe,affected_versions,
-                 published_date,modified_date,patch_available,patch_url,patch_detected_at,references)
+                 published_date,modified_date,patch_available,patch_url,patch_detected_at,"references")
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (cve_id) DO NOTHING""",
                 (finding_id,cve_id,asset_id,parsed["title"],parsed["description"],
