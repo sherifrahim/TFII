@@ -31,38 +31,106 @@ const COUNTRY_FLAGS = {
 };
 
 const THEMES = {
-  operator:{name:"Operator",font:"'Space Mono',monospace",bg:"#07070e",surface:"#0d0d1c",surfaceHi:"#111126",border:"#1a1a30",accent:"#00e5c0",accentDim:"#00e5c014",accentText:"#00e5c0",text:"#c4c4e0",muted:"#484870",white:"#f0f0ff",green:"#00e676",amber:"#ffab00",red:"#ff5252",purple:"#a78bfa",inputBg:"#0a0a18",inputBorder:"#2a2a45",inputText:"#e0e0f8",shadow:"0 2px 12px #00000060",badge:"#141428"},
-  nebula:{name:"Nebula",font:"'Inter',sans-serif",bg:"#08001a",surface:"#0f0025",surfaceHi:"#180038",border:"#2a0055",accent:"#c44dff",accentDim:"#c44dff12",accentText:"#d580ff",text:"#d8c8f0",muted:"#7055a0",white:"#f5eeff",green:"#00ffaa",amber:"#ffcc44",red:"#ff4488",purple:"#ff80ff",inputBg:"#0c001f",inputBorder:"#350070",inputText:"#ecdeff",shadow:"0 4px 32px #8800ff22",badge:"#150030",glow:"0 0 20px #c44dff30"},
-  light:{name:"Light",font:"'Inter',sans-serif",bg:"#f4f6fb",surface:"#ffffff",surfaceHi:"#f0f3fa",border:"#e2e6f0",accent:"#2563eb",accentDim:"#2563eb12",accentText:"#2563eb",text:"#374151",muted:"#9ca3af",white:"#111827",green:"#16a34a",amber:"#d97706",red:"#dc2626",purple:"#7c3aed",inputBg:"#ffffff",inputBorder:"#d1d5db",inputText:"#111827",shadow:"0 2px 16px #0000001a",badge:"#f0f3fa"},
+  // Professional light — matches screenshot 1
+  light:{
+    name:"Light",font:"'Inter',sans-serif",
+    bg:"#f8fafc",surface:"#ffffff",surfaceHi:"#f1f5f9",
+    border:"#e2e8f0",borderHi:"#cbd5e1",
+    accent:"#10b981",accentDim:"#10b98112",accentText:"#059669",accentHover:"#059669",
+    text:"#475569",textHi:"#1e293b",muted:"#94a3b8",mutedHi:"#64748b",
+    white:"#0f172a",green:"#10b981",amber:"#f59e0b",red:"#ef4444",purple:"#8b5cf6",
+    inputBg:"#ffffff",inputBorder:"#e2e8f0",inputText:"#0f172a",
+    shadow:"0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04)",
+    shadowMd:"0 4px 6px -1px rgba(0,0,0,0.07),0 2px 4px -1px rgba(0,0,0,0.04)",
+    badge:"#f1f5f9",navActive:"#f0fdf4",navActiveBorder:"#10b981",
+    statNum:"#0f172a",statLabel:"#10b981",
+    sidebarBg:"#ffffff",topbarBg:"#ffffff",
+  },
+  // Professional dark — same aesthetic, dark slate
+  dark:{
+    name:"Dark",font:"'Inter',sans-serif",
+    bg:"#0f172a",surface:"#1e293b",surfaceHi:"#334155",
+    border:"#334155",borderHi:"#475569",
+    accent:"#10b981",accentDim:"#10b98118",accentText:"#34d399",accentHover:"#34d399",
+    text:"#94a3b8",textHi:"#e2e8f0",muted:"#64748b",mutedHi:"#94a3b8",
+    white:"#f1f5f9",green:"#10b981",amber:"#f59e0b",red:"#f87171",purple:"#a78bfa",
+    inputBg:"#1e293b",inputBorder:"#334155",inputText:"#f1f5f9",
+    shadow:"0 1px 3px rgba(0,0,0,0.3)",
+    shadowMd:"0 4px 6px -1px rgba(0,0,0,0.4)",
+    badge:"#334155",navActive:"#10b98118",navActiveBorder:"#10b981",
+    statNum:"#f1f5f9",statLabel:"#10b981",
+    sidebarBg:"#1e293b",topbarBg:"#1e293b",
+  },
+  // Operator — keep for those who prefer the terminal aesthetic
+  operator:{
+    name:"Operator",font:"'Space Mono',monospace",
+    bg:"#07070e",surface:"#0d0d1c",surfaceHi:"#111126",
+    border:"#1a1a30",borderHi:"#2a2a45",
+    accent:"#00e5c0",accentDim:"#00e5c014",accentText:"#00e5c0",accentHover:"#00e5c0",
+    text:"#c4c4e0",textHi:"#f0f0ff",muted:"#484870",mutedHi:"#6868a0",
+    white:"#f0f0ff",green:"#00e676",amber:"#ffab00",red:"#ff5252",purple:"#a78bfa",
+    inputBg:"#0a0a18",inputBorder:"#2a2a45",inputText:"#e0e0f8",
+    shadow:"0 2px 12px rgba(0,0,0,0.6)",shadowMd:"0 4px 24px rgba(0,0,0,0.5)",
+    badge:"#141428",navActive:"#00e5c014",navActiveBorder:"#00e5c0",
+    statNum:"#00e5c0",statLabel:"#484870",
+    sidebarBg:"#0d0d1c",topbarBg:"#0d0d1c",
+  },
 };
 
 // ── MODE NAV DEFINITIONS ──────────────────────────────────────────────────────
 const IOC_NAV=[
-  {id:"dashboard",label:"Dashboard",    icon:"▦"},
-  {id:"feed",     label:"IOC Feed",     icon:"◈"},
-  {id:"add",      label:"Add IOC",      icon:"＋"},
-  {id:"campaigns",label:"Campaigns",    icon:"◎"},
-  {id:"map",      label:"Geo Map",      icon:"🗺"},
-  {id:"public",   label:"Public Lookup",icon:"🌐"},
-  {id:"import",   label:"Import",       icon:"↓"},
-  {id:"export",   label:"Export",       icon:"↑"},
+  {id:"dashboard",label:"Dashboard",     icon:"grid"},
+  {id:"feed",     label:"IOC Feed",      icon:"list"},
+  {id:"add",      label:"Add IOC",       icon:"plus"},
+  {id:"campaigns",label:"Campaigns",     icon:"folder"},
+  {id:"map",      label:"Geo Map",       icon:"map"},
+  {id:"public",   label:"Public Lookup", icon:"search"},
+  {id:"import",   label:"Import",        icon:"upload"},
+  {id:"export",   label:"Export",        icon:"download"},
 ];
 const CVE_NAV=[
-  {id:"dashboard",label:"Dashboard",    icon:"▦"},
-  {id:"cve",      label:"CVE Monitor",  icon:"🛡️"},
-  {id:"intel",    label:"Intel Wall",   icon:"📡"},
-  {id:"actors",   label:"Threat Actors",icon:"⚡"},
-  {id:"osint",    label:"OSINT",        icon:"🔍"},
-  {id:"querygen", label:"Query Builder",icon:"⌨"},
+  {id:"dashboard",label:"Dashboard",     icon:"grid"},
+  {id:"cve",      label:"CVE Monitor",   icon:"shield"},
+  {id:"intel",    label:"Intel Wall",    icon:"rss"},
+  {id:"actors",   label:"Threat Actors", icon:"users"},
+  {id:"osint",    label:"OSINT",         icon:"radar"},
+  {id:"querygen", label:"Query Builder", icon:"code"},
 ];
 const ADMIN_NAV=[
-  {id:"settings", label:"Settings",     icon:"⚙"},
-  {id:"users",    label:"Users",        icon:"👥"},
-  {id:"invites",  label:"Invites",      icon:"✉"},
+  {id:"settings", label:"Settings",      icon:"settings"},
+  {id:"users",    label:"Users",         icon:"usergroup"},
+  {id:"invites",  label:"Invites",       icon:"mail"},
 ];
 const USER_NAV=[
-  {id:"settings", label:"Settings",     icon:"⚙"},
+  {id:"settings", label:"Settings",      icon:"settings"},
 ];
+
+// SVG nav icons — matches the clean icon style in the reference screenshots
+function NavIcon({name,size=16,color="currentColor"}){
+  const s={width:size,height:size,viewBox:"0 0 24 24",fill:"none",stroke:color,strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round",flexShrink:0};
+  const icons={
+    grid:     <svg {...s}><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>,
+    list:     <svg {...s}><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>,
+    plus:     <svg {...s}><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>,
+    folder:   <svg {...s}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>,
+    map:      <svg {...s}><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>,
+    search:   <svg {...s}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+    upload:   <svg {...s}><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>,
+    download: <svg {...s}><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>,
+    shield:   <svg {...s}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
+    rss:      <svg {...s}><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>,
+    users:    <svg {...s}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+    radar:    <svg {...s}><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>,
+    code:     <svg {...s}><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>,
+    settings: <svg {...s}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+    usergroup:<svg {...s}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+    mail:     <svg {...s}><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>,
+    bell:     <svg {...s}><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>,
+    externalLink: <svg {...s}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>,
+    chevronRight: <svg {...s}><polyline points="9 18 15 12 9 6"/></svg>,
+  };
+  return icons[name]||<svg {...s}><circle cx="12" cy="12" r="4"/></svg>;
+}
 
 // ── CVE SUMMARY STRIP (shown on dashboard regardless of mode) ─────────────────
 function CVESummaryStrip({token,C}){
@@ -146,11 +214,16 @@ function Btn({onClick,disabled,children,variant="primary",C,full,sm}){
 function Card({C,children,style={}}){
   return <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:20,boxShadow:C.shadow,...style}}>{children}</div>;
 }
-function StatCard({label,value,color,C}){
+function StatCard({label,value,color,C,sublabel}){
   return(
-    <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 20px",boxShadow:C.shadow}}>
-      <div style={{fontSize:11,color:C.muted,marginBottom:8,fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>{label}</div>
-      <div style={{fontSize:32,fontWeight:700,color:color||C.accentText}}>{value}</div>
+    <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+      padding:"22px 24px",boxShadow:C.shadow,transition:"box-shadow .15s"}}>
+      <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6}}>
+        <span style={{fontSize:38,fontWeight:700,letterSpacing:"-0.02em",
+          color:C.statNum,lineHeight:1}}>{typeof value==="number"?value.toLocaleString():value}</span>
+        {sublabel&&<span style={{fontSize:13,fontWeight:600,color:color||C.statLabel}}>{sublabel}</span>}
+      </div>
+      <div style={{fontSize:13,color:C.muted,fontWeight:500}}>{label}</div>
     </div>
   );
 }
@@ -579,48 +652,144 @@ function CVEDashboard({token,C}){
               <Btn onClick={()=>setSubView("assets")} C={C}>{assets.length===0?"Go to Asset Registry":"Check Filters"}</Btn>
             </div>
           ):(
+            {/* CVE table — screenshot 2 style */}
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",boxShadow:C.shadow}}>
+              {/* Table header info row */}
+              <div style={{padding:"12px 20px",borderBottom:`1px solid ${C.border}`,
+                display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                <span style={{fontSize:13,color:C.muted}}>
+                  Showing <strong style={{color:C.white||C.textHi}}>{filtered.length}</strong> of{" "}
+                  <strong style={{color:C.white||C.textHi}}>{cves.length}</strong> results
+                </span>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <button onClick={pollNow} disabled={polling}
+                    style={{padding:"6px 14px",background:polling?C.accentDim:C.accent,
+                      border:"none",color:"#fff",borderRadius:7,cursor:"pointer",
+                      fontSize:12,fontFamily:"inherit",fontWeight:600,opacity:polling?0.6:1}}>
+                    {polling?"Polling...":"⟳ Poll NVD"}
+                  </button>
+                  <button onClick={fetchData}
+                    style={{width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center",
+                      background:"none",border:`1px solid ${C.border}`,color:C.muted,
+                      borderRadius:7,cursor:"pointer",fontSize:14}}>↻</button>
+                </div>
+              </div>
+
               <div style={{overflowX:"auto"}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
                   <thead>
-                    <tr style={{background:C.surfaceHi,borderBottom:`1px solid ${C.border}`}}>
-                      {["CVE","Asset","Severity","EPSS","KEV","Patch Status","Published",""].map(h=>(
-                        <th key={h} style={{padding:"10px 12px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:700,whiteSpace:"nowrap",letterSpacing:.5}}>{h}</th>
+                    <tr style={{background:C.surfaceHi}}>
+                      {[["CVE ID","200px"],["Vendor","120px"],["Product / Asset","160px"],
+                        ["Vulnerability","auto"],["Severity","100px"],["EPSS","80px"],
+                        ["Published","110px"],["Patch","120px"]].map(([h,w])=>(
+                        <th key={h} style={{padding:"11px 16px",textAlign:"left",
+                          color:C.muted,fontSize:11,fontWeight:600,
+                          whiteSpace:"nowrap",letterSpacing:"0.04em",
+                          borderBottom:`1px solid ${C.border}`,
+                          width:w,minWidth:w==="auto"?120:w}}>
+                          {h.toUpperCase()}
+                        </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.map((cve,idx)=>(
-                      <tr key={cve.id||cve.cve_id} onClick={()=>setSelectedCVE(cve)}
-                        style={{borderBottom:`1px solid ${C.border}20`,cursor:"pointer",background:cve.kev_listed?C.red+"06":idx%2===0?"transparent":C.surfaceHi+"40"}}
-                        onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHi}
-                        onMouseLeave={e=>e.currentTarget.style.background=cve.kev_listed?C.red+"06":idx%2===0?"transparent":C.surfaceHi+"40"}>
-                        <td style={{padding:"10px 12px"}}>
-                          <div style={{fontFamily:"monospace",fontSize:12,color:C.accentText,fontWeight:700}}>{cve.cve_id}</div>
-                          {cve.kev_listed&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>🚨 CISA KEV</div>}
-                        </td>
-                        <td style={{padding:"10px 12px",color:C.text,fontSize:12,fontWeight:500}}>{cve.asset_name||"?"}</td>
-                        <td style={{padding:"10px 12px"}}><SevBadge severity={cve.cvss_severity} score={cve.cvss_score} C={C}/></td>
-                        <td style={{padding:"10px 12px"}}>
-                          {cve.epss_score!=null?(
-                            <div>
-                              <div style={{fontSize:12,fontWeight:700,color:cve.epss_score>=0.5?C.red:cve.epss_score>=0.1?C.amber:C.muted}}>{(cve.epss_score*100).toFixed(1)}%</div>
-                              <div style={{fontSize:10,color:C.muted}}>exploit prob.</div>
+                    {filtered.length===0&&(
+                      <tr><td colSpan={8} style={{padding:48,textAlign:"center",color:C.muted}}>
+                        {assets.length===0?"Add software in Asset Registry to start monitoring.":"No CVEs match filters."}
+                      </td></tr>
+                    )}
+                    {filtered.map((cve)=>{
+                      // extract vendor from asset_name or asset metadata
+                      const parts = (cve.asset_name||"").split(" ");
+                      const vendor = cve.asset_criticality||"";
+                      return(
+                        <tr key={cve.id||cve.cve_id} onClick={()=>setSelectedCVE(cve)}
+                          style={{borderBottom:`1px solid ${C.border}`,cursor:"pointer",
+                            background:cve.kev_listed?C.red+"05":"transparent"}}
+                          onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHi}
+                          onMouseLeave={e=>e.currentTarget.style.background=cve.kev_listed?C.red+"05":"transparent"}>
+
+                          {/* CVE ID — bold with ↗ link */}
+                          <td style={{padding:"13px 16px"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <span style={{fontWeight:700,fontSize:13,
+                                color:C.white||C.textHi,fontFamily:"'Inter',sans-serif",
+                                letterSpacing:"-0.01em"}}>
+                                {cve.cve_id}
+                              </span>
+                              <a href={`https://nvd.nist.gov/vuln/detail/${cve.cve_id}`}
+                                target="_blank" rel="noreferrer"
+                                onClick={e=>e.stopPropagation()}
+                                style={{color:C.muted,display:"flex",alignItems:"center",
+                                  opacity:.6,flexShrink:0}}>
+                                <NavIcon name="externalLink" size={12} color={C.muted}/>
+                              </a>
                             </div>
-                          ):<span style={{color:C.muted,fontSize:11}}>N/A</span>}
-                        </td>
-                        <td style={{padding:"10px 12px"}}>{cve.kev_listed?<span style={{fontSize:11,fontWeight:700,color:C.red}}>Yes</span>:<span style={{fontSize:11,color:C.muted}}>No</span>}</td>
-                        <td style={{padding:"10px 12px"}}><PatchBadge available={cve.patch_available} url={cve.patch_url} C={C}/></td>
-                        <td style={{padding:"10px 12px",fontSize:11,color:C.muted,whiteSpace:"nowrap"}}>{cve.published_date||"?"}</td>
-                        <td style={{padding:"10px 12px"}}><span style={{fontSize:11,color:C.accentText,cursor:"pointer"}}>→</span></td>
-                      </tr>
-                    ))}
+                            {cve.kev_listed&&(
+                              <div style={{fontSize:10,color:C.red,fontWeight:600,marginTop:3,
+                                display:"flex",alignItems:"center",gap:3}}>
+                                <span style={{width:5,height:5,borderRadius:"50%",background:C.red,display:"inline-block"}}/>
+                                CISA KEV
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Vendor */}
+                          <td style={{padding:"13px 16px",color:C.text,fontSize:13}}>
+                            {cve.asset_name?.split(" ")[0]||"—"}
+                          </td>
+
+                          {/* Product */}
+                          <td style={{padding:"13px 16px",color:C.text,fontSize:13,fontWeight:500}}>
+                            {cve.asset_name||"—"}
+                          </td>
+
+                          {/* Vulnerability name — truncated title */}
+                          <td style={{padding:"13px 16px",maxWidth:280}}>
+                            <div style={{fontSize:13,color:C.text,overflow:"hidden",
+                              textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:280}}
+                              title={cve.title||cve.description||""}>
+                              {(cve.title||cve.description||"").replace(/^CVE-\d+-\d+:\s*/,"")}
+                            </div>
+                          </td>
+
+                          {/* Severity */}
+                          <td style={{padding:"13px 16px"}}>
+                            <SevBadge severity={cve.cvss_severity} score={cve.cvss_score} C={C}/>
+                          </td>
+
+                          {/* EPSS */}
+                          <td style={{padding:"13px 16px"}}>
+                            {cve.epss_score!=null?(
+                              <span style={{fontSize:12,fontWeight:600,
+                                color:cve.epss_score>=0.5?C.red:cve.epss_score>=0.1?C.amber:C.muted}}>
+                                {(cve.epss_score*100).toFixed(1)}%
+                              </span>
+                            ):<span style={{color:C.muted,fontSize:12}}>—</span>}
+                          </td>
+
+                          {/* Published */}
+                          <td style={{padding:"13px 16px",fontSize:12,color:C.muted,whiteSpace:"nowrap"}}>
+                            {cve.published_date||"—"}
+                          </td>
+
+                          {/* Patch */}
+                          <td style={{padding:"13px 16px"}}>
+                            <PatchBadge available={cve.patch_available} url={cve.patch_url} C={C}/>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
-              <div style={{padding:"8px 14px",borderTop:`1px solid ${C.border}`,fontSize:11,color:C.muted,display:"flex",justifyContent:"space-between"}}>
-                <span>Click any row for full details, linked IOCs, references, patch info</span>
-                <span>{filtered.length} of {cves.length} CVEs · Sorted by KEV + CVSS</span>
+
+              {/* Footer */}
+              <div style={{padding:"10px 20px",borderTop:`1px solid ${C.border}`,
+                display:"flex",justifyContent:"space-between",alignItems:"center",
+                fontSize:12,color:C.muted}}>
+                <span>Click any row for full details, IOCs, references, and patch link</span>
+                <span>{filtered.length} CVEs · sorted by KEV + CVSS score</span>
               </div>
             </div>
           )}
@@ -1374,44 +1543,102 @@ function GlobalSearch({token,C,onSelect}){
 function Dashboard({token,C}){
   const [stats,setStats]=useState(null);
   useEffect(()=>{api("/stats/dashboard",{},token).then(r=>r.ok?r.json():null).then(d=>{if(d)setStats(d);});},[token]);
-  if(!stats)return <div style={{padding:40,textAlign:"center",color:C.muted}}>Loading dashboard...</div>;
+  if(!stats)return(
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14,marginBottom:24}}>
+      {[1,2,3,4].map(i=><div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"22px 24px",height:90,animation:"pulse 1.5s infinite"}}/>)}
+    </div>
+  );
+
   const VT_LIMIT=500,ABUSE_LIMIT=1000;
   const vtPct=Math.min(100,Math.round((stats.api_usage?.virustotal||0)/VT_LIMIT*100));
   const abusePct=Math.min(100,Math.round((stats.api_usage?.abuseipdb||0)/ABUSE_LIMIT*100));
+  const highConf=stats.by_confidence?.find(x=>x.band==="High")?.count||0;
+
   return(
     <div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:14,marginBottom:24}}>
-        <StatCard label="Live IOCs" value={stats.total} color={C.accentText} C={C}/>
-        <StatCard label="Expired" value={stats.expired} color={C.amber} C={C}/>
-        <StatCard label="False Positives" value={stats.fp_count} color={C.red} C={C}/>
-        <StatCard label="High Confidence" value={stats.by_confidence?.find(x=>x.band==="High")?.count||0} color={C.green} C={C}/>
+      {/* Enrichment Insights — matches screenshot 1 grid */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <h2 style={{fontSize:18,fontWeight:700,color:C.white||C.textHi,margin:0,letterSpacing:"-0.02em"}}>
+          IOC Insights
+        </h2>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:16,marginBottom:20}}>
-        {[{title:"By Type",data:stats.by_type,key:"type"},{title:"By Industry",data:stats.by_industry,key:"industry"},{title:"By TLP",data:stats.by_tlp,key:"tlp"},{title:"Top Contributors",data:stats.top_contributors,key:"username"}].map(({title,data,key})=>(
-          <div key={title} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:18,boxShadow:C.shadow}}>
-            <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:.5,marginBottom:12,textTransform:"uppercase"}}>{title}</div>
-            {(data||[]).slice(0,6).map((row,i)=>{const max=Math.max(...(data||[]).map(x=>x.count),1);return(
-              <div key={i} style={{marginBottom:8}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:12,color:C.text,fontWeight:500}}>{key==="tlp"?<TLPBadge level={row[key]}/>:row[key]||"unknown"}</span><span style={{fontSize:12,color:C.muted}}>{row.count}</span></div>
-                <div style={{height:3,background:C.border,borderRadius:2,overflow:"hidden"}}><div style={{width:`${(row.count/max)*100}%`,height:"100%",background:C.accent,borderRadius:2}}/></div>
-              </div>
-            );})}
+
+      {/* Big stat grid — 4 columns like screenshot */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:12,marginBottom:24}}>
+        <StatCard label="Live IOCs" value={stats.total} sublabel="IOCs" color={C.accent} C={C}/>
+        <StatCard label="High Confidence" value={highConf} sublabel="IOCs" color={C.green} C={C}/>
+        <StatCard label="Expired" value={stats.expired} sublabel="IOCs" color={C.amber} C={C}/>
+        <StatCard label="False Positives" value={stats.fp_count} sublabel="IOCs" color={C.red} C={C}/>
+      </div>
+
+      {/* Breakdown charts */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:14,marginBottom:20}}>
+        {[
+          {title:"By Type",       data:stats.by_type,        key:"type"},
+          {title:"By Industry",   data:stats.by_industry,    key:"industry"},
+          {title:"By TLP",        data:stats.by_tlp,         key:"tlp"},
+          {title:"Top Analysts",  data:stats.top_contributors,key:"username"},
+        ].map(({title,data,key})=>(
+          <div key={title} style={{background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:12,padding:"18px 20px",boxShadow:C.shadow}}>
+            <div style={{fontSize:12,color:C.muted,fontWeight:600,marginBottom:14,
+              textTransform:"uppercase",letterSpacing:"0.06em"}}>{title}</div>
+            {(data||[]).slice(0,6).map((row,i)=>{
+              const max=Math.max(...(data||[]).map(x=>x.count),1);
+              const pct=Math.round((row.count/max)*100);
+              return(
+                <div key={i} style={{marginBottom:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,alignItems:"center"}}>
+                    <span style={{fontSize:12,color:C.text,fontWeight:500}}>
+                      {key==="tlp"?<TLPBadge level={row[key]}/>:row[key]||"unknown"}
+                    </span>
+                    <span style={{fontSize:12,color:C.muted,fontWeight:500}}>{row.count}</span>
+                  </div>
+                  <div style={{height:3,background:C.border,borderRadius:4,overflow:"hidden"}}>
+                    <div style={{width:`${pct}%`,height:"100%",background:C.accent,
+                      borderRadius:4,transition:"width .4s ease"}}/>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ))}
       </div>
-      <Card C={C}>
-        <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:.5,marginBottom:14,textTransform:"uppercase"}}>API Usage Today</div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:16}}>
-          {[{name:"VirusTotal",used:stats.api_usage?.virustotal||0,limit:VT_LIMIT,pct:vtPct},{name:"AbuseIPDB",used:stats.api_usage?.abuseipdb||0,limit:ABUSE_LIMIT,pct:abusePct},{name:"URLhaus",used:stats.api_usage?.urlhaus||0,limit:"∞",pct:0}].map(({name,used,limit,pct})=>(
+
+      {/* API Usage */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+        padding:"18px 20px",boxShadow:C.shadow}}>
+        <div style={{fontSize:12,color:C.muted,fontWeight:600,marginBottom:14,
+          textTransform:"uppercase",letterSpacing:"0.06em"}}>Platform API Usage Today</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:16}}>
+          {[
+            {name:"VirusTotal", used:stats.api_usage?.virustotal||0,limit:VT_LIMIT,   pct:vtPct},
+            {name:"AbuseIPDB",  used:stats.api_usage?.abuseipdb||0, limit:ABUSE_LIMIT, pct:abusePct},
+            {name:"URLhaus",    used:stats.api_usage?.urlhaus||0,    limit:"∞",        pct:0},
+          ].map(({name,used,limit,pct})=>(
             <div key={name}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{fontSize:13,color:C.text,fontWeight:500}}>{name}</span><span style={{fontSize:12,color:pct>=80?C.red:pct>=60?C.amber:C.green,fontWeight:600}}>{used}/{limit}</span></div>
-              {limit!=="∞"&&<div style={{height:4,background:C.border,borderRadius:2,overflow:"hidden"}}><div style={{width:`${pct}%`,height:"100%",background:pct>=80?C.red:pct>=60?C.amber:C.green,borderRadius:2}}/></div>}
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                <span style={{fontSize:13,color:C.text,fontWeight:500}}>{name}</span>
+                <span style={{fontSize:12,fontWeight:600,
+                  color:pct>=80?C.red:pct>=60?C.amber:C.green}}>
+                  {used}{limit!=="∞"?`/${limit}`:""}
+                </span>
+              </div>
+              {limit!=="∞"&&(
+                <div style={{height:4,background:C.border,borderRadius:4,overflow:"hidden"}}>
+                  <div style={{width:`${pct}%`,height:"100%",borderRadius:4,transition:"width .4s",
+                    background:pct>=80?C.red:pct>=60?C.amber:C.accent}}/>
+                </div>
+              )}
               {limit==="∞"&&<div style={{fontSize:11,color:C.muted}}>No rate limit</div>}
             </div>
           ))}
         </div>
-        <div style={{marginTop:10,fontSize:12,color:C.muted}}>Cache hits today: <span style={{color:C.green,fontWeight:600}}>{stats.api_usage?.cache_hits_today||0}</span> — enrichments cached 24h to preserve API quota.</div>
-      </Card>
+        <div style={{marginTop:12,fontSize:12,color:C.muted,borderTop:`1px solid ${C.border}`,paddingTop:10}}>
+          Cache hits today: <span style={{color:C.green,fontWeight:600}}>{stats.api_usage?.cache_hits_today||0}</span>
+          {" "}— enrichment results cached 24h to preserve quota.
+        </div>
+      </div>
     </div>
   );
 }
@@ -1718,10 +1945,26 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
         <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",marginBottom:14}}>Theme</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
           {Object.entries(THEMES).map(([key,theme])=>(
-            <button key={key} onClick={()=>{setThemeName(key);localStorage.setItem("tf_theme",key);}} style={{padding:"18px 14px",borderRadius:12,border:`2px solid ${themeName===key?theme.accent:theme.border}`,background:theme.bg,cursor:"pointer",textAlign:"center",transition:"all .2s"}}>
-              <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:10}}>{[theme.accent,theme.green,theme.red,theme.purple].map((col,i)=><div key={i} style={{width:10,height:10,borderRadius:"50%",background:col}}/>)}</div>
-              <div style={{fontSize:12,color:theme.white,fontWeight:700}}>{theme.name}</div>
-              {themeName===key&&<div style={{fontSize:10,color:theme.accent,marginTop:4,fontWeight:700}}>ACTIVE</div>}
+            <button key={key} onClick={()=>{setThemeName(key);localStorage.setItem("tf_theme",key);}}
+              style={{padding:"16px 14px",borderRadius:12,cursor:"pointer",textAlign:"center",
+                transition:"all .2s",background:theme.bg,
+                border:`2px solid ${themeName===key?theme.accent:theme.border}`}}>
+              {/* Color dots */}
+              <div style={{display:"flex",gap:5,justifyContent:"center",marginBottom:10}}>
+                {[theme.accent,theme.green,theme.red,theme.purple].map((col,i)=>(
+                  <div key={i} style={{width:10,height:10,borderRadius:"50%",background:col}}/>
+                ))}
+              </div>
+              <div style={{fontSize:12,fontWeight:700,
+                color:theme.white||theme.textHi||"#f1f5f9"}}>{theme.name}</div>
+              <div style={{fontSize:10,color:theme.muted,marginTop:2}}>
+                {key==="light"?"Professional light":key==="dark"?"Professional dark":"Terminal"}
+              </div>
+              {themeName===key&&(
+                <div style={{fontSize:10,color:theme.accent,marginTop:4,fontWeight:700}}>
+                  ✓ ACTIVE
+                </div>
+              )}
             </button>
           ))}
         </div>
@@ -1786,7 +2029,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
 
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 export default function App(){
-  const [themeName,setThemeName]=useState(()=>localStorage.getItem("tf_theme")||"operator");
+  const [themeName,setThemeName]=useState(()=>localStorage.getItem("tf_theme")||"light");
   const C=THEMES[themeName]||THEMES.operator;
   const [mode,setMode]=useState(()=>localStorage.getItem("tf_mode")||"ioc");
   function switchMode(m){setMode(m);localStorage.setItem("tf_mode",m);setView("dashboard");}
@@ -1922,60 +2165,136 @@ export default function App(){
 
   return(
     <div style={{display:"flex",height:"100vh",background:C.bg,color:C.text,fontFamily:C.font||"inherit",overflow:"hidden"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');*{box-sizing:border-box;}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:${C.bg};}::-webkit-scrollbar-thumb{background:${C.border};border-radius:2px;}select option{background:${C.surface};color:${C.text};}input::placeholder,textarea::placeholder{color:${C.muted};}textarea{resize:vertical;}button:disabled{opacity:.4;cursor:not-allowed!important;}a{text-decoration:none;}@media(max-width:700px){.sidebar{width:52px!important;}.sidebar-label{display:none!important;}}`}</style>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
+        *{box-sizing:border-box;}
+        ::-webkit-scrollbar{width:5px;height:5px;}
+        ::-webkit-scrollbar-track{background:transparent;}
+        ::-webkit-scrollbar-thumb{background:${C.border};border-radius:10px;}
+        ::-webkit-scrollbar-thumb:hover{background:${C.borderHi||C.border};}
+        select option{background:${C.surface};color:${C.text};}
+        input::placeholder,textarea::placeholder{color:${C.muted};}
+        textarea{resize:vertical;}
+        button:disabled{opacity:.4;cursor:not-allowed!important;}
+        a{text-decoration:none;}
+        .nav-item{transition:background .12s,color .12s;}
+        .nav-item:hover{background:${C.navActive}!important;color:${C.accentText}!important;}
+        .nav-item:hover svg{stroke:${C.accentText}!important;}
+        @media(max-width:768px){.sidebar{width:60px!important;}.sidebar-label{display:none!important;}}
+      `}</style>
 
       {selectedIOC&&<EnrichmentPanel ioc={selectedIOC} token={token} onClose={()=>setSelectedIOC(null)} C={C} me={me}/>}
       {showApiKeyModal&&<ApiKeyModal token={token} C={C} onClose={()=>setShowApiKeyModal(false)}/>}
 
-      {/* Sidebar */}
-      <div className="sidebar" style={{width:200,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
-        <div style={{padding:"14px 12px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{fontSize:15,fontWeight:700,letterSpacing:2,color:C.accentText,marginBottom:10}}>TFII</div>
-          <div style={{display:"flex",background:C.surfaceHi,borderRadius:8,padding:2,gap:2}}>
-            {[["ioc","IOC","◈"],["cve","CVE","🛡️"]].map(([m,label,icon])=>(
+      {/* ── Sidebar ── */}
+      <div className="sidebar" style={{
+        width:240,background:C.sidebarBg||C.surface,
+        borderRight:`1px solid ${C.border}`,
+        display:"flex",flexDirection:"column",flexShrink:0,
+        boxShadow:themeName==="light"?"1px 0 0 #f1f5f9":"none",
+      }}>
+        {/* Logo */}
+        <div style={{padding:"20px 20px 16px",borderBottom:`1px solid ${C.border}`}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+            <div style={{width:32,height:32,borderRadius:8,background:C.accent,
+              display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <NavIcon name="shield" size={16} color="#fff"/>
+            </div>
+            <div>
+              <div style={{fontSize:15,fontWeight:800,letterSpacing:"-0.02em",color:C.white||C.textHi}}>TFII</div>
+              <div style={{fontSize:10,color:C.muted,fontWeight:500,letterSpacing:"0.04em"}}>THREAT INTEL</div>
+            </div>
+          </div>
+          {/* Mode switcher */}
+          <div style={{display:"flex",background:C.surfaceHi,borderRadius:8,padding:3,gap:2}}>
+            {[["ioc","IOC"],["cve","CVE"]].map(([m,label])=>(
               <button key={m} onClick={()=>switchMode(m)} style={{
-                flex:1,padding:"6px 4px",borderRadius:6,border:"none",cursor:"pointer",
-                fontSize:11,fontFamily:"inherit",fontWeight:700,
+                flex:1,padding:"5px 8px",borderRadius:6,border:"none",cursor:"pointer",
+                fontSize:12,fontFamily:"inherit",fontWeight:600,letterSpacing:"0.02em",
                 background:mode===m?C.accent:"transparent",
-                color:mode===m?"#fff":C.muted,
-                transition:"all .15s",display:"flex",alignItems:"center",
-                justifyContent:"center",gap:4,
+                color:mode===m?"#fff":C.muted,transition:"all .15s",
               }}>
-                <span>{icon}</span>{label}
+                {label}
               </button>
             ))}
           </div>
         </div>
-        <nav style={{padding:"6px",flex:1,overflowY:"auto"}}>
-          {NAV.map(n=>{const active=view===n.id;return(
-            <button key={n.id} onClick={()=>setView(n.id)} style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"8px 10px",borderRadius:8,marginBottom:2,border:"none",cursor:"pointer",background:active?C.accentDim:"transparent",color:active?C.accentText:C.muted,fontSize:12,fontFamily:"inherit",textAlign:"left",fontWeight:active?700:500,borderLeft:`2px solid ${active?C.accentText:"transparent"}`,transition:"all .1s"}}>
-              <span style={{fontSize:14}}>{n.icon}</span><span className="sidebar-label">{n.label}</span>
-            </button>
-          );})}
+
+        {/* Nav */}
+        <nav style={{padding:"10px 10px",flex:1,overflowY:"auto"}}>
+          {NAV.map(n=>{
+            const active=view===n.id;
+            return(
+              <button key={n.id} className="nav-item" onClick={()=>setView(n.id)}
+                style={{
+                  display:"flex",alignItems:"center",gap:10,width:"100%",
+                  padding:"9px 12px",borderRadius:8,marginBottom:2,
+                  border:"none",cursor:"pointer",textAlign:"left",
+                  background:active?C.navActive:"transparent",
+                  color:active?C.accentText:C.text,
+                  fontFamily:"inherit",fontSize:13,fontWeight:active?600:400,
+                }}>
+                <NavIcon name={n.icon} size={16} color={active?C.accentText:C.muted}/>
+                <span className="sidebar-label">{n.label}</span>
+              </button>
+            );
+          })}
         </nav>
-        <div style={{padding:"12px 16px",borderTop:`1px solid ${C.border}`}}>
-          <div style={{fontSize:12,color:C.accentText,fontWeight:600}}>{me?.username}</div>
-          <div style={{fontSize:10,color:C.muted,letterSpacing:.5}}>{me?.role?.toUpperCase()}</div>
+
+        {/* User footer */}
+        <div style={{padding:"12px 14px",borderTop:`1px solid ${C.border}`}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:30,height:30,borderRadius:"50%",background:C.accentDim,
+              display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+              <span style={{fontSize:12,fontWeight:700,color:C.accentText}}>
+                {(me?.username||"?")[0].toUpperCase()}
+              </span>
+            </div>
+            <div className="sidebar-label" style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:600,color:C.white||C.textHi,
+                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{me?.username}</div>
+              <div style={{fontSize:10,color:C.muted,textTransform:"capitalize"}}>{me?.role}</div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Main */}
+      {/* ── Main area ── */}
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
         {/* Topbar */}
-        <div style={{padding:"11px 20px",borderBottom:`1px solid ${C.border}`,background:C.surface,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexShrink:0,flexWrap:"wrap"}}>
-          <div style={{fontSize:14,fontWeight:700,color:C.white}}>{NAV.find(n=>n.id===view)?.label||view}</div>
+        <div style={{
+          padding:"0 24px",height:58,
+          borderBottom:`1px solid ${C.border}`,
+          background:C.topbarBg||C.surface,
+          display:"flex",alignItems:"center",
+          justifyContent:"space-between",gap:16,flexShrink:0,
+        }}>
+          <div style={{fontSize:15,fontWeight:700,color:C.white||C.textHi,letterSpacing:"-0.01em"}}>
+            {NAV.find(n=>n.id===view)?.label||view}
+          </div>
           <GlobalSearch token={token} C={C} onSelect={setSelectedIOC}/>
-          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
             <NotificationBell token={token} C={C} isAdmin={me?.role==="admin"}/>
             {view==="feed"&&<>
-              <button onClick={fetchIOCs} style={{padding:"7px 12px",background:"none",border:`1px solid ${C.border}`,color:C.muted,borderRadius:7,cursor:"pointer",fontSize:13}}>↻</button>
-              <button onClick={downloadSTIX} style={{padding:"7px 12px",background:C.accentDim,border:`1px solid ${C.accent}40`,color:C.accentText,borderRadius:7,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600}}>STIX</button>
-              <button onClick={()=>{setView("add");setAddResult(null);}} style={{padding:"7px 14px",background:C.accent,border:"none",color:"#fff",borderRadius:7,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700}}>+ Add</button>
+              <button onClick={fetchIOCs} title="Refresh"
+                style={{width:34,height:34,display:"flex",alignItems:"center",justifyContent:"center",
+                  background:"none",border:`1px solid ${C.border}`,color:C.muted,
+                  borderRadius:8,cursor:"pointer",fontSize:14}}>↻</button>
+              <button onClick={downloadSTIX}
+                style={{padding:"7px 14px",background:C.accentDim,border:`1px solid ${C.accent}30`,
+                  color:C.accentText,borderRadius:8,cursor:"pointer",fontSize:12,
+                  fontFamily:"inherit",fontWeight:600}}>STIX Export</button>
+              <button onClick={()=>{setView("add");setAddResult(null);}}
+                style={{padding:"7px 16px",background:C.accent,border:"none",color:"#fff",
+                  borderRadius:8,cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600,
+                  display:"flex",alignItems:"center",gap:6}}>
+                <NavIcon name="plus" size={14} color="#fff"/> Add IOC
+              </button>
             </>}
           </div>
         </div>
 
-        <div style={{flex:1,overflow:"auto",padding:20}}>
+        <div style={{flex:1,overflow:"auto",padding:"24px"}}>
           {view==="dashboard"&&<><Dashboard token={token} C={C}/><CVESummaryStrip token={token} C={C}/></>}
           {view==="cve"&&<CVEDashboard token={token} C={C}/>}
           {view==="map"&&<GeoMap token={token} C={C}/>}
