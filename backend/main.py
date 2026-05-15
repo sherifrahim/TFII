@@ -4,10 +4,13 @@ from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from typing import List, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel
 
 import psycopg2, psycopg2.extras
@@ -17,9 +20,16 @@ from jose import JWTError, jwt
 
 load_dotenv()
 
-SECRET_KEY         = os.getenv("SECRET_KEY", "changeme")
+SECRET_KEY         = os.getenv("SECRET_KEY", "")
+if not SECRET_KEY:
+    import secrets as _secrets
+    SECRET_KEY = _secrets.token_hex(32)
+    print("[WARN] SECRET_KEY not set in .env — generated a random one. JWTs will invalidate on restart. Set SECRET_KEY in .env!")
 ALGORITHM          = "HS256"
-TOKEN_EXPIRE       = 480
+TOKEN_EXPIRE       = int(os.getenv("TOKEN_EXPIRE_MINUTES", "120"))   # default 2h, was 8h
+ALLOWED_ORIGINS    = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if not ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS = ["*"]   # fallback — set ALLOWED_ORIGINS in .env for production
 ADMIN_DEFAULT_USER = "admin"
 ADMIN_DEFAULT_PASS = "TFeed@99"
 VT_API_KEY         = os.getenv("VT_API_KEY", "")
@@ -153,8 +163,15 @@ def get_all_quota_status(conn, user_id: str, is_admin: bool) -> dict:
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2  = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
-app = FastAPI(title="ThreatFeed Intelligence Platform")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+limiter = Limiter(key_func=get_remote_address)
+app     = FastAPI(title="ThreatFeed Intelligence Platform")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"])
 
 TLP_IDS = {
     "WHITE": "marking-definition--613f2e26-407d-48c7-9eca-b8e91df99dc9",
@@ -1014,7 +1031,8 @@ async def scheduled_cve_poll():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.post("/auth/login")
-def login(form: OAuth2PasswordRequestForm = Depends(), conn=Depends(get_db)):
+@limiter.limit("10/minute")
+async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM users WHERE username = %s AND active = TRUE", (form.username,))
     user = cur.fetchone()
@@ -1024,7 +1042,8 @@ def login(form: OAuth2PasswordRequestForm = Depends(), conn=Depends(get_db)):
     return {"access_token":token,"token_type":"bearer","username":user["username"],"role":user["role"]}
 
 @app.post("/auth/signup")
-def signup(body: SignupRequest, conn=Depends(get_db)):
+@limiter.limit("5/hour")
+async def signup(request: Request, body: SignupRequest, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM invite_codes WHERE code = %s AND used = FALSE", (body.invite_code,))
     invite = cur.fetchone()
