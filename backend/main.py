@@ -782,66 +782,90 @@ def parse_nvd_entry(vuln: dict) -> dict:
 
 async def fetch_nvd_cves(cpe: str, days_back: int = 365) -> list:
     """
-    Fetch CVEs from NVD for a given CPE string.
-    Strategy:
-      1. Try cpeName query (exact/wildcard CPE match)
-      2. If 0 results, fall back to keywordSearch using vendor+product from CPE
-    Note: isVulnerable=true is removed — it only works with exact version CPEs
-    and silently returns 0 for wildcard CPEs like cpe:2.3:a:google:chrome:*
+    Fetch CVEs from NVD API 2.0.
+    - Uses virtualMatchString (not cpeName) for wildcard CPE support
+    - cpeName requires exact CPE dictionary entry; wildcards need virtualMatchString
+    - Falls back to keywordSearch if virtualMatchString returns 0
+    - NVD returns 404 for 0 results on some endpoints (not an error)
     """
     headers = {"User-Agent":"ThreatFeed-CTI/1.0"}
     if NVD_API_KEY: headers["apiKey"] = NVD_API_KEY
 
     end   = datetime.now(timezone.utc)
     start = end - timedelta(days=days_back)
+    # NVD API 2.0 requires ISO 8601 with timezone offset
+    fmt = "%Y-%m-%dT%H:%M:%S.000 +0000"
 
-    base_params = {
-        "pubStartDate":   start.strftime("%Y-%m-%dT%H:%M:%S.000"),
-        "pubEndDate":     end.strftime("%Y-%m-%dT%H:%M:%S.000"),
-        "resultsPerPage": 100,
-    }
+    # Extract vendor + product from CPE for keyword fallback
+    parts   = cpe.split(":")
+    vendor  = parts[3].replace("_", " ") if len(parts) > 3 else ""
+    product = parts[4].replace("_", " ") if len(parts) > 4 else ""
+    keyword = f"{vendor} {product}".strip()
 
-    # ── Strategy 1: CPE name query ──────────────────────────────────────────
+    # ── Strategy 1: virtualMatchString (supports wildcard CPEs) ─────────────
     try:
-        params = {**base_params, "cpeName": cpe}
+        params = {
+            "virtualMatchString": cpe,
+            "pubStartDate":       start.strftime(fmt),
+            "pubEndDate":         end.strftime(fmt),
+            "resultsPerPage":     100,
+        }
         async with httpx.AsyncClient(timeout=25) as c:
             r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
                             params=params, headers=headers)
-        print(f"[nvd] cpeName query for {cpe}: HTTP {r.status_code}, "
-              f"{len(r.json().get('vulnerabilities',[])) if r.status_code==200 else 'N/A'} results")
+        count = len(r.json().get("vulnerabilities", [])) if r.status_code == 200 else "N/A"
+        print(f"[nvd] virtualMatchString '{cpe[:60]}': HTTP {r.status_code}, {count} results")
+
         if r.status_code == 200:
             results = r.json().get("vulnerabilities", [])
             if results:
                 return results
-            # 0 results — fall through to keyword search
         elif r.status_code == 429:
-            print("[nvd] Rate limited — add NVD_API_KEY to .env for higher limits")
+            print("[nvd] Rate limited — add NVD_API_KEY to .env (free at nvd.nist.gov/developers)")
             return []
+        # 404 = no results for this CPE in date range, fall through to keyword
     except Exception as e:
-        print(f"[nvd] cpeName error for {cpe}: {e}")
+        print(f"[nvd] virtualMatchString error: {e}")
 
-    # ── Strategy 2: Keyword search from CPE parts ────────────────────────────
-    # Extract vendor + product from CPE string e.g. cpe:2.3:o:microsoft:windows_11:*...
-    try:
-        parts   = cpe.split(":")
-        vendor  = parts[3].replace("_"," ") if len(parts) > 3 else ""
-        product = parts[4].replace("_"," ") if len(parts) > 4 else ""
-        keyword = f"{vendor} {product}".strip()
-        if not keyword:
-            return []
+    # ── Strategy 2: Remove date filter and try broader virtualMatchString ────
+    if keyword:
+        try:
+            params = {
+                "virtualMatchString": cpe,
+                "resultsPerPage":     100,
+            }
+            async with httpx.AsyncClient(timeout=25) as c:
+                r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
+                                params=params, headers=headers)
+            count = len(r.json().get("vulnerabilities", [])) if r.status_code == 200 else "N/A"
+            print(f"[nvd] virtualMatchString (no date) '{cpe[:60]}': HTTP {r.status_code}, {count} results")
+            if r.status_code == 200:
+                results = r.json().get("vulnerabilities", [])
+                if results:
+                    return results
+        except Exception as e:
+            print(f"[nvd] virtualMatchString (no date) error: {e}")
 
-        params = {**base_params, "keywordSearch": keyword}
-        async with httpx.AsyncClient(timeout=25) as c:
-            r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
-                            params=params, headers=headers)
-        print(f"[nvd] keywordSearch '{keyword}': HTTP {r.status_code}, "
-              f"{len(r.json().get('vulnerabilities',[])) if r.status_code==200 else 'N/A'} results")
-        if r.status_code == 200:
-            return r.json().get("vulnerabilities", [])
-        elif r.status_code == 429:
-            print("[nvd] Rate limited on keyword search — add NVD_API_KEY to .env")
-    except Exception as e:
-        print(f"[nvd] keyword fallback error for {cpe}: {e}")
+    # ── Strategy 3: Keyword search fallback ─────────────────────────────────
+    if keyword:
+        try:
+            params = {
+                "keywordSearch":  keyword,
+                "pubStartDate":   start.strftime(fmt),
+                "pubEndDate":     end.strftime(fmt),
+                "resultsPerPage": 100,
+            }
+            async with httpx.AsyncClient(timeout=25) as c:
+                r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
+                                params=params, headers=headers)
+            count = len(r.json().get("vulnerabilities", [])) if r.status_code == 200 else "N/A"
+            print(f"[nvd] keywordSearch '{keyword}': HTTP {r.status_code}, {count} results")
+            if r.status_code == 200:
+                return r.json().get("vulnerabilities", [])
+            elif r.status_code == 429:
+                print("[nvd] Rate limited on keyword search")
+        except Exception as e:
+            print(f"[nvd] keywordSearch error: {e}")
 
     return []
 
