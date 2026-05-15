@@ -1498,112 +1498,333 @@ function GeoMap({token,C}){
 
 // ── INTEL WALL ────────────────────────────────────────────────────────────────
 function IntelNews({token,C}){
-  const [news,setNews]=useState([]); const [loading,setLoading]=useState(false); const [err,setErr]=useState(""); const [category,setCategory]=useState("all");
+  const [news,setNews]=useState([]); const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState(""); const [category,setCategory]=useState("all");
+  const [activeSource,setActiveSource]=useState("all");
+
   async function fetchNews(){
     setLoading(true);setErr("");setNews([]);
     const r=await api("/ai/intel-news",{method:"POST",body:JSON.stringify({category})},token);
     if(r.ok){const d=await r.json();setNews(d.items||[]);}
-    else setErr("Failed to fetch news — check backend logs.");
+    else setErr("Failed to fetch news.");
     setLoading(false);
   }
+
   const SEV_COLORS={Critical:C.red,High:C.amber,Medium:C.purple,Low:C.green};
   const CAT_COLORS={CVE:C.red,APT:C.purple,Ransomware:C.amber,Malware:C.amber,"Data Breach":C.red,Other:C.muted};
+
+  // Get unique sources from results
+  const sources=["all",...[...new Set(news.map(n=>n.source).filter(Boolean))]];
+  const filtered=news.filter(n=>activeSource==="all"||n.source===activeSource);
+
   return(
     <div>
       <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
         <div style={{display:"flex",gap:4,background:C.surfaceHi,borderRadius:10,padding:3}}>
           {["all","cve","apt","ransomware","ioc"].map(t=>(
-            <button key={t} onClick={()=>setCategory(t)} style={{padding:"7px 14px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600,background:category===t?C.accent:"transparent",color:category===t?"#fff":C.muted}}>{t.toUpperCase()}</button>
+            <button key={t} onClick={()=>setCategory(t)}
+              style={{padding:"7px 14px",borderRadius:7,border:"none",cursor:"pointer",
+                fontSize:12,fontFamily:"inherit",fontWeight:600,
+                background:category===t?C.accent:"transparent",
+                color:category===t?"#fff":C.muted}}>
+              {t.toUpperCase()}
+            </button>
           ))}
         </div>
         <Btn onClick={fetchNews} disabled={loading} C={C}>{loading?"Fetching...":"⟳ Refresh Intel"}</Btn>
       </div>
+
       {!loading&&news.length===0&&!err&&(
         <div style={{textAlign:"center",padding:48,color:C.muted}}>
-          <div style={{fontSize:32,marginBottom:12}}>🌐</div>
-          <div style={{fontSize:14,fontWeight:600,color:C.white,marginBottom:8}}>Cyber Intelligence Wall</div>
-          <div style={{fontSize:13,marginBottom:20}}>Click Refresh Intel to pull the latest threat intelligence from CISA, SANS ISC, BleepingComputer, and Krebs on Security.</div>
+          <div style={{fontSize:32,marginBottom:12}}>📡</div>
+          <div style={{fontSize:14,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>Cyber Intelligence Wall</div>
+          <div style={{fontSize:13,marginBottom:20}}>Pull the latest threat intel from CISA, SANS ISC, BleepingComputer, and Krebs on Security.</div>
           <Btn onClick={fetchNews} C={C}>Fetch Latest Intel</Btn>
         </div>
       )}
       {err&&<div style={{padding:14,background:C.red+"10",border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
-      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted,fontSize:14}}>Fetching from CISA, SANS ISC, BleepingComputer, Krebs...</div>}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
-        {news.map((item,i)=>(
-          <div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:18,boxShadow:C.shadow,display:"flex",flexDirection:"column"}}>
-            <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
-              <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:(CAT_COLORS[item.category]||C.muted)+"20",color:CAT_COLORS[item.category]||C.muted,fontWeight:700}}>{item.category}</span>
-              <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:(SEV_COLORS[item.severity]||C.muted)+"15",color:SEV_COLORS[item.severity]||C.muted,fontWeight:600}}>{item.severity}</span>
+      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>Fetching from CISA, SANS ISC, BleepingComputer, Krebs...</div>}
+
+      {news.length>0&&(
+        <>
+          {/* Source filter pills */}
+          <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+            {sources.map(s=>(
+              <button key={s} onClick={()=>setActiveSource(s)}
+                style={{padding:"4px 14px",borderRadius:20,border:`1px solid ${activeSource===s?C.accent:C.border}`,
+                  background:activeSource===s?C.accentDim:"transparent",
+                  color:activeSource===s?C.accentText:C.muted,
+                  cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:activeSource===s?600:400}}>
+                {s==="all"?`All (${news.length})`:s}
+              </button>
+            ))}
+          </div>
+
+          {/* Table with Source column */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",boxShadow:C.shadow}}>
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr style={{background:C.surfaceHi}}>
+                    {[["Source","130px"],["Category","100px"],["Severity","90px"],["Title","auto"],["Date","100px"],["","60px"]].map(([h,w])=>(
+                      <th key={h} style={{padding:"10px 14px",textAlign:"left",color:C.muted,
+                        fontSize:11,fontWeight:600,letterSpacing:"0.04em",whiteSpace:"nowrap",
+                        borderBottom:`1px solid ${C.border}`,width:w}}>
+                        {h.toUpperCase()}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((item,i)=>(
+                    <tr key={i}
+                      style={{borderBottom:`1px solid ${C.border}`,transition:"background .1s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHi}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      {/* Source */}
+                      <td style={{padding:"12px 14px"}}>
+                        <span style={{fontSize:11,fontWeight:600,color:C.accentText}}>
+                          {item.source}
+                        </span>
+                      </td>
+                      {/* Category */}
+                      <td style={{padding:"12px 14px"}}>
+                        <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
+                          background:(CAT_COLORS[item.category]||C.muted)+"20",
+                          color:CAT_COLORS[item.category]||C.muted}}>
+                          {item.category}
+                        </span>
+                      </td>
+                      {/* Severity */}
+                      <td style={{padding:"12px 14px"}}>
+                        <span style={{fontSize:11,fontWeight:600,
+                          color:SEV_COLORS[item.severity]||C.muted}}>
+                          {item.severity}
+                        </span>
+                      </td>
+                      {/* Title + summary */}
+                      <td style={{padding:"12px 14px",maxWidth:400}}>
+                        <div style={{fontSize:13,fontWeight:600,color:C.white||C.textHi,
+                          marginBottom:4,lineHeight:1.4}}>{item.title}</div>
+                        <div style={{fontSize:12,color:C.muted,overflow:"hidden",
+                          textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:380}}
+                          title={item.summary}>
+                          {item.summary}
+                        </div>
+                      </td>
+                      {/* Date */}
+                      <td style={{padding:"12px 14px",fontSize:11,color:C.muted,whiteSpace:"nowrap"}}>
+                        {item.date}
+                      </td>
+                      {/* Link */}
+                      <td style={{padding:"12px 14px"}}>
+                        {item.url&&(
+                          <a href={item.url} target="_blank" rel="noreferrer"
+                            style={{fontSize:11,color:C.accentText,fontWeight:600,
+                              display:"flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>
+                            Read <NavIcon name="externalLink" size={11} color={C.accentText}/>
+                          </a>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <div style={{fontSize:14,fontWeight:700,color:C.white,marginBottom:8,lineHeight:1.4}}>{item.title}</div>
-            <div style={{fontSize:12,color:C.text,lineHeight:1.6,flex:1,marginBottom:12}}>{item.summary}</div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{fontSize:11,color:C.muted}}>{item.source} · {item.date}</div>
-              {item.url&&<a href={item.url} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.accentText,fontWeight:600}}>Read →</a>}
+            <div style={{padding:"8px 16px",borderTop:`1px solid ${C.border}`,
+              fontSize:11,color:C.muted}}>
+              {filtered.length} articles · Click source pills above to filter by feed
             </div>
           </div>
-        ))}
-      </div>
+        </>
+      )}
     </div>
   );
 }
 
 // ── THREAT ACTORS ─────────────────────────────────────────────────────────────
 function ThreatActors({token,C}){
-  const [query,setQuery]=useState(""); const [result,setResult]=useState(null); const [loading,setLoading]=useState(false); const [err,setErr]=useState("");
-  const POPULAR=["Lazarus Group","APT28","APT29","Sandworm","Scattered Spider","Volt Typhoon","Carbanak","Kimsuky","APT41","Turla"];
-  async function research(){
-    if(!query.trim())return;setLoading(true);setErr("");setResult(null);
-    const r=await api(`/mitre/actor?name=${encodeURIComponent(query.trim())}`,{},token);
+  const [query,setQuery]=useState(""); const [result,setResult]=useState(null);
+  const [loading,setLoading]=useState(false); const [err,setErr]=useState("");
+
+  const ACTORS=[
+    {name:"Lazarus Group",   nation:"🇰🇵",focus:"Financial, Espionage"},
+    {name:"APT28",           nation:"🇷🇺",focus:"Government, Military"},
+    {name:"APT29",           nation:"🇷🇺",focus:"Government, Think Tanks"},
+    {name:"Sandworm",        nation:"🇷🇺",focus:"Critical Infrastructure"},
+    {name:"Scattered Spider",nation:"🌐",  focus:"Telecom, Finance"},
+    {name:"Volt Typhoon",    nation:"🇨🇳",focus:"Critical Infrastructure"},
+    {name:"Carbanak",        nation:"🌐",  focus:"Banking, Finance"},
+    {name:"Kimsuky",         nation:"🇰🇵",focus:"Government, Research"},
+    {name:"APT41",           nation:"🇨🇳",focus:"Espionage, Cybercrime"},
+    {name:"Turla",           nation:"🇷🇺",focus:"Government, Diplomacy"},
+    {name:"BlackCat",        nation:"🌐",  focus:"Ransomware"},
+    {name:"Cl0p",            nation:"🌐",  focus:"Ransomware, Extortion"},
+  ];
+
+  async function research(name){
+    const q=name||query.trim();
+    if(!q)return;
+    setQuery(q);setLoading(true);setErr("");setResult(null);
+    const r=await api(`/mitre/actor?name=${encodeURIComponent(q)}`,{},token);
     if(!r.ok){setErr("Failed to reach MITRE ATT&CK.");setLoading(false);return;}
     const d=await r.json();
     if(d.error)setErr(`Error: ${d.error}`);
     else setResult(d);
     setLoading(false);
   }
+
   return(
-    <div style={{maxWidth:900}}>
-      <div style={{marginBottom:16,padding:12,background:C.accentDim,border:`1px solid ${C.accent}28`,borderRadius:10,fontSize:12,color:C.accentText,lineHeight:1.6}}>
-        Data sourced from the <strong>MITRE ATT&CK</strong> open-source CTI dataset — no API key required.
-      </div>
+    <div style={{maxWidth:1000}}>
+      {/* Search bar */}
       <div style={{display:"flex",gap:10,marginBottom:20}}>
-        <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")research();}} placeholder="Search threat actor or APT group (e.g. Lazarus Group, APT28)..."
-          style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"12px 16px",borderRadius:10,fontSize:14,outline:"none",fontFamily:"inherit"}}/>
-        <Btn onClick={research} disabled={loading||!query.trim()} C={C}>{loading?"Searching...":"Search"}</Btn>
+        <input value={query} onChange={e=>setQuery(e.target.value)}
+          onKeyDown={e=>{if(e.key==="Enter")research();}}
+          placeholder="Search any threat actor or APT group..."
+          style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+            color:C.inputText,padding:"10px 14px",borderRadius:10,fontSize:14,
+            outline:"none",fontFamily:"inherit"}}/>
+        <Btn onClick={()=>research()} disabled={loading||!query.trim()} C={C}>
+          {loading?"Searching...":"Search"}
+        </Btn>
+        {result&&<Btn onClick={()=>{setResult(null);setQuery("");setErr("");}} variant="dim" C={C}>← All Actors</Btn>}
       </div>
-      {!result&&!loading&&(
-        <div>
-          <div style={{fontSize:12,color:C.muted,marginBottom:12,fontWeight:600,letterSpacing:.5}}>CATALOGUED IN MITRE ATT&CK</div>
-          <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:24}}>{POPULAR.map(p=><button key={p} onClick={()=>setQuery(p)} style={{padding:"6px 14px",borderRadius:8,border:`1px solid ${C.border}`,background:C.surfaceHi,color:C.text,cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:500}}>{p}</button>)}</div>
-        </div>
+
+      {/* Grid of actor cards — shown when no result selected */}
+      {!result&&!loading&&!err&&(
+        <>
+          <div style={{fontSize:11,color:C.muted,fontWeight:600,letterSpacing:"0.06em",
+            textTransform:"uppercase",marginBottom:14}}>
+            Known Threat Actors — sourced from MITRE ATT&CK
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12,marginBottom:24}}>
+            {ACTORS.map(actor=>(
+              <div key={actor.name} onClick={()=>research(actor.name)}
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+                  padding:"16px 18px",cursor:"pointer",boxShadow:C.shadow,transition:"all .15s"}}
+                onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.boxShadow=C.shadowMd||C.shadow;}}
+                onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.boxShadow=C.shadow;}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                  <span style={{fontSize:20}}>{actor.nation}</span>
+                  <NavIcon name="chevronRight" size={16} color={C.muted}/>
+                </div>
+                <div style={{fontSize:14,fontWeight:700,color:C.white||C.textHi,marginBottom:4}}>{actor.name}</div>
+                <div style={{fontSize:11,color:C.muted}}>{actor.focus}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:12,color:C.muted,textAlign:"center"}}>
+            Click any card or search above for full MITRE ATT&CK profile, TTPs, malware, and references.
+          </div>
+        </>
       )}
-      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted,fontSize:14}}>Searching MITRE ATT&CK for <strong style={{color:C.white}}>{query}</strong>...</div>}
+
+      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>Searching MITRE ATT&CK for <strong style={{color:C.white||C.textHi}}>{query}</strong>...</div>}
       {err&&<div style={{padding:14,background:C.red+"10",border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13}}>{err}</div>}
-      {result&&!result.found&&!err&&(
+
+      {result&&!result.found&&(
         <div style={{textAlign:"center",padding:48,color:C.muted}}>
-          <div style={{fontSize:16,fontWeight:600,color:C.white,marginBottom:8}}>Not found in MITRE ATT&CK</div>
+          <div style={{fontSize:16,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>Not found in MITRE ATT&CK</div>
           <div style={{fontSize:13,marginBottom:16}}>Try an alternate alias — e.g. "Fancy Bear" instead of "APT28".</div>
-          <a href="https://attack.mitre.org/groups/" target="_blank" rel="noreferrer" style={{color:C.accentText,fontSize:12}}>Browse all groups at attack.mitre.org →</a>
+          <a href="https://attack.mitre.org/groups/" target="_blank" rel="noreferrer" style={{color:C.accentText,fontSize:12}}>Browse all groups →</a>
         </div>
       )}
+
       {result?.found&&(
         <div>
-          <Card C={C} style={{marginBottom:16}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:12}}>
+          {/* Actor header */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+            padding:"20px 24px",marginBottom:14,boxShadow:C.shadow}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+              marginBottom:12,flexWrap:"wrap",gap:12}}>
               <div>
-                <div style={{fontSize:22,fontWeight:700,color:C.white,marginBottom:6}}>{result.name}</div>
-                {result.also_known_as?.length>0&&<div style={{fontSize:12,color:C.muted}}>aka: {result.also_known_as.join(", ")}</div>}
-                <div style={{fontSize:11,color:C.accentText,marginTop:6,fontWeight:600}}>Source: MITRE ATT&CK</div>
+                <div style={{fontSize:24,fontWeight:700,color:C.white||C.textHi,marginBottom:6}}>{result.name}</div>
+                {result.also_known_as?.length>0&&(
+                  <div style={{fontSize:12,color:C.muted}}>Also known as: {result.also_known_as.join(", ")}</div>
+                )}
               </div>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                {result.mitre_url&&<a href={result.mitre_url} target="_blank" rel="noreferrer" style={{fontSize:12,padding:"4px 12px",borderRadius:6,background:C.accentDim,color:C.accentText,fontWeight:600,border:`1px solid ${C.accent}40`}}>View on MITRE →</a>}
+              {result.mitre_url&&(
+                <a href={result.mitre_url} target="_blank" rel="noreferrer"
+                  style={{fontSize:12,padding:"6px 14px",borderRadius:7,background:C.accentDim,
+                    color:C.accentText,fontWeight:600,border:`1px solid ${C.accent}40`,
+                    display:"flex",alignItems:"center",gap:6}}>
+                  MITRE ATT&CK <NavIcon name="externalLink" size={12} color={C.accentText}/>
+                </a>
+              )}
+            </div>
+            {result.description&&(
+              <div style={{fontSize:13,color:C.text,lineHeight:1.7,padding:14,
+                background:C.surfaceHi,borderRadius:8}}>
+                {result.description.slice(0,500)}{result.description.length>500?"...":""}
+              </div>
+            )}
+          </div>
+
+          {/* TTPs */}
+          {result.ttps?.length>0&&(
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+              padding:"18px 20px",marginBottom:14,boxShadow:C.shadow}}>
+              <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:12,
+                letterSpacing:"0.06em",textTransform:"uppercase"}}>
+                MITRE ATT&CK Techniques ({result.ttps.length})
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {result.ttps.map(t=>(
+                  <span key={t} style={{fontSize:11,padding:"3px 10px",borderRadius:4,
+                    background:C.purple+"20",color:C.purple,fontWeight:600,
+                    border:`1px solid ${C.purple}30`}}>{t}</span>
+                ))}
               </div>
             </div>
-            {result.description&&<div style={{fontSize:13,color:C.text,lineHeight:1.7,padding:14,background:C.surfaceHi,borderRadius:8}}>{result.description.slice(0,600)}{result.description.length>600?"...":""}</div>}
-          </Card>
-          {result.ttps?.length>0&&<Card C={C} style={{marginBottom:14}}><div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:12,letterSpacing:.5,textTransform:"uppercase"}}>MITRE ATT&CK Techniques ({result.ttps.length})</div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{result.ttps.map(t=><span key={t} style={{fontSize:11,padding:"3px 10px",borderRadius:4,background:C.purple+"20",color:C.purple,fontWeight:600,border:`1px solid ${C.purple}30`}}>{t}</span>)}</div></Card>}
-          {(result.malware_used?.length>0||result.tools_used?.length>0)&&<Card C={C} style={{marginBottom:14}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:16}}>{result.malware_used?.length>0&&<div><div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Malware Used</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{result.malware_used.map(m=><span key={m} style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:C.red+"20",color:C.red,border:`1px solid ${C.red}30`}}>{m}</span>)}</div></div>}{result.tools_used?.length>0&&<div><div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Tools Used</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{result.tools_used.map(t=><span key={t} style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:C.amber+"20",color:C.amber,border:`1px solid ${C.amber}30`}}>{t}</span>)}</div></div>}</div></Card>}
-          {result.references?.filter(r=>r).length>0&&<Card C={C}><div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:12,textTransform:"uppercase"}}>References</div>{result.references.filter(r=>r).map((ref,i)=><a key={i} href={ref} target="_blank" rel="noreferrer" style={{display:"block",fontSize:12,color:C.accentText,marginBottom:6,wordBreak:"break-all"}}>{ref}</a>)}</Card>}
+          )}
+
+          {/* Malware + Tools */}
+          {(result.malware_used?.length>0||result.tools_used?.length>0)&&(
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+              padding:"18px 20px",marginBottom:14,boxShadow:C.shadow,
+              display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:20}}>
+              {result.malware_used?.length>0&&(
+                <div>
+                  <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:10,
+                    textTransform:"uppercase",letterSpacing:"0.06em"}}>Malware Used</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    {result.malware_used.map(m=>(
+                      <span key={m} style={{fontSize:11,padding:"2px 8px",borderRadius:4,
+                        background:C.red+"20",color:C.red,border:`1px solid ${C.red}30`}}>{m}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {result.tools_used?.length>0&&(
+                <div>
+                  <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:10,
+                    textTransform:"uppercase",letterSpacing:"0.06em"}}>Tools Used</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    {result.tools_used.map(t=>(
+                      <span key={t} style={{fontSize:11,padding:"2px 8px",borderRadius:4,
+                        background:C.amber+"20",color:C.amber,border:`1px solid ${C.amber}30`}}>{t}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* References */}
+          {result.references?.filter(r=>r).length>0&&(
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+              padding:"18px 20px",boxShadow:C.shadow}}>
+              <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:12,
+                textTransform:"uppercase",letterSpacing:"0.06em"}}>References</div>
+              {result.references.filter(r=>r).map((ref,i)=>(
+                <a key={i} href={ref} target="_blank" rel="noreferrer"
+                  style={{display:"flex",alignItems:"center",gap:6,fontSize:12,
+                    color:C.accentText,marginBottom:8,wordBreak:"break-all"}}>
+                  <NavIcon name="externalLink" size={11} color={C.accentText}/>{ref}
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1614,81 +1835,218 @@ function ThreatActors({token,C}){
 function OSINTTool({token,C}){
   const [target,setTarget]=useState(""); const [targetType,setTargetType]=useState("domain");
   const [result,setResult]=useState(null); const [loading,setLoading]=useState(false);
-  async function lookup(){if(!target.trim())return;setLoading(true);setResult(null);const r=await api("/osint/lookup",{method:"POST",body:JSON.stringify({target:target.trim(),target_type:targetType})},token);if(r.ok)setResult(await r.json());setLoading(false);}
+  const [activeTab,setActiveTab]=useState("dns");
+
+  async function lookup(){
+    if(!target.trim())return;
+    setLoading(true);setResult(null);
+    const r=await api("/osint/lookup",{method:"POST",body:JSON.stringify({target:target.trim(),target_type:targetType})},token);
+    if(r.ok){
+      const d=await r.json();
+      setResult(d);
+      // Auto-select first tab that has data
+      const data=d.data||{};
+      if(data.dns&&Object.keys(data.dns).length>0) setActiveTab("dns");
+      else if(data.rdap) setActiveTab("rdap");
+      else if(data.shodan) setActiveTab("shodan");
+      else if(data.hibp) setActiveTab("hibp");
+    }
+    setLoading(false);
+  }
+
+  const tabs=result?[
+    result.data?.dns&&Object.keys(result.data.dns).length>0    ?{id:"dns",  label:"DNS"}  :null,
+    result.data?.rdap                                           ?{id:"rdap", label:"WHOIS"} :null,
+    result.data?.shodan                                         ?{id:"shodan",label:"Shodan"}:null,
+    result.data?.hibp                                           ?{id:"hibp", label:"HIBP"}  :null,
+    result.data?.email_domain_mx?.length>0                      ?{id:"mx",   label:"MX"}    :null,
+  ].filter(Boolean):[];
+
   return(
-    <div style={{maxWidth:800}}>
-      <div style={{marginBottom:20,padding:14,background:C.accentDim,border:`1px solid ${C.accent}28`,borderRadius:10,fontSize:13,color:C.accentText,lineHeight:1.6}}>Threat Actor OSINT — DNS records, RDAP/WHOIS, Shodan port scan, and HaveIBeenPwned email breach lookup.</div>
-      <div style={{display:"flex",gap:10,marginBottom:24,flexWrap:"wrap"}}>
-        <div style={{display:"flex",background:C.surfaceHi,borderRadius:8,padding:3,gap:2}}>
-          {[["domain","Domain"],["ip","IP Address"],["email","Email"]].map(([val,label])=>(
-            <button key={val} onClick={()=>setTargetType(val)} style={{padding:"8px 14px",borderRadius:6,border:"none",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600,background:targetType===val?C.accent:"transparent",color:targetType===val?"#fff":C.muted}}>{label}</button>
+    <div style={{maxWidth:860}}>
+      {/* Input */}
+      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
+        <div style={{display:"flex",background:C.surfaceHi,borderRadius:8,padding:3,gap:2,flexShrink:0}}>
+          {[["domain","Domain"],["ip","IP"],["email","Email"]].map(([val,label])=>(
+            <button key={val} onClick={()=>{setTargetType(val);setResult(null);}}
+              style={{padding:"8px 14px",borderRadius:6,border:"none",cursor:"pointer",
+                fontSize:12,fontFamily:"inherit",fontWeight:600,
+                background:targetType===val?C.accent:"transparent",
+                color:targetType===val?"#fff":C.muted}}>
+              {label}
+            </button>
           ))}
         </div>
-        <input value={target} onChange={e=>setTarget(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")lookup();}}
+        <input value={target} onChange={e=>setTarget(e.target.value)}
+          onKeyDown={e=>{if(e.key==="Enter")lookup();}}
           placeholder={targetType==="email"?"email@example.com":targetType==="ip"?"185.220.101.45":"evil-domain.com"}
-          style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"10px 14px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}/>
-        <Btn onClick={lookup} disabled={loading||!target.trim()} C={C}>{loading?"Querying...":"Lookup"}</Btn>
+          style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,
+            padding:"10px 14px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}/>
+        <Btn onClick={lookup} disabled={loading||!target.trim()} C={C}>
+          {loading?"Querying...":"Lookup"}
+        </Btn>
       </div>
+
+      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>
+        <div style={{fontSize:14,marginBottom:8}}>Querying DNS, WHOIS, Shodan...</div>
+        <div style={{fontSize:12}}>This may take a few seconds.</div>
+      </div>}
+
       {result&&(
-        <div>
-          <div style={{fontSize:13,color:C.muted,marginBottom:16}}>Results for <strong style={{color:C.white}}>{result.target}</strong> · {new Date(result.queried_at).toLocaleString()}</div>
-          {result.data?.dns&&Object.keys(result.data.dns).length>0&&(
-            <Card C={C} style={{marginBottom:14}}>
-              <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:12,textTransform:"uppercase",letterSpacing:.5}}>DNS Records</div>
-              {Object.entries(result.data.dns).map(([type,records])=>(
-                <div key={type} style={{marginBottom:12}}>
-                  <div style={{fontSize:11,color:C.accentText,fontWeight:700,marginBottom:6}}>{type}</div>
-                  {records.map((r,i)=><div key={i} style={{fontSize:12,color:C.text,padding:"4px 10px",background:C.surfaceHi,borderRadius:4,marginBottom:3,fontFamily:"monospace"}}>{r}</div>)}
-                </div>
+        <>
+          {/* Result header */}
+          <div style={{marginBottom:16,display:"flex",justifyContent:"space-between",
+            alignItems:"center",flexWrap:"wrap",gap:8}}>
+            <div>
+              <span style={{fontSize:15,fontWeight:700,color:C.white||C.textHi,
+                fontFamily:"monospace"}}>{result.target}</span>
+              <span style={{fontSize:12,color:C.muted,marginLeft:10}}>
+                {new Date(result.queried_at).toLocaleString()}
+              </span>
+            </div>
+          </div>
+
+          {/* Tabs */}
+          {tabs.length>0&&(
+            <div style={{display:"flex",gap:3,background:C.surfaceHi,borderRadius:10,
+              padding:3,width:"fit-content",marginBottom:16}}>
+              {tabs.map(t=>(
+                <button key={t.id} onClick={()=>setActiveTab(t.id)}
+                  style={{padding:"7px 16px",borderRadius:7,border:"none",cursor:"pointer",
+                    fontSize:13,fontFamily:"inherit",fontWeight:600,
+                    background:activeTab===t.id?C.accent:"transparent",
+                    color:activeTab===t.id?"#fff":C.muted}}>
+                  {t.label}
+                </button>
               ))}
-            </Card>
+            </div>
           )}
-          {result.data?.rdap&&(
-            <Card C={C} style={{marginBottom:14}}>
-              <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:12,textTransform:"uppercase",letterSpacing:.5}}>RDAP / WHOIS</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12}}>
-                {Object.entries(result.data.rdap).filter(([,v])=>v&&v!=="?").map(([k,v])=>(
-                  <div key={k}><div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:2,textTransform:"uppercase"}}>{k.replace(/_/g," ")}</div><div style={{fontSize:12,color:C.text,fontWeight:500}}>{Array.isArray(v)?v.join(", "):String(v)}</div></div>
-                ))}
-              </div>
-            </Card>
-          )}
-          {result.data?.shodan&&(
-            <Card C={C} style={{marginBottom:14}}>
-              <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:12,textTransform:"uppercase",letterSpacing:.5}}>Shodan</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12,marginBottom:12}}>
-                {[["Org",result.data.shodan.org],["ISP",result.data.shodan.isp],["Country",result.data.shodan.country],["Last Update",result.data.shodan.last_update]].filter(([,v])=>v&&v!=="?").map(([k,v])=>(
-                  <div key={k}><div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:2}}>{k}</div><div style={{fontSize:12,color:C.text}}>{v}</div></div>
-                ))}
-              </div>
-              {result.data.shodan.ports?.length>0&&<div style={{marginBottom:10}}><div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6}}>OPEN PORTS</div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{result.data.shodan.ports.map(p=><span key={p} style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:C.red+"20",color:C.red,fontFamily:"monospace",fontWeight:700}}>{p}</span>)}</div></div>}
-              {result.data.shodan.vulns?.length>0&&<div><div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6}}>VULNERABILITIES</div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{result.data.shodan.vulns.map(v=><span key={v} style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:C.amber+"20",color:C.amber,fontFamily:"monospace",fontWeight:600}}>{v}</span>)}</div></div>}
-            </Card>
-          )}
-          {result.data?.hibp&&(
-            <Card C={C} style={{marginBottom:14}}>
-              <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:12,textTransform:"uppercase",letterSpacing:.5}}>HaveIBeenPwned</div>
-              {result.data.hibp.skipped?(
-                <div style={{fontSize:12,color:C.muted,lineHeight:1.7}}>HIBP API key not configured.<br/>Add <code style={{color:C.accentText}}>HIBP_API_KEY=your-key</code> to <code style={{color:C.accentText}}>.env</code>. Get a free key at <a href="https://haveibeenpwned.com/API/Key" target="_blank" rel="noreferrer" style={{color:C.accentText}}>haveibeenpwned.com/API/Key</a></div>
-              ):result.data.hibp.breached?(
-                <><div style={{fontSize:14,fontWeight:700,color:C.red,marginBottom:12}}>⚠ Found in {result.data.hibp.breach_count} data breaches</div>
-                {result.data.hibp.breaches?.map(b=>(
-                  <div key={b.name} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:8,padding:12,marginBottom:8}}>
-                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,fontWeight:700,color:C.white}}>{b.name}</span><span style={{fontSize:11,color:C.muted}}>{b.date}</span></div>
-                    <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{b.data_classes?.map(dc=><span key={dc} style={{fontSize:10,padding:"1px 6px",borderRadius:3,background:C.red+"20",color:C.red,fontWeight:600}}>{dc}</span>)}</div>
+
+          {/* Tab content */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:12,padding:"18px 20px",boxShadow:C.shadow}}>
+
+            {/* DNS tab */}
+            {activeTab==="dns"&&result.data?.dns&&(
+              Object.keys(result.data.dns).length===0
+                ?<div style={{color:C.muted,fontSize:13}}>No DNS records found.</div>
+                :Object.entries(result.data.dns).map(([type,records])=>(
+                  <div key={type} style={{marginBottom:16}}>
+                    <div style={{fontSize:11,color:C.accentText,fontWeight:700,marginBottom:8,
+                      letterSpacing:"0.06em"}}>{type}</div>
+                    {records.map((r,i)=>(
+                      <div key={i} style={{fontSize:12,color:C.text,padding:"6px 12px",
+                        background:C.surfaceHi,borderRadius:6,marginBottom:4,
+                        fontFamily:"monospace"}}>{r}</div>
+                    ))}
                   </div>
-                ))}</>
-              ):<div style={{fontSize:13,color:C.green,fontWeight:600}}>✓ Not found in any known data breaches</div>}
-            </Card>
-          )}
-          {result.data?.email_domain_mx?.length>0&&(
-            <Card C={C}>
-              <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:12,textTransform:"uppercase",letterSpacing:.5}}>Email Domain MX Records</div>
-              {result.data.email_domain_mx.map((mx,i)=><div key={i} style={{fontSize:12,color:C.text,padding:"4px 10px",background:C.surfaceHi,borderRadius:4,marginBottom:4,fontFamily:"monospace"}}>{mx}</div>)}
-            </Card>
-          )}
-          {result.data&&Object.keys(result.data).length===0&&<div style={{padding:32,textAlign:"center",color:C.muted,fontSize:13}}>No data returned. Check your target and type.</div>}
-        </div>
+                ))
+            )}
+
+            {/* WHOIS tab */}
+            {activeTab==="rdap"&&result.data?.rdap&&(
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:16}}>
+                {Object.entries(result.data.rdap).filter(([,v])=>v&&v!=="?").map(([k,v])=>(
+                  <div key={k}>
+                    <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:4,
+                      textTransform:"uppercase",letterSpacing:"0.06em"}}>{k.replace(/_/g," ")}</div>
+                    <div style={{fontSize:13,color:C.text,fontWeight:500}}>
+                      {Array.isArray(v)?v.join(", "):String(v)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Shodan tab */}
+            {activeTab==="shodan"&&result.data?.shodan&&(
+              <div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:16,marginBottom:16}}>
+                  {[["Org",result.data.shodan.org],["ISP",result.data.shodan.isp],
+                    ["Country",result.data.shodan.country],["Last Update",result.data.shodan.last_update]
+                  ].filter(([,v])=>v&&v!=="?").map(([k,v])=>(
+                    <div key={k}>
+                      <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:4,textTransform:"uppercase"}}>{k}</div>
+                      <div style={{fontSize:13,color:C.text}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                {result.data.shodan.ports?.length>0&&(
+                  <div style={{marginBottom:14}}>
+                    <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>Open Ports</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {result.data.shodan.ports.map(p=>(
+                        <span key={p} style={{fontSize:12,padding:"3px 10px",borderRadius:4,
+                          background:C.red+"20",color:C.red,fontFamily:"monospace",fontWeight:700}}>{p}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {result.data.shodan.vulns?.length>0&&(
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>Vulnerabilities</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {result.data.shodan.vulns.map(v=>(
+                        <span key={v} style={{fontSize:12,padding:"3px 10px",borderRadius:4,
+                          background:C.amber+"20",color:C.amber,fontFamily:"monospace",fontWeight:600}}>{v}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* HIBP tab */}
+            {activeTab==="hibp"&&result.data?.hibp&&(
+              result.data.hibp.skipped?(
+                <div style={{fontSize:13,color:C.muted,lineHeight:1.8}}>
+                  HIBP API key not configured.<br/>
+                  Add <code style={{color:C.accentText}}>HIBP_API_KEY</code> to <code style={{color:C.accentText}}>.env</code>.{" "}
+                  <a href="https://haveibeenpwned.com/API/Key" target="_blank" rel="noreferrer"
+                    style={{color:C.accentText}}>Get a free key →</a>
+                </div>
+              ):result.data.hibp.breached?(
+                <>
+                  <div style={{fontSize:14,fontWeight:700,color:C.red,marginBottom:14}}>
+                    ⚠ Found in {result.data.hibp.breach_count} data breach{result.data.hibp.breach_count!==1?"es":""}
+                  </div>
+                  {result.data.hibp.breaches?.map(b=>(
+                    <div key={b.name} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,
+                      borderRadius:8,padding:12,marginBottom:8}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                        <span style={{fontSize:13,fontWeight:700,color:C.white||C.textHi}}>{b.name}</span>
+                        <span style={{fontSize:11,color:C.muted}}>{b.date}</span>
+                      </div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {b.data_classes?.map(dc=>(
+                          <span key={dc} style={{fontSize:10,padding:"2px 7px",borderRadius:3,
+                            background:C.red+"20",color:C.red,fontWeight:600}}>{dc}</span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              ):<div style={{fontSize:13,color:C.green,fontWeight:600}}>✓ Not found in any known data breaches</div>
+            )}
+
+            {/* MX tab */}
+            {activeTab==="mx"&&result.data?.email_domain_mx?.length>0&&(
+              <div>
+                <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:10,textTransform:"uppercase"}}>MX Records</div>
+                {result.data.email_domain_mx.map((mx,i)=>(
+                  <div key={i} style={{fontSize:12,color:C.text,padding:"6px 12px",
+                    background:C.surfaceHi,borderRadius:6,marginBottom:4,fontFamily:"monospace"}}>{mx}</div>
+                ))}
+              </div>
+            )}
+
+            {tabs.length===0&&(
+              <div style={{textAlign:"center",padding:24,color:C.muted,fontSize:13}}>
+                No data returned. Check your target and type.
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -1925,12 +2283,131 @@ function GlobalSearch({token,C,onSelect}){
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 function Dashboard({token,C}){
   const [stats,setStats]=useState(null);
+  const [open,setOpen]=useState({charts:false,api:false}); // collapsed by default
+  const toggle=k=>setOpen(p=>({...p,[k]:!p[k]}));
+
   useEffect(()=>{api("/stats/dashboard",{},token).then(r=>r.ok?r.json():null).then(d=>{if(d)setStats(d);});},[token]);
+
   if(!stats)return(
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14,marginBottom:24}}>
-      {[1,2,3,4].map(i=><div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"22px 24px",height:90,animation:"pulse 1.5s infinite"}}/>)}
+      {[1,2,3,4].map(i=>(
+        <div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:12,padding:"22px 24px",height:90,opacity:.5}}/>
+      ))}
     </div>
   );
+
+  const VT_LIMIT=500,ABUSE_LIMIT=1000;
+  const vtPct=Math.min(100,Math.round((stats.api_usage?.virustotal||0)/VT_LIMIT*100));
+  const abusePct=Math.min(100,Math.round((stats.api_usage?.abuseipdb||0)/ABUSE_LIMIT*100));
+  const highConf=stats.by_confidence?.find(x=>x.band==="High")?.count||0;
+
+  const CollapsibleSection=({id,title,children})=>(
+    <div style={{marginBottom:16}}>
+      <button onClick={()=>toggle(id)}
+        style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+          width:"100%",padding:"12px 16px",background:C.surface,
+          border:`1px solid ${C.border}`,borderRadius:open[id]?`10px 10px 0 0`:"10px",
+          cursor:"pointer",fontFamily:"inherit",color:C.text,
+          borderBottom:open[id]?`1px solid ${C.border}`:"none"}}>
+        <span style={{fontSize:12,fontWeight:600,letterSpacing:"0.04em",
+          textTransform:"uppercase",color:C.muted}}>{title}</span>
+        <span style={{fontSize:14,color:C.muted,transition:"transform .2s",
+          display:"inline-block",transform:open[id]?"rotate(180deg)":"rotate(0deg)"}}>▾</span>
+      </button>
+      {open[id]&&(
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,
+          borderTop:"none",borderRadius:`0 0 10px 10px`,padding:"16px"}}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+
+  return(
+    <div>
+      <div style={{marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <h2 style={{fontSize:18,fontWeight:700,color:C.white||C.textHi,margin:0,letterSpacing:"-0.02em"}}>
+          IOC Insights
+        </h2>
+      </div>
+
+      {/* Big stat cards — always visible */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:12,marginBottom:20}}>
+        <StatCard label="Live IOCs"        value={stats.total}   sublabel="IOCs" color={C.accent}  C={C}/>
+        <StatCard label="High Confidence"  value={highConf}      sublabel="IOCs" color={C.green}   C={C}/>
+        <StatCard label="Expired"          value={stats.expired} sublabel="IOCs" color={C.amber}   C={C}/>
+        <StatCard label="False Positives"  value={stats.fp_count}sublabel="IOCs" color={C.red}     C={C}/>
+      </div>
+
+      {/* Collapsible: Breakdowns */}
+      <CollapsibleSection id="charts" title="Breakdown by Type, Industry, TLP, Analyst">
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:16}}>
+          {[
+            {title:"By Type",      data:stats.by_type,         key:"type"},
+            {title:"By Industry",  data:stats.by_industry,     key:"industry"},
+            {title:"By TLP",       data:stats.by_tlp,          key:"tlp"},
+            {title:"Top Analysts", data:stats.top_contributors,key:"username"},
+          ].map(({title,data,key})=>(
+            <div key={title}>
+              <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:12,
+                textTransform:"uppercase",letterSpacing:"0.05em"}}>{title}</div>
+              {(data||[]).slice(0,6).map((row,i)=>{
+                const max=Math.max(...(data||[]).map(x=>x.count),1);
+                return(
+                  <div key={i} style={{marginBottom:9}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                      <span style={{fontSize:12,color:C.text,fontWeight:500}}>
+                        {key==="tlp"?<TLPBadge level={row[key]}/>:row[key]||"unknown"}
+                      </span>
+                      <span style={{fontSize:12,color:C.muted}}>{row.count}</span>
+                    </div>
+                    <div style={{height:3,background:C.border,borderRadius:4,overflow:"hidden"}}>
+                      <div style={{width:`${(row.count/max)*100}%`,height:"100%",
+                        background:C.accent,borderRadius:4}}/>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </CollapsibleSection>
+
+      {/* Collapsible: API usage */}
+      <CollapsibleSection id="api" title="Platform API Usage Today">
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:16,marginBottom:12}}>
+          {[
+            {name:"VirusTotal",used:stats.api_usage?.virustotal||0,limit:VT_LIMIT,   pct:vtPct},
+            {name:"AbuseIPDB", used:stats.api_usage?.abuseipdb||0, limit:ABUSE_LIMIT,pct:abusePct},
+            {name:"URLhaus",   used:stats.api_usage?.urlhaus||0,   limit:"∞",        pct:0},
+          ].map(({name,used,limit,pct})=>(
+            <div key={name}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                <span style={{fontSize:13,color:C.text,fontWeight:500}}>{name}</span>
+                <span style={{fontSize:12,fontWeight:600,
+                  color:pct>=80?C.red:pct>=60?C.amber:C.green}}>
+                  {used}{limit!=="∞"?`/${limit}`:""}
+                </span>
+              </div>
+              {limit!=="∞"&&(
+                <div style={{height:4,background:C.border,borderRadius:4,overflow:"hidden"}}>
+                  <div style={{width:`${pct}%`,height:"100%",borderRadius:4,
+                    background:pct>=80?C.red:pct>=60?C.amber:C.accent}}/>
+                </div>
+              )}
+              {limit==="∞"&&<div style={{fontSize:11,color:C.muted}}>No rate limit</div>}
+            </div>
+          ))}
+        </div>
+        <div style={{fontSize:12,color:C.muted,borderTop:`1px solid ${C.border}`,paddingTop:10}}>
+          Cache hits today: <span style={{color:C.green,fontWeight:600}}>{stats.api_usage?.cache_hits_today||0}</span>
+          {" "}— enrichments cached 24h to preserve API quota.
+        </div>
+      </CollapsibleSection>
+    </div>
+  );
+}
 
   const VT_LIMIT=500,ABUSE_LIMIT=1000;
   const vtPct=Math.min(100,Math.round((stats.api_usage?.virustotal||0)/VT_LIMIT*100));
@@ -2690,53 +3167,117 @@ export default function App(){
 
           {view==="feed"&&(
             <>
-              <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Filter feed..."
-                  style={{flex:1,minWidth:140,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"8px 12px",borderRadius:8,fontSize:13,outline:"none",fontFamily:"inherit"}}/>
-                {[[["All",...INDUSTRIES],filterIndustry,setFilterIndustry,"Industry"],[["All",...IOC_TYPES],filterType,setFilterType,"Type"],[["All",...TLP_LEVELS],filterTLP,setFilterTLP,"TLP"]].map(([opts,val,setVal,label],idx)=>(
-                  <select key={idx} value={val} onChange={e=>setVal(e.target.value)} style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"8px 10px",borderRadius:8,fontSize:12,outline:"none",fontFamily:"inherit"}}>
-                    <option value="All">{label}: All</option>{opts.slice(1).map(o=><option key={o}>{o}</option>)}
+              {/* Filter bar */}
+              <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search IOCs..."
+                  style={{flex:1,minWidth:140,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                    color:C.inputText,padding:"8px 12px",borderRadius:8,fontSize:13,
+                    outline:"none",fontFamily:"inherit"}}/>
+                {[[["All",...INDUSTRIES],filterIndustry,setFilterIndustry,"Industry"],
+                  [["All",...IOC_TYPES],filterType,setFilterType,"Type"],
+                  [["All",...TLP_LEVELS],filterTLP,setFilterTLP,"TLP"]].map(([opts,val,setVal,label],idx)=>(
+                  <select key={idx} value={val} onChange={e=>setVal(e.target.value)}
+                    style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,
+                      padding:"8px 10px",borderRadius:8,fontSize:12,outline:"none",fontFamily:"inherit"}}>
+                    <option value="All">{label}: All</option>
+                    {opts.slice(1).map(o=><option key={o}>{o}</option>)}
                   </select>
                 ))}
-                <select value={filterCampaign} onChange={e=>setFilterCampaign(e.target.value)} style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"8px 10px",borderRadius:8,fontSize:12,outline:"none",fontFamily:"inherit"}}>
-                  <option value="All">Campaign: All</option>{campaigns.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                <select value={filterCampaign} onChange={e=>setFilterCampaign(e.target.value)}
+                  style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,
+                    padding:"8px 10px",borderRadius:8,fontSize:12,outline:"none",fontFamily:"inherit"}}>
+                  <option value="All">Campaign: All</option>
+                  {campaigns.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
-                <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.muted,cursor:"pointer"}}><input type="checkbox" checked={filterExpired} onChange={e=>setFilterExpired(e.target.checked)} style={{accentColor:C.accent}}/>Expired</label>
-                <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.muted,cursor:"pointer"}}><input type="checkbox" checked={filterFP} onChange={e=>setFilterFP(e.target.checked)} style={{accentColor:C.accent}}/>FP</label>
+                <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.muted,cursor:"pointer"}}>
+                  <input type="checkbox" checked={filterExpired} onChange={e=>setFilterExpired(e.target.checked)} style={{accentColor:C.accent}}/>Expired
+                </label>
+                <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.muted,cursor:"pointer"}}>
+                  <input type="checkbox" checked={filterFP} onChange={e=>setFilterFP(e.target.checked)} style={{accentColor:C.accent}}/>FP
+                </label>
               </div>
-              {loading?<div style={{textAlign:"center",padding:60,color:C.muted}}>Loading...</div>:(
-                <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",boxShadow:C.shadow}}>
-                  <div style={{overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                      <thead><tr style={{background:C.surfaceHi,borderBottom:`1px solid ${C.border}`}}>{["Type","Indicator","Industry","TLP","Conf","Author","MITRE","Tags",""].map(h=><th key={h} style={{padding:"10px 12px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:700,whiteSpace:"nowrap",letterSpacing:.5}}>{h}</th>)}</tr></thead>
-                      <tbody>
-                        {filtered.length===0&&<tr><td colSpan={9} style={{padding:48,textAlign:"center",color:C.muted}}>{iocs.length===0?"No IOCs yet":"No matches"}</td></tr>}
-                        {filtered.map((ioc,idx)=>{
-                          const canDelete=me?.role==="admin"||ioc.created_by===me?.id;
-                          return(<tr key={ioc.id} onClick={()=>setSelectedIOC(ioc)} style={{borderBottom:`1px solid ${C.border}20`,cursor:"pointer",background:ioc.false_positive?C.amber+"08":ioc.expired?C.red+"05":idx%2===0?"transparent":C.surfaceHi+"40"}}
-                            onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHi} onMouseLeave={e=>e.currentTarget.style.background=ioc.false_positive?C.amber+"08":ioc.expired?C.red+"05":idx%2===0?"transparent":C.surfaceHi+"40"}>
-                            <td style={{padding:"9px 12px"}} onClick={e=>e.stopPropagation()}><span style={{fontSize:11,padding:"2px 7px",borderRadius:4,background:C.badge,color:C.accentText,fontWeight:700}}>{ioc.type}</span></td>
-                            <td style={{padding:"9px 12px",maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:C.white,fontWeight:500}}>
-                              {ioc.value_defanged||ioc.value}
-                              {ioc.false_positive&&<span style={{marginLeft:6,fontSize:9,color:C.amber,border:`1px solid ${C.amber}40`,padding:"1px 4px",borderRadius:2,fontWeight:700}}>FP</span>}
-                              {ioc.expired&&<span style={{marginLeft:6,fontSize:9,color:C.red,border:`1px solid ${C.red}40`,padding:"1px 4px",borderRadius:2,fontWeight:700}}>EXP</span>}
-                            </td>
-                            <td style={{padding:"9px 12px",color:C.purple,fontSize:12,fontWeight:500}}>{ioc.industry}</td>
-                            <td style={{padding:"9px 12px"}}><TLPBadge level={ioc.tlp}/></td>
-                            <td style={{padding:"9px 12px"}}><ConfBar val={ioc.confidence} C={C}/></td>
-                            <td style={{padding:"9px 12px",whiteSpace:"nowrap"}}><span style={{fontSize:12,color:ioc.created_by===me?.id?C.accentText:C.muted,fontWeight:ioc.created_by===me?.id?600:400}}>{ioc.author||"?"}{ioc.created_by===me?.id?" ✦":""}</span></td>
-                            <td style={{padding:"9px 12px",maxWidth:120}}>{(ioc.mitre_techniques||[]).slice(0,1).map(t=><span key={t} style={{fontSize:10,padding:"1px 5px",borderRadius:3,background:C.purple+"20",color:C.purple,fontWeight:600,whiteSpace:"nowrap",display:"inline-block"}}>{t.split(" - ")[0]}</span>)}{(ioc.mitre_techniques||[]).length>1&&<span style={{fontSize:10,color:C.muted,marginLeft:3}}>+{ioc.mitre_techniques.length-1}</span>}</td>
-                            <td style={{padding:"9px 12px",minWidth:80}}><div style={{display:"flex",flexWrap:"wrap"}}>{(ioc.tags||[]).slice(0,2).map(t=><Tag key={t} label={t} C={C}/>)}{(ioc.tags||[]).length>2&&<Tag label={`+${ioc.tags.length-2}`} C={C}/>}</div></td>
-                            <td style={{padding:"9px 12px"}} onClick={e=>e.stopPropagation()}>{canDelete&&<button onClick={e=>deleteIOC(ioc.id,e)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:16,padding:0,opacity:.6}}>×</button>}</td>
-                          </tr>);
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div style={{padding:"8px 14px",borderTop:`1px solid ${C.border}`,fontSize:11,color:C.muted,display:"flex",justifyContent:"space-between"}}>
-                    <span>Click any row for enrichment, notes, score history, relationships</span>
-                    <span>{filtered.length} of {iocs.length} IOCs · Defanged display</span>
-                  </div>
+
+              {/* Count */}
+              <div style={{fontSize:12,color:C.muted,marginBottom:12}}>
+                <strong style={{color:C.white||C.textHi}}>{filtered.length}</strong> of {iocs.length} IOCs
+              </div>
+
+              {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>Loading...</div>}
+
+              {/* Compact card grid */}
+              {!loading&&filtered.length===0&&(
+                <div style={{textAlign:"center",padding:48,color:C.muted,background:C.surface,
+                  border:`1px solid ${C.border}`,borderRadius:12}}>
+                  {iocs.length===0?"No IOCs yet — add one above.":"No matches for current filters."}
+                </div>
+              )}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:10}}>
+                {filtered.map(ioc=>{
+                  const canDelete=me?.role==="admin"||ioc.created_by===me?.id;
+                  const conf=ioc.confidence||0;
+                  const confColor=conf>=75?C.green:conf>=50?C.amber:C.red;
+                  return(
+                    <div key={ioc.id} onClick={()=>setSelectedIOC(ioc)}
+                      style={{background:C.surface,border:`1px solid ${
+                        ioc.false_positive?C.amber+"50":ioc.expired?C.border:C.border}`,
+                        borderRadius:10,padding:"12px 14px",cursor:"pointer",
+                        boxShadow:C.shadow,transition:"border-color .12s, box-shadow .12s",
+                        opacity:ioc.expired?0.65:1}}
+                      onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.boxShadow=C.shadowMd||C.shadow;}}
+                      onMouseLeave={e=>{e.currentTarget.style.borderColor=ioc.false_positive?C.amber+"50":C.border;e.currentTarget.style.boxShadow=C.shadow;}}>
+
+                      {/* Top row: type badge + value + delete */}
+                      <div style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:8}}>
+                        <span style={{fontSize:10,padding:"2px 7px",borderRadius:4,fontWeight:700,
+                          background:C.accentDim,color:C.accentText,flexShrink:0,marginTop:2}}>
+                          {ioc.type}
+                        </span>
+                        <span style={{fontSize:13,fontWeight:600,color:C.white||C.textHi,
+                          flex:1,wordBreak:"break-all",lineHeight:1.3,fontFamily:"monospace",fontSize:12}}>
+                          {ioc.value_defanged||ioc.value}
+                        </span>
+                        {canDelete&&(
+                          <button onClick={e=>deleteIOC(ioc.id,e)}
+                            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                              fontSize:16,padding:0,flexShrink:0,opacity:.5,lineHeight:1}}>×</button>
+                        )}
+                      </div>
+
+                      {/* Mid row: TLP + industry + conf bar */}
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+                        <TLPBadge level={ioc.tlp}/>
+                        {ioc.industry&&<span style={{fontSize:11,color:C.purple,fontWeight:500}}>{ioc.industry}</span>}
+                        {ioc.campaign_id&&<span style={{fontSize:11,color:C.amber,fontWeight:500}}>📁 Campaign</span>}
+                        {ioc.false_positive&&<span style={{fontSize:10,color:C.amber,border:`1px solid ${C.amber}40`,padding:"1px 5px",borderRadius:3,fontWeight:700}}>FP</span>}
+                        {ioc.expired&&<span style={{fontSize:10,color:C.red,border:`1px solid ${C.red}40`,padding:"1px 5px",borderRadius:3,fontWeight:700}}>EXPIRED</span>}
+                        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
+                          <div style={{width:40,height:3,background:C.border,borderRadius:2,overflow:"hidden"}}>
+                            <div style={{width:`${conf}%`,height:"100%",background:confColor,borderRadius:2}}/>
+                          </div>
+                          <span style={{fontSize:10,color:confColor,fontWeight:700}}>{conf}%</span>
+                        </div>
+                      </div>
+
+                      {/* Bottom row: tags + MITRE + author */}
+                      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                        {(ioc.tags||[]).slice(0,3).map(t=><Tag key={t} label={t} C={C}/>)}
+                        {(ioc.tags||[]).length>3&&<Tag label={`+${ioc.tags.length-3}`} C={C}/>}
+                        {(ioc.mitre_techniques||[]).length>0&&(
+                          <span style={{fontSize:10,padding:"1px 6px",borderRadius:3,
+                            background:C.purple+"20",color:C.purple,fontWeight:600}}>
+                            {ioc.mitre_techniques[0].split(" - ")[0]}
+                            {ioc.mitre_techniques.length>1&&` +${ioc.mitre_techniques.length-1}`}
+                          </span>
+                        )}
+                        <span style={{marginLeft:"auto",fontSize:10,color:C.muted}}>{ioc.author||"?"}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {!loading&&filtered.length>0&&(
+                <div style={{marginTop:12,fontSize:11,color:C.muted,textAlign:"center"}}>
+                  Click any card for enrichment details, notes, score history, and relationships
                 </div>
               )}
             </>
