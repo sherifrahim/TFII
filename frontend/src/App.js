@@ -431,6 +431,89 @@ function CVEDetail({cve,token,onClose,C}){
 }
 
 // ── ASSET MANAGER ─────────────────────────────────────────────────────────────
+function RelGraph({iocId,iocValue,token,C}){
+  const [rels,setRels]=useState([]); const [pos,setPos]=useState({});
+  const [dragging,setDragging]=useState(null); const [newRelTarget,setNewRelTarget]=useState(""); const [newRelType,setNewRelType]=useState("related_to");
+  const [allIocs,setAllIocs]=useState([]); const svgRef=useRef(null); const animRef=useRef(null);
+
+  useEffect(()=>{
+    api(`/iocs/${encodeURIComponent(iocId)}/relationships`,{},token).then(r=>r.ok?r.json():[]).then(setRels);
+    api("/iocs",{},token).then(r=>r.ok?r.json():[]).then(setAllIocs);
+  },[iocId,token]);
+
+  const nodes={}; nodes[iocId]={id:iocId,value:iocValue,isCenter:true};
+  rels.forEach(r=>{
+    if(!nodes[r.source_id])nodes[r.source_id]={id:r.source_id,value:r.source_defanged||r.source_value,type:r.source_type};
+    if(!nodes[r.target_id])nodes[r.target_id]={id:r.target_id,value:r.target_defanged||r.target_value,type:r.target_type};
+  });
+  const nodeList=Object.values(nodes);
+  const linkList=rels.map(r=>({id:r.id,source:r.source_id,target:r.target_id,type:r.relationship_type}));
+
+  useEffect(()=>{setPos(p=>{const next={...p};nodeList.forEach((n,i)=>{if(!next[n.id]){const angle=(i/Math.max(nodeList.length,1))*Math.PI*2;next[n.id]=n.isCenter?{x:300,y:190}:{x:300+Math.cos(angle)*130,y:190+Math.sin(angle)*100};}});return next;});},[rels]);
+
+  useEffect(()=>{
+    if(nodeList.length<2){clearInterval(animRef.current);return;}
+    animRef.current=setInterval(()=>{
+      setPos(prev=>{
+        const next={};nodeList.forEach(n=>{next[n.id]={...prev[n.id]||{x:300,y:190}};});
+        for(let i=0;i<nodeList.length;i++){for(let j=i+1;j<nodeList.length;j++){const a=nodeList[i].id,b=nodeList[j].id;if(!next[a]||!next[b])continue;const dx=next[b].x-next[a].x,dy=next[b].y-next[a].y;const dist=Math.sqrt(dx*dx+dy*dy)||1;const f=3000/(dist*dist);next[a]={x:next[a].x-(dx/dist)*f*0.1,y:next[a].y-(dy/dist)*f*0.1};next[b]={x:next[b].x+(dx/dist)*f*0.1,y:next[b].y+(dy/dist)*f*0.1};}}
+        linkList.forEach(link=>{const a=link.source,b=link.target;if(!next[a]||!next[b])return;const dx=next[b].x-next[a].x,dy=next[b].y-next[a].y;const dist=Math.sqrt(dx*dx+dy*dy)||1;const f=(dist-140)*0.04;next[a]={x:next[a].x+(dx/dist)*f,y:next[a].y+(dy/dist)*f};next[b]={x:next[b].x-(dx/dist)*f,y:next[b].y-(dy/dist)*f};});
+        nodeList.forEach(n=>{if(!next[n.id])return;next[n.id]={x:next[n.id].x+(300-next[n.id].x)*0.008,y:next[n.id].y+(190-next[n.id].y)*0.008};});
+        return next;
+      });
+    },50);
+    return()=>clearInterval(animRef.current);
+  },[rels]);
+
+  function startDrag(e,nodeId){e.preventDefault();setDragging(nodeId);clearInterval(animRef.current);}
+  function onMove(e){if(!dragging||!svgRef.current)return;const rect=svgRef.current.getBoundingClientRect();setPos(p=>({...p,[dragging]:{x:e.clientX-rect.left,y:e.clientY-rect.top}}));}
+  function stopDrag(){setDragging(null);}
+
+  async function addRel(){
+    if(!newRelTarget)return;
+    await api(`/iocs/${encodeURIComponent(iocId)}/relationships`,{method:"POST",body:JSON.stringify({target_id:newRelTarget,relationship_type:newRelType})},token);
+    api(`/iocs/${encodeURIComponent(iocId)}/relationships`,{},token).then(r=>r.ok?r.json():[]).then(setRels);
+    setNewRelTarget("");
+  }
+  async function deleteRel(relId){
+    await api(`/iocs/relationships/${relId}`,{method:"DELETE"},token);
+    setRels(p=>p.filter(r=>r.id!==relId));
+  }
+
+  return(
+    <div>
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"flex-end"}}>
+        <div style={{flex:1,minWidth:180}}>
+          <label style={{display:"block",fontSize:11,color:C.muted,marginBottom:4,fontWeight:600}}>Link to IOC</label>
+          <select value={newRelTarget} onChange={e=>setNewRelTarget(e.target.value)} style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"8px 10px",borderRadius:6,fontSize:12,outline:"none",fontFamily:"inherit"}}>
+            <option value="">Select IOC...</option>
+            {allIocs.filter(i=>i.id!==iocId).map(i=><option key={i.id} value={i.id}>{i.type}: {(i.value_defanged||i.value)?.slice(0,40)}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={{display:"block",fontSize:11,color:C.muted,marginBottom:4,fontWeight:600}}>Relationship</label>
+          <select value={newRelType} onChange={e=>setNewRelType(e.target.value)} style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"8px 10px",borderRadius:6,fontSize:12,outline:"none",fontFamily:"inherit"}}>
+            {REL_TYPES.map(t=><option key={t}>{t}</option>)}
+          </select>
+        </div>
+        <Btn onClick={addRel} disabled={!newRelTarget} C={C} sm>Link</Btn>
+      </div>
+      {nodeList.length<=1?(
+        <div style={{textAlign:"center",padding:32,color:C.muted,fontSize:13,background:C.surfaceHi,borderRadius:8}}>No relationships yet. Link this IOC to others above.</div>
+      ):(
+        <svg ref={svgRef} width="600" height="380" style={{width:"100%",background:C.surfaceHi,borderRadius:10,cursor:dragging?"grabbing":"default"}}
+          onMouseMove={onMove} onMouseUp={stopDrag} onMouseLeave={stopDrag}>
+          <defs><marker id="arr" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill={C.border}/></marker></defs>
+          {linkList.map(link=>{const a=pos[link.source],b=pos[link.target];if(!a||!b)return null;const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;return(<g key={link.id}><line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={C.border} strokeWidth={1.5} markerEnd="url(#arr)"/><text x={mx} y={my-6} textAnchor="middle" fill={C.muted} fontSize={9} fontFamily="inherit">{link.type}</text><circle cx={mx} cy={my} r={6} fill={C.red+"20"} stroke={C.red+"40"} strokeWidth={1} style={{cursor:"pointer"}} onClick={()=>deleteRel(link.id)}/><text x={mx} y={my+4} textAnchor="middle" fill={C.red} fontSize={8} style={{cursor:"pointer"}} onClick={()=>deleteRel(link.id)}>×</text></g>);})}
+          {nodeList.map(node=>{const p=pos[node.id];if(!p)return null;const isCenter=node.isCenter;return(<g key={node.id} transform={`translate(${p.x},${p.y})`} style={{cursor:"grab"}} onMouseDown={e=>startDrag(e,node.id)}><circle r={isCenter?26:20} fill={isCenter?C.accentDim:C.surfaceHi} stroke={isCenter?C.accent:C.border} strokeWidth={isCenter?2:1.5}/><text textAnchor="middle" y={-8} fill={C.accentText} fontSize={8} fontFamily="inherit" fontWeight={700}>{node.type||"IOC"}</text><text textAnchor="middle" y={4} fill={C.white} fontSize={8} fontFamily="inherit">{(node.value||"")?.slice(0,16)}</text>{(node.value||"").length>16&&<text textAnchor="middle" y={13} fill={C.muted} fontSize={7}>...</text>}</g>);})}
+        </svg>
+      )}
+    </div>
+  );
+}
+
+// ── ENRICHMENT PANEL ──────────────────────────────────────────────────────────
+
 function EnrichmentPanel({ioc,token,onClose,C,me}){
   const [data,setData]=useState(ioc.enrichment||null); const [loading,setLoading]=useState(false);
   const [notes,setNotes]=useState([]); const [newNote,setNewNote]=useState("");
