@@ -652,7 +652,6 @@ function CVEDashboard({token,C}){
               <Btn onClick={()=>setSubView("assets")} C={C}>{assets.length===0?"Go to Asset Registry":"Check Filters"}</Btn>
             </div>
           ):(
-            {/* CVE table — screenshot 2 style */}
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",boxShadow:C.shadow}}>
               {/* Table header info row */}
               <div style={{padding:"12px 20px",borderBottom:`1px solid ${C.border}`,
