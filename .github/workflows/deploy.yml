@@ -28,7 +28,7 @@ jobs:
             git config --global --add safe.directory /home/ubuntu/threatfeed-repo 2>/dev/null || true
 
             cd /home/ubuntu/threatfeed-repo
-            git fethc origin master && git reset --hard origin/master
+            git fetch origin master && git reset --hard origin/master
             echo "✓ Code pulled"
 
             if ! diff -q backend/main.py /home/ubuntu/threatfeed/main.py > /dev/null 2>&1; then
@@ -47,8 +47,18 @@ jobs:
               echo "~ Backend unchanged"
             fi
 
+            # Restore real domain before copying frontend
+            REAL_DOMAIN=$(grep "^SERVER_URL" /home/ubuntu/threatfeed/.env | cut -d= -f2 | sed 's|https://||')
+            if [ -z "$REAL_DOMAIN" ]; then REAL_DOMAIN="threatintel.mooo.com"; fi
+            sed "s|YOUR_DOMAIN|${REAL_DOMAIN}|g" frontend/src/App.js > /tmp/App.js.patched
+
             FRONTEND_CHANGED=false
-            for f in frontend/src/App.js frontend/public/index.html; do
+            if ! diff -q /tmp/App.js.patched /home/ubuntu/threatfeed-ui/src/App.js > /dev/null 2>&1; then
+              cp /tmp/App.js.patched /home/ubuntu/threatfeed-ui/src/App.js
+              FRONTEND_CHANGED=true
+              echo "✓ Updated: frontend/src/App.js"
+            fi
+            for f in frontend/public/index.html; do
               dest="/home/ubuntu/threatfeed-ui/${f#frontend/}"
               if ! diff -q "$f" "$dest" > /dev/null 2>&1; then
                 cp "$f" "$dest"
