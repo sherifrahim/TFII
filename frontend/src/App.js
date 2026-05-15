@@ -431,6 +431,214 @@ function CVEDetail({cve,token,onClose,C}){
 }
 
 // ── ASSET MANAGER ─────────────────────────────────────────────────────────────
+function EnrichmentPanel({ioc,token,onClose,C,me}){
+  const [data,setData]=useState(ioc.enrichment||null); const [loading,setLoading]=useState(false);
+  const [notes,setNotes]=useState([]); const [newNote,setNewNote]=useState("");
+  const [history,setHistory]=useState([]); const [tab,setTab]=useState("enrichment");
+  const [fpReason,setFpReason]=useState(ioc.fp_reason||""); const [isFP,setIsFP]=useState(ioc.false_positive||false);
+  const [subnetData,setSubnetData]=useState(null);
+
+  useEffect(()=>{
+    api(`/iocs/${encodeURIComponent(ioc.id)}/notes`,{},token).then(r=>r.ok?r.json():[]).then(setNotes);
+    api(`/iocs/${encodeURIComponent(ioc.id)}/score-history`,{},token).then(r=>r.ok?r.json():[]).then(setHistory);
+  },[ioc.id,token]);
+
+  async function reEnrich(){setLoading(true);const r=await api(`/iocs/${encodeURIComponent(ioc.id)}/re-enrich`,{method:"POST"},token);if(r.ok){const d=await r.json();setData(d.enrichment);}setLoading(false);}
+  async function addNote(){if(!newNote.trim())return;await api(`/iocs/${encodeURIComponent(ioc.id)}/notes`,{method:"POST",body:JSON.stringify({note:newNote})},token);setNewNote("");api(`/iocs/${encodeURIComponent(ioc.id)}/notes`,{},token).then(r=>r.ok?r.json():[]).then(setNotes);}
+  async function deleteNote(noteId){await api(`/iocs/${encodeURIComponent(ioc.id)}/notes/${noteId}`,{method:"DELETE"},token);setNotes(p=>p.filter(n=>n.id!==noteId));}
+  async function toggleFP(){const newFP=!isFP;await api(`/iocs/${encodeURIComponent(ioc.id)}/false-positive`,{method:"PATCH",body:JSON.stringify({false_positive:newFP,reason:fpReason})},token);setIsFP(newFP);}
+  async function pivotSubnet(){const r=await api(`/iocs/pivot/subnet/${ioc.value}`,{},token);if(r.ok)setSubnetData(await r.json());setTab("subnet");}
+
+  const vt=data?.virustotal||{};const abuse=data?.abuseipdb||{};const uh=data?.urlhaus||{};
+  const TABS=[{id:"enrichment",label:"Enrichment"},{id:"notes",label:`Notes (${notes.length})`},{id:"history",label:"Score History"},{id:"relations",label:"Relationships"},{id:"fp",label:"False Positive"},...(ioc.type==="IPv4"?[{id:"subnet",label:"Subnet Pivot"}]:[])];
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"#00000090",display:"flex",alignItems:"center",justifyContent:"center",zIndex:500,padding:16}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:680,maxHeight:"92vh",overflowY:"auto",background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,boxShadow:C.shadow,fontFamily:C.font||"inherit"}}>
+        <div style={{padding:"20px 24px 0",borderBottom:`1px solid ${C.border}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+            <div style={{flex:1,marginRight:12}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+                <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:C.badge,color:C.accentText,fontWeight:700}}>{ioc.type}</span>
+                <TLPBadge level={ioc.tlp}/>
+                {isFP&&<span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:C.amber+"20",color:C.amber,fontWeight:700}}>FALSE POSITIVE</span>}
+              </div>
+              <div style={{fontSize:15,fontWeight:700,color:C.white,wordBreak:"break-all"}}>{ioc.value_defanged||ioc.value}</div>
+              <div style={{fontSize:12,color:C.muted,marginTop:4}}>{ioc.industry} · {ioc.author||"unknown"}</div>
+            </div>
+            <div style={{display:"flex",gap:8,flexShrink:0}}>
+              <button onClick={reEnrich} disabled={loading} style={{padding:"6px 14px",background:C.accentDim,border:`1px solid ${C.accent}40`,color:C.accentText,borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600}}>{loading?"...":"↻ Re-enrich"}</button>
+              <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,fontSize:22,cursor:"pointer",padding:0}}>×</button>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:1,overflowX:"auto"}}>
+            {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"9px 16px",border:"none",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:500,background:"transparent",color:tab===t.id?C.accentText:C.muted,borderBottom:`2px solid ${tab===t.id?C.accentText:"transparent"}`,whiteSpace:"nowrap"}}>{t.label}</button>)}
+          </div>
+        </div>
+        <div style={{padding:24}}>
+          {tab==="enrichment"&&(
+            <>
+              {!data&&<div style={{color:C.muted,fontSize:13}}>No enrichment data. Click Re-enrich.</div>}
+              {data&&(<>
+                <div style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10,padding:18,marginBottom:16}}>
+                  <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:.5,marginBottom:12,textTransform:"uppercase"}}>Confidence Score</div>
+                  <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:12}}>
+                    <div style={{fontSize:48,fontWeight:700,color:data.calculated_confidence>=80?C.green:data.calculated_confidence>=50?C.amber:C.red,lineHeight:1}}>{data.calculated_confidence}</div>
+                    <div style={{flex:1}}>
+                      <div style={{height:8,background:C.border,borderRadius:4,overflow:"hidden",marginBottom:10}}>
+                        <div style={{width:`${data.calculated_confidence}%`,height:"100%",borderRadius:4,background:data.calculated_confidence>=80?C.green:data.calculated_confidence>=50?C.amber:C.red,transition:"width .5s"}}/>
+                      </div>
+                      {data.confidence_reasons?.map((r,i)=><div key={i} style={{fontSize:11,color:C.muted,marginBottom:3,display:"flex",gap:6}}><span style={{color:C.accentText}}>›</span>{r}</div>)}
+                    </div>
+                  </div>
+                  <div style={{fontSize:11,color:C.muted}}>Enriched: {data.enriched_at?new Date(data.enriched_at).toLocaleString():"?"} · Cached 24h</div>
+                </div>
+                {[{key:"virustotal",label:"VIRUSTOTAL",d:vt,fields:[["VT Score",`${vt.vt_score??0}%`],["Malicious",`${vt.malicious??0}/${vt.total??0}`],vt.country&&["Country",vt.country],vt.asn&&["ASN",vt.asn]]},
+                  {key:"abuseipdb",label:"ABUSEIPDB",d:abuse,fields:[["Abuse Score",`${abuse.abuse_score??0}/100`],["Reports",`${abuse.total_reports??0}`],abuse.country&&["Country",abuse.country],abuse.isp&&["ISP",abuse.isp]]},
+                  {key:"urlhaus",label:"URLHAUS",d:uh,fields:[uh.threat&&["Threat",uh.threat],uh.url_status&&["Status",uh.url_status]]},
+                ].map(({key,label,d,fields})=>{
+                  if(!d||d.skipped)return null;
+                  return(<div key={key} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10,padding:16,marginBottom:10}}>
+                    <div style={{fontSize:11,color:C.accentText,fontWeight:700,letterSpacing:.5,marginBottom:12}}>{label}</div>
+                    {d.error?<div style={{fontSize:12,color:C.red}}>{d.error}</div>:d.found===false?<div style={{fontSize:12,color:C.muted}}>Not found in {label}</div>:
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:12}}>
+                        {fields.filter(Boolean).map(([k,v])=><div key={k}><div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:2}}>{k}</div><div style={{fontSize:13,color:C.white,fontWeight:500}}>{v}</div></div>)}
+                      </div>}
+                    {d.link&&<a href={d.link} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.accentText,display:"inline-block",marginTop:10,fontWeight:600}}>View on {label} →</a>}
+                  </div>);
+                })}
+                {ioc.mitre_techniques?.length>0&&<div style={{marginTop:12}}><div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>MITRE ATT&CK</div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{ioc.mitre_techniques.map(t=><span key={t} style={{fontSize:11,padding:"3px 10px",borderRadius:4,background:C.purple+"20",color:C.purple,fontWeight:600,border:`1px solid ${C.purple}40`}}>{t}</span>)}</div></div>}
+              </>)}
+            </>
+          )}
+          {tab==="notes"&&(
+            <>
+              <div style={{display:"flex",gap:8,marginBottom:16}}>
+                <input value={newNote} onChange={e=>setNewNote(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();addNote();}}} placeholder="Add investigation note... (Enter to submit)"
+                  style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"10px 14px",borderRadius:8,fontSize:13,outline:"none",fontFamily:"inherit"}}/>
+                <Btn onClick={addNote} disabled={!newNote.trim()} C={C}>Add</Btn>
+              </div>
+              {notes.length===0&&<div style={{fontSize:13,color:C.muted,textAlign:"center",padding:24}}>No notes yet.</div>}
+              {notes.map(n=>(
+                <div key={n.id} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10,padding:14,marginBottom:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                    <div style={{display:"flex",gap:10}}><span style={{fontSize:12,color:C.accentText,fontWeight:700}}>{n.username}</span><span style={{fontSize:11,color:C.muted}}>{new Date(n.created_at).toLocaleString()}</span></div>
+                    {(me?.role==="admin"||n.user_id===me?.id)&&<button onClick={()=>deleteNote(n.id)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:16,padding:0,opacity:.7}}>×</button>}
+                  </div>
+                  <div style={{fontSize:13,color:C.text,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{n.note}</div>
+                </div>
+              ))}
+            </>
+          )}
+          {tab==="history"&&(
+            <>
+              {history.length===0&&<div style={{fontSize:13,color:C.muted,textAlign:"center",padding:24}}>No score history yet.</div>}
+              {history.map(h=>(
+                <div key={h.id} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10,padding:14,marginBottom:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <div style={{display:"flex",alignItems:"center",gap:12}}>
+                      <span style={{fontSize:20,color:C.muted,textDecoration:"line-through"}}>{h.old_score}</span>
+                      <span style={{fontSize:12,color:C.muted}}>→</span>
+                      <span style={{fontSize:28,fontWeight:700,color:h.new_score>=80?C.green:h.new_score>=50?C.amber:C.red}}>{h.new_score}</span>
+                      <span style={{fontSize:12,padding:"2px 8px",borderRadius:4,fontWeight:700,background:h.delta>0?C.green+"20":h.delta<0?C.red+"20":C.border,color:h.delta>0?C.green:h.delta<0?C.red:C.muted}}>{h.delta>0?"+":""}{h.delta}</span>
+                    </div>
+                    <div style={{fontSize:11,color:C.muted,textAlign:"right"}}><div style={{fontWeight:600}}>{h.triggered_by}</div><div>{new Date(h.created_at).toLocaleString()}</div></div>
+                  </div>
+                  {h.reason&&h.reason.split(" | ").map((r,j)=><div key={j} style={{fontSize:11,color:C.muted,marginBottom:2,display:"flex",gap:6}}><span style={{color:C.accentText}}>›</span>{r}</div>)}
+                </div>
+              ))}
+            </>
+          )}
+          {tab==="relations"&&<RelGraph iocId={ioc.id} iocValue={ioc.value_defanged||ioc.value} token={token} C={C}/>}
+          {tab==="fp"&&(
+            <div style={{padding:4}}>
+              <div style={{marginBottom:16,padding:14,background:isFP?C.amber+"10":C.surfaceHi,border:`1px solid ${isFP?C.amber+"40":C.border}`,borderRadius:10}}>
+                <div style={{fontSize:13,color:isFP?C.amber:C.text,fontWeight:700,marginBottom:8}}>{isFP?"⚠ Marked as False Positive":"Mark as False Positive"}</div>
+                <div style={{fontSize:12,color:C.muted,marginBottom:12,lineHeight:1.6}}>False positives are excluded from TAXII and STIX exports but kept in the database.</div>
+                <Field label="Reason" C={C}><input value={fpReason} onChange={e=>setFpReason(e.target.value)} placeholder="Why is this a false positive?" style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"10px 14px",borderRadius:8,fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"inherit"}}/></Field>
+                <Btn onClick={toggleFP} variant={isFP?"ghost":"danger"} C={C}>{isFP?"Remove FP Flag":"Flag as False Positive"}</Btn>
+              </div>
+            </div>
+          )}
+          {tab==="subnet"&&(
+            <>
+              {!subnetData&&<div style={{textAlign:"center",padding:32}}><div style={{fontSize:13,color:C.muted,marginBottom:16}}>Find all IOCs in the same /24 subnet as {ioc.value}</div><Btn onClick={pivotSubnet} C={C}>Search Subnet</Btn></div>}
+              {subnetData&&(<>
+                <div style={{fontSize:13,marginBottom:14}}><span style={{color:C.accentText,fontWeight:700}}>{subnetData.subnet}</span> — <span style={{color:C.muted}}>{subnetData.count} IOC{subnetData.count!==1?"s":""} found</span></div>
+                {subnetData.iocs?.map(s=>(
+                  <div key={s.id} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:8,padding:12,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div><div style={{fontSize:13,color:C.white,fontWeight:500}}>{s.value_defanged||s.value}</div><div style={{fontSize:11,color:C.muted,marginTop:2}}>{s.industry} · conf {s.confidence}</div></div>
+                    <TLPBadge level={s.tlp}/>
+                  </div>
+                ))}
+              </>)}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── PUBLIC SEARCH ─────────────────────────────────────────────────────────────
+function PublicSearch({C}){
+  const [query,setQuery]=useState(""); const [result,setResult]=useState(null); const [loading,setLoading]=useState(false);
+  async function search(){if(!query.trim())return;setLoading(true);setResult(null);const r=await fetch(`${API_BASE}/public/search?q=${encodeURIComponent(query)}`);if(r.ok)setResult(await r.json());setLoading(false);}
+  const verdictColor={MALICIOUS:C.red,SUSPICIOUS:C.amber,CLEAN:C.green}[result?.verdict]||C.muted;
+  const vt=result?.enrichment?.virustotal||{};const abuse=result?.enrichment?.abuseipdb||{};const uh=result?.enrichment?.urlhaus||{};
+  return(
+    <div style={{maxWidth:700,margin:"0 auto"}}>
+      <div style={{textAlign:"center",marginBottom:32}}>
+        <div style={{fontSize:20,fontWeight:700,color:C.white,marginBottom:8}}>Public IOC Lookup</div>
+        <div style={{fontSize:13,color:C.muted}}>Check any IP, domain, URL or hash. DB-first — if not found, queries providers and auto-adds if malicious.</div>
+      </div>
+      <div style={{display:"flex",gap:10,marginBottom:24}}>
+        <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")search();}} placeholder="Enter IP, domain, URL, MD5, SHA256..."
+          style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"14px 18px",borderRadius:10,fontSize:15,outline:"none",fontFamily:"inherit"}}/>
+        <button onClick={search} disabled={loading||!query.trim()} style={{padding:"14px 24px",background:C.accent,border:"none",color:"#fff",borderRadius:10,cursor:"pointer",fontSize:15,fontWeight:700,fontFamily:"inherit",opacity:loading?0.5:1}}>{loading?"Checking...":"Search"}</button>
+      </div>
+      {result&&(
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",boxShadow:C.shadow}}>
+          <div style={{padding:"16px 20px",background:verdictColor+"15",borderBottom:`1px solid ${verdictColor}30`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+            <div>
+              <div style={{fontSize:12,color:C.muted,fontWeight:600,marginBottom:4}}>
+                {result.found_in_db?"✓ Found in ThreatFeed database":"Checked via external providers"}
+                {result.auto_added&&<span style={{marginLeft:8,fontSize:11,color:C.amber,background:C.amber+"20",padding:"1px 6px",borderRadius:3,fontWeight:700}}>AUTO-ADDED TO DB</span>}
+              </div>
+              <div style={{fontSize:15,fontWeight:700,color:C.white}}>{result.value}</div>
+              <div style={{fontSize:12,color:C.muted,marginTop:2}}>{result.ioc_type}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:28,fontWeight:700,color:verdictColor}}>{result.verdict||"—"}</div>
+              <div style={{fontSize:12,color:C.muted}}>Confidence: {result.confidence}</div>
+              {result.found_in_db&&result.last_updated&&<div style={{fontSize:11,color:C.muted}}>Last updated: {new Date(result.last_updated).toLocaleDateString()}</div>}
+            </div>
+          </div>
+          <div style={{padding:20}}>
+            {result.found_in_db&&<div style={{marginBottom:16,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:12}}>{[["Industry",result.industry],["TLP",result.tlp],["Added by",result.added_by],["Tags",(result.tags||[]).join(", ")||"none"]].map(([k,v])=><div key={k}><div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:2}}>{k}</div><div style={{fontSize:13,color:C.text,fontWeight:500}}>{v||"—"}</div></div>)}{result.description&&<div style={{gridColumn:"1/-1"}}><div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:2}}>Description</div><div style={{fontSize:13,color:C.text,lineHeight:1.6}}>{result.description}</div></div>}</div>}
+            {result.reasons?.length>0&&<div style={{marginBottom:16}}><div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Why this verdict</div>{result.reasons.map((r,i)=><div key={i} style={{fontSize:12,color:C.text,marginBottom:4,display:"flex",gap:6}}><span style={{color:C.accentText}}>›</span>{r}</div>)}</div>}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12}}>
+              {[{label:"VirusTotal",d:vt,score:vt.vt_score,detail:`${vt.malicious??0}/${vt.total??0} engines`},{label:"AbuseIPDB",d:abuse,score:abuse.abuse_score,detail:`${abuse.total_reports??0} reports`},{label:"URLhaus",d:uh,score:uh.found===true?85:uh.found===false?0:null,detail:uh.found===true?uh.threat||"Found":uh.found===false?"Not found":"N/A"}].map(({label,d,score,detail})=>{
+                if(!d||d.skipped||d.note)return null;
+                const color=(score||0)>=50?C.red:(score||0)>=20?C.amber:C.green;
+                return(<div key={label} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:8,padding:14}}>
+                  <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8}}>{label}</div>
+                  {d.error?<div style={{fontSize:12,color:C.red}}>{d.error}</div>:(
+                    <>{score!=null&&<div style={{fontSize:22,fontWeight:700,color}}>{score}{label!=="URLhaus"?"%":""}</div>}<div style={{fontSize:11,color:C.muted,marginTop:4}}>{detail}</div>{d.link&&<a href={d.link} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.accentText,display:"block",marginTop:8,fontWeight:600}}>View →</a>}</>
+                  )}
+                </div>);
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── GEO MAP ───────────────────────────────────────────────────────────────────
+
+
 function AssetManager({token,C,onChanged}){
   const [assets,setAssets]=useState([]);
   const [form,setForm]=useState({name:"",vendor:"",version:"",asset_type:"application"});
