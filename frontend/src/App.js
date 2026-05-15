@@ -436,7 +436,15 @@ function AssetManager({token,C,onChanged}){
   const [form,setForm]=useState({name:"",vendor:"",version:"",asset_type:"application"});
   const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState(""); const [err,setErr]=useState("");
-  const ASSET_TYPES=["application","os","firmware","cloud_service","hardware","library","database"];
+  const ASSET_TYPES=[
+    {val:"application",label:"Application"},
+    {val:"os",         label:"Operating System"},
+    {val:"hardware",   label:"Hardware / Network"},
+    {val:"firmware",   label:"Firmware"},
+    {val:"cloud_service",label:"Cloud Service"},
+    {val:"library",    label:"Library / SDK"},
+    {val:"database",   label:"Database"},
+  ];
 
   const load=useCallback(()=>api("/assets",{},token).then(r=>r.ok?r.json():[]).then(setAssets),[token]);
   useEffect(()=>{load();},[load]);
@@ -468,7 +476,8 @@ function AssetManager({token,C,onChanged}){
         <div style={{fontSize:12,color:C.muted,marginBottom:20,lineHeight:1.6}}>
           Enter the software name, vendor, and your <strong style={{color:C.text}}>currently installed version</strong>.
           The system will monitor NVD for CVEs that specifically affect that version.
-          Leave version blank to monitor all versions of the software.
+          Leave version blank to monitor all versions.{" "}
+          <span style={{color:C.amber,fontWeight:500}}>Set Type to "Operating System" for Windows / Linux / macOS.</span>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:4}}>
           <Field label="Name *" C={C}>
@@ -487,7 +496,7 @@ function AssetManager({token,C,onChanged}){
             <select value={form.asset_type} onChange={e=>setForm(p=>({...p,asset_type:e.target.value}))}
               style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
                 color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}>
-              {ASSET_TYPES.map(t=><option key={t} value={t}>{t.replace("_"," ")}</option>)}
+              {ASSET_TYPES.map(t=><option key={t.val} value={t.val}>{t.label}</option>)}
             </select>
           </Field>
         </div>
@@ -525,7 +534,7 @@ function AssetManager({token,C,onChanged}){
                 )}
                 <span style={{fontSize:11,padding:"1px 7px",borderRadius:3,
                   background:C.surfaceHi,color:C.accentText}}>
-                  {asset.asset_type?.replace("_"," ")}
+                  {ASSET_TYPES.find(t=>t.val===asset.asset_type)?.label||asset.asset_type?.replace("_"," ")||"application"}
                 </span>
               </div>
               <div style={{display:"flex",gap:14,fontSize:12,flexWrap:"wrap",marginBottom:4}}>

@@ -1345,40 +1345,96 @@ async def create_asset(body: AssetIn, user=Depends(get_current_user), conn=Depen
         try:
             headers = {"User-Agent":"ThreatFeed-CTI/1.0"}
             if NVD_API_KEY: headers["apiKey"] = NVD_API_KEY
-            query = f"{body.vendor} {body.name}".strip() if body.vendor else body.name
-            async with httpx.AsyncClient(timeout=10) as c:
+
+            name_lc   = body.name.lower().strip()
+            vendor_lc = (body.vendor or "").lower().strip()
+
+            # Build search query — NVD searches across CPE titles
+            query = f"{vendor_lc} {name_lc}".strip()
+
+            async with httpx.AsyncClient(timeout=12) as c:
                 r = await c.get("https://services.nvd.nist.gov/rest/json/cpes/2.0",
-                                params={"keywordSearch": query, "resultsPerPage": 5},
+                                params={"keywordSearch": query, "resultsPerPage": 20},
                                 headers=headers)
+
             if r.status_code == 200:
                 products = r.json().get("products", [])
-                if products:
-                    # Pick the most specific match — prefer ones with version wildcards
-                    best = products[0].get("cpe", {}).get("cpeName", "")
-                    # Prefer entries matching vendor name if provided
-                    if body.vendor:
-                        for p in products:
-                            cpe_name = p.get("cpe", {}).get("cpeName", "").lower()
-                            if body.vendor.lower() in cpe_name:
-                                best = p.get("cpe", {}).get("cpeName", "")
-                                break
-                    # Keep exact version if user specified it, else wildcard for broad match
+
+                # Score each candidate CPE for relevance
+                def score_cpe(p):
+                    cpe_data  = p.get("cpe", {})
+                    cpe_name  = cpe_data.get("cpeName", "").lower()
+                    # get human-readable title
+                    titles    = cpe_data.get("titles", [])
+                    title     = next((t["title"].lower() for t in titles if t.get("lang") == "en"), "")
+                    parts     = cpe_name.split(":")
+                    cpe_part  = parts[2] if len(parts) > 2 else "a"  # a=app, o=os, h=hw
+                    cpe_vendor= parts[3] if len(parts) > 3 else ""
+                    cpe_prod  = parts[4] if len(parts) > 4 else ""
+                    score = 0
+
+                    # Vendor match
+                    if vendor_lc and vendor_lc in cpe_vendor: score += 30
+                    if vendor_lc and vendor_lc in title:       score += 10
+
+                    # Product name match — split into words for partial matching
+                    name_words = re.split(r'[\s_\-]+', name_lc)
+                    for word in name_words:
+                        if len(word) < 3: continue
+                        if word in cpe_prod:  score += 20
+                        if word in title:     score += 10
+
+                    # Exact product name in CPE string
+                    name_slug = re.sub(r'[\s\-]+', '_', name_lc)
+                    if name_slug in cpe_prod: score += 25
+
+                    # Asset type hints
+                    if body.asset_type == "os" and cpe_part == "o":   score += 40
+                    if body.asset_type == "hardware" and cpe_part == "h": score += 40
+                    if body.asset_type in ("application","library","database","cloud_service") and cpe_part == "a": score += 15
+
+                    # Penalise obviously wrong matches
+                    wrong_keywords = ["media_player","office","edge","store","sdk","runtime","driver"]
+                    for kw in wrong_keywords:
+                        if kw in cpe_prod and kw not in name_lc: score -= 30
+
+                    return score
+
+                scored = sorted(products, key=score_cpe, reverse=True)
+                best_product = scored[0] if scored else None
+
+                if best_product:
+                    best = best_product.get("cpe", {}).get("cpeName", "")
                     parts = best.split(":")
-                    if len(parts) >= 6:
-                        if body.version:
-                            parts[5] = body.version   # exact version → NVD filters to affected CVEs
-                        else:
-                            parts[5] = "*"            # no version → monitor all versions
-                        best = ":".join(parts)
-                    cpe = best
+
+                    # Ensure CPE has all 13 fields (cpe:2.3:part:vendor:product:version:update:edition:language:sw_edition:target_sw:target_hw:other)
+                    while len(parts) < 13:
+                        parts.append("*")
+
+                    # Set version field
+                    if body.version:
+                        parts[5] = body.version   # exact installed version
+                    else:
+                        parts[5] = "*"            # all versions
+
+                    # Normalise remaining fields to wildcards
+                    for i in range(6, 13):
+                        if parts[i] in ("", "-"): parts[i] = "*"
+
+                    cpe = ":".join(parts[:13])
+                    print(f"[cpe-autoresolve] '{query}' → {cpe} (score={score_cpe(best_product)})")
+
         except Exception as e:
-            print(f"[cpe-autoresolve] {e}")
-        # If NVD lookup fails, build a best-effort CPE from the name
+            print(f"[cpe-autoresolve] Error: {e}")
+
+        # Fallback: build CPE from name/vendor directly if NVD lookup failed or scored poorly
         if not cpe:
-            safe_vendor = re.sub(r'[^a-z0-9_]', '_', (body.vendor or body.name).lower())
-            safe_name   = re.sub(r'[^a-z0-9_]', '_', body.name.lower())
+            part       = "o" if body.asset_type == "os" else "h" if body.asset_type == "hardware" else "a"
+            safe_vendor = re.sub(r'[^a-z0-9]', '_', vendor_lc or name_lc).strip('_')
+            safe_name   = re.sub(r'[^a-z0-9]', '_', name_lc).strip('_')
             version_part = body.version if body.version else "*"
-            cpe = f"cpe:2.3:a:{safe_vendor}:{safe_name}:{version_part}:*:*:*:*:*:*:*"
+            cpe = f"cpe:2.3:{part}:{safe_vendor}:{safe_name}:{version_part}:*:*:*:*:*:*:*"
+            print(f"[cpe-autoresolve] Fallback CPE: {cpe}")
 
     cur = conn.cursor()
     cur.execute("""INSERT INTO assets (id,name,vendor,version,asset_type,criticality,cpe,description,created_by)
