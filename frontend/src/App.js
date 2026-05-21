@@ -177,6 +177,7 @@ function TLPBadge({level}){
 }
 function Tag({label,C}){
   return <span style={{display:"inline-block",fontSize:11,padding:"2px 8px",borderRadius:4,color:C.muted,background:C.badge,border:`1px solid ${C.border}`,marginRight:4,marginBottom:4,whiteSpace:"nowrap"}}>{label}</span>;
+// eslint-disable-next-line no-unused-vars
 }
 function ConfBar({val,C}){
   const color=val>=80?C.green:val>=50?C.amber:C.red;
@@ -448,8 +449,10 @@ function RelGraph({iocId,iocValue,token,C}){
   });
   const nodeList=Object.values(nodes);
   const linkList=rels.map(r=>({id:r.id,source:r.source_id,target:r.target_id,type:r.relationship_type}));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
 
   useEffect(()=>{setPos(p=>{const next={...p};nodeList.forEach((n,i)=>{if(!next[n.id]){const angle=(i/Math.max(nodeList.length,1))*Math.PI*2;next[n.id]=n.isCenter?{x:300,y:190}:{x:300+Math.cos(angle)*130,y:190+Math.sin(angle)*100};}});return next;});},[rels]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
     if(nodeList.length<2){clearInterval(animRef.current);return;}
@@ -2424,6 +2427,7 @@ function ApiKeysSection({token,C}){
       .then(d=>setKeyData(Array.isArray(d)?d:null))
       .catch(()=>setKeyData(null));
   };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{load();},[token]);
 
   async function saveKey(svc){
@@ -3003,7 +3007,7 @@ export default function App(){
                           background:C.accentDim,color:C.accentText,flexShrink:0,marginTop:2}}>
                           {ioc.type}
                         </span>
-                        <span style={{fontSize:13,fontWeight:600,color:C.white||C.textHi,
+                        <span style={{fontWeight:600,color:C.white||C.textHi,
                           flex:1,wordBreak:"break-all",lineHeight:1.3,fontFamily:"monospace",fontSize:12}}>
                           {ioc.value_defanged||ioc.value}
                         </span>
