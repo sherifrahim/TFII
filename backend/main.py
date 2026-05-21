@@ -1525,7 +1525,200 @@ async def create_asset(body: AssetIn, user=Depends(get_current_user), conn=Depen
     conn.commit()
     return {"id": aid, "name": body.name, "cpe_resolved": cpe}
 
-# NOTE: /assets/cpe-search MUST be before /assets/{asset_id} — FastAPI matches routes top-down
+# ── PRODUCT KNOWLEDGE BASE ────────────────────────────────────────────────────
+# Maps common product names → (vendor, asset_type, cpe_vendor, cpe_product, notes)
+PRODUCT_KB = {
+    # Browsers
+    "chrome":           ("Google",       "application", "google",    "chrome",           "Chromium-based"),
+    "google chrome":    ("Google",       "application", "google",    "chrome",           "Chromium-based"),
+    "chromium":         ("Google",       "application", "google",    "chromium",         None),
+    "edge":             ("Microsoft",    "application", "microsoft", "edge",             "Chromium-based"),
+    "microsoft edge":   ("Microsoft",    "application", "microsoft", "edge",             "Chromium-based"),
+    "firefox":          ("Mozilla",      "application", "mozilla",   "firefox",          None),
+    "safari":           ("Apple",        "application", "apple",     "safari",           None),
+    "opera":            ("Opera",        "application", "opera",     "opera_browser",    "Chromium-based"),
+    "brave":            ("Brave",        "application", "brave",     "brave",            "Chromium-based"),
+
+    # Operating Systems
+    "windows 11":       ("Microsoft",    "os",          "microsoft", "windows_11",       None),
+    "windows 10":       ("Microsoft",    "os",          "microsoft", "windows_10",       None),
+    "windows server":   ("Microsoft",    "os",          "microsoft", "windows_server",   None),
+    "windows server 2022": ("Microsoft", "os",          "microsoft", "windows_server_2022", None),
+    "windows server 2019": ("Microsoft", "os",          "microsoft", "windows_server_2019", None),
+    "ubuntu":           ("Canonical",    "os",          "canonical", "ubuntu_linux",     None),
+    "debian":           ("Debian",       "os",          "debian",    "debian_linux",     None),
+    "centos":           ("Red Hat",      "os",          "centos",    "centos",           "EOL — migrate to Rocky/Alma"),
+    "rhel":             ("Red Hat",      "os",          "redhat",    "enterprise_linux",  None),
+    "red hat":          ("Red Hat",      "os",          "redhat",    "enterprise_linux",  None),
+    "macos":            ("Apple",        "os",          "apple",     "macos",            None),
+    "mac os":           ("Apple",        "os",          "apple",     "macos",            None),
+    "android":          ("Google",       "os",          "google",    "android",          None),
+    "ios":              ("Apple",        "os",          "apple",     "iphone_os",        None),
+
+    # Web Servers / Middleware
+    "nginx":            ("Nginx",        "application", "nginx",     "nginx",            None),
+    "apache":           ("Apache",       "application", "apache",    "http_server",      None),
+    "iis":              ("Microsoft",    "application", "microsoft", "iis",              "Internet Information Services"),
+    "tomcat":           ("Apache",       "application", "apache",    "tomcat",           None),
+
+    # Databases
+    "mysql":            ("Oracle",       "database",    "mysql",     "mysql",            None),
+    "postgresql":       ("PostgreSQL",   "database",    "postgresql","postgresql",       None),
+    "postgres":         ("PostgreSQL",   "database",    "postgresql","postgresql",       None),
+    "mongodb":          ("MongoDB",      "database",    "mongodb",   "mongodb",          None),
+    "mssql":            ("Microsoft",    "database",    "microsoft", "sql_server",       None),
+    "sql server":       ("Microsoft",    "database",    "microsoft", "sql_server",       None),
+    "redis":            ("Redis",        "database",    "redis",     "redis",            None),
+    "elasticsearch":    ("Elastic",      "database",    "elastic",   "elasticsearch",    None),
+
+    # Network / Security
+    "cisco ios":        ("Cisco",        "firmware",    "cisco",     "ios",              None),
+    "cisco ios xe":     ("Cisco",        "firmware",    "cisco",     "ios_xe",           None),
+    "catalyst":         ("Cisco",        "hardware",    "cisco",     "catalyst",         None),
+    "catalyst wd-wan":  ("Cisco",        "hardware",    "cisco",     "catalyst_sd-wan",  None),
+    "catalyst sd-wan":  ("Cisco",        "hardware",    "cisco",     "catalyst_sd-wan",  None),
+    "sd-wan":           ("Cisco",        "hardware",    "cisco",     "sd-wan",           None),
+    "palo alto":        ("Palo Alto Networks", "hardware", "paloaltonetworks", "pan-os", None),
+    "pan-os":           ("Palo Alto Networks", "hardware", "paloaltonetworks", "pan-os", None),
+    "fortios":          ("Fortinet",     "firmware",    "fortinet",  "fortios",          None),
+    "fortigate":        ("Fortinet",     "hardware",    "fortinet",  "fortigate",        None),
+    "openssl":          ("OpenSSL",      "library",     "openssl",   "openssl",          None),
+    "openssh":          ("OpenBSD",      "application", "openbsd",   "openssh",          None),
+    "vmware esxi":      ("VMware",       "firmware",    "vmware",    "esxi",             None),
+    "esxi":             ("VMware",       "firmware",    "vmware",    "esxi",             None),
+    "vcenter":          ("VMware",       "application", "vmware",    "vcenter_server",   None),
+    "exchange":         ("Microsoft",    "application", "microsoft", "exchange_server",  None),
+    "sharepoint":       ("Microsoft",    "application", "microsoft", "sharepoint_server",None),
+
+    # Dev / Cloud
+    "log4j":            ("Apache",       "library",     "apache",    "log4j",            "Log4Shell — CRITICAL"),
+    "spring":           ("VMware",       "library",     "vmware",    "spring_framework",  None),
+    "docker":           ("Docker",       "application", "docker",    "docker",           None),
+    "kubernetes":       ("CNCF",         "application", "kubernetes","kubernetes",       None),
+    "k8s":              ("CNCF",         "application", "kubernetes","kubernetes",       None),
+    "jenkins":          ("Jenkins",      "application", "jenkins",   "jenkins",          None),
+    "gitlab":           ("GitLab",       "application", "gitlab",    "gitlab",           None),
+    "github":           ("GitHub",       "application", "github",    "github_enterprise",None),
+    "jira":             ("Atlassian",    "application", "atlassian", "jira",             None),
+    "confluence":       ("Atlassian",    "application", "atlassian", "confluence",       None),
+}
+
+async def get_nvd_latest_version(cpe_vendor: str, cpe_product: str) -> str:
+    """Query NVD to find the latest-1 version for a product."""
+    try:
+        headers = {"User-Agent": "ThreatFeed-CTI/1.0"}
+        if NVD_API_KEY: headers["apiKey"] = NVD_API_KEY
+        # Search CPE dictionary for this product, sorted by version
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get("https://services.nvd.nist.gov/rest/json/cpes/2.0",
+                params={"keywordSearch": f"{cpe_vendor} {cpe_product}", "resultsPerPage": 20},
+                headers=headers)
+        if r.status_code != 200:
+            return ""
+        products = r.json().get("products", [])
+        # Extract versions from CPE names, filter out wildcards
+        versions = []
+        for p in products:
+            cpe_name = p.get("cpe", {}).get("cpeName", "")
+            parts = cpe_name.split(":")
+            if len(parts) > 5:
+                v = parts[5]
+                if v and v not in ("*", "-", "") and any(c.isdigit() for c in v):
+                    # Try to parse as version tuple for sorting
+                    try:
+                        versions.append(v)
+                    except Exception:
+                        pass
+        if not versions:
+            return ""
+        # Sort versions — simple lexicographic works well for semver-ish
+        def version_key(v):
+            try:
+                return tuple(int(x) for x in re.split(r'[.\-_]', v) if x.isdigit())
+            except Exception:
+                return (0,)
+        versions.sort(key=version_key, reverse=True)
+        # Return latest-1 (index 1 = second newest = "what you probably have")
+        if len(versions) >= 2:
+            return versions[1]
+        elif versions:
+            return versions[0]
+    except Exception as e:
+        print(f"[autofill] version lookup error: {e}")
+    return ""
+
+@app.get("/assets/autofill")
+async def autofill_asset(name: str, user=Depends(get_current_user)):
+    """
+    Given a product name, return suggested vendor, type, version, cpe, and notes.
+    Priority: local knowledge base → NVD CPE search.
+    Version defaults to latest-1 if not known.
+    """
+    name_lc = name.lower().strip()
+
+    # ── 1. Local knowledge base (instant, no API call) ──────────────────────
+    kb_match = None
+    # Try exact match first, then partial
+    for key, val in PRODUCT_KB.items():
+        if name_lc == key:
+            kb_match = val
+            break
+    if not kb_match:
+        for key, val in PRODUCT_KB.items():
+            if key in name_lc or name_lc in key:
+                kb_match = val
+                break
+
+    if kb_match:
+        vendor, asset_type, cpe_vendor, cpe_product, notes = kb_match
+        version = await get_nvd_latest_version(cpe_vendor, cpe_product)
+        return {
+            "found":      True,
+            "source":     "knowledge_base",
+            "vendor":     vendor,
+            "asset_type": asset_type,
+            "version":    version,
+            "notes":      notes,
+            "cpe_hint":   f"cpe:2.3:{'o' if asset_type=='os' else 'h' if asset_type in ('hardware','firmware') else 'a'}:{cpe_vendor}:{cpe_product}:*:*:*:*:*:*:*:*",
+            "confidence": "high",
+        }
+
+    # ── 2. NVD CPE dictionary lookup ─────────────────────────────────────────
+    try:
+        headers = {"User-Agent": "ThreatFeed-CTI/1.0"}
+        if NVD_API_KEY: headers["apiKey"] = NVD_API_KEY
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get("https://services.nvd.nist.gov/rest/json/cpes/2.0",
+                params={"keywordSearch": name, "resultsPerPage": 10},
+                headers=headers)
+        if r.status_code == 200 and r.json().get("products"):
+            products = r.json()["products"]
+            best = products[0]
+            cpe_name = best.get("cpe", {}).get("cpeName", "")
+            parts    = cpe_name.split(":")
+            cpe_type  = parts[2] if len(parts) > 2 else "a"
+            cpe_vendor= parts[3].replace("_"," ").title() if len(parts) > 3 else ""
+            cpe_prod  = parts[4] if len(parts) > 4 else ""
+            asset_type_map = {"o": "os", "h": "hardware", "a": "application"}
+            asset_type = asset_type_map.get(cpe_type, "application")
+            version = await get_nvd_latest_version(parts[3] if len(parts)>3 else "", cpe_prod)
+            return {
+                "found":      True,
+                "source":     "nvd",
+                "vendor":     cpe_vendor,
+                "asset_type": asset_type,
+                "version":    version,
+                "notes":      None,
+                "cpe_hint":   cpe_name,
+                "confidence": "medium",
+            }
+    except Exception as e:
+        print(f"[autofill] NVD lookup error: {e}")
+
+    return {"found": False, "source": None, "vendor": "", "asset_type": "application",
+            "version": "", "notes": None, "cpe_hint": "", "confidence": "none"}
+
+
 # and would otherwise treat "cpe-search" as an asset_id path parameter.
 @app.get("/assets/cpe-search")
 async def cpe_search(q: str, user=Depends(get_current_user)):

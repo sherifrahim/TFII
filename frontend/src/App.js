@@ -725,17 +725,229 @@ function PublicSearch({C}){
 function AssetManager({token,C,onChanged}){
   const [assets,setAssets]=useState([]);
   const [form,setForm]=useState({name:"",vendor:"",version:"",asset_type:"application"});
+  const [suggested,setSuggested]=useState({}); // tracks which fields were auto-filled
+  const [autofilling,setAutofilling]=useState(false);
+  const [autofillNote,setAutofillNote]=useState("");
   const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState(""); const [err,setErr]=useState("");
+  const debounceRef=useRef(null);
+
   const ASSET_TYPES=[
-    {val:"application",label:"Application"},
-    {val:"os",         label:"Operating System"},
-    {val:"hardware",   label:"Hardware / Network"},
-    {val:"firmware",   label:"Firmware"},
+    {val:"application",  label:"Application"},
+    {val:"os",           label:"Operating System"},
+    {val:"hardware",     label:"Hardware / Network"},
+    {val:"firmware",     label:"Firmware"},
     {val:"cloud_service",label:"Cloud Service"},
-    {val:"library",    label:"Library / SDK"},
-    {val:"database",   label:"Database"},
+    {val:"library",      label:"Library / SDK"},
+    {val:"database",     label:"Database"},
   ];
+
+  const load=useCallback(()=>api("/assets",{},token).then(r=>r.ok?r.json():[]).then(setAssets),[token]);
+  useEffect(()=>{load();},[load]);
+
+  // Auto-fill when name changes — debounced 600ms
+  function handleNameChange(val){
+    setForm(p=>({...p,name:val}));
+    setSuggested({});setAutofillNote("");
+    if(debounceRef.current) clearTimeout(debounceRef.current);
+    if(val.trim().length<2) return;
+    debounceRef.current=setTimeout(()=>doAutofill(val),600);
+  }
+
+  async function doAutofill(name){
+    setAutofilling(true);
+    try{
+      const r=await api(`/assets/autofill?name=${encodeURIComponent(name)}`,{},token);
+      if(!r.ok){setAutofilling(false);return;}
+      const d=await r.json();
+      if(!d.found){setAutofilling(false);return;}
+      const newSuggested={};
+      setForm(prev=>{
+        const next={...prev};
+        // Only fill if field is currently empty
+        if(!prev.vendor&&d.vendor){next.vendor=d.vendor;newSuggested.vendor=true;}
+        if(!prev.version&&d.version){next.version=d.version;newSuggested.version=true;}
+        if(prev.asset_type==="application"&&d.asset_type!=="application"){
+          next.asset_type=d.asset_type;newSuggested.asset_type=true;
+        }
+        return next;
+      });
+      setSuggested(newSuggested);
+      if(d.notes) setAutofillNote(d.notes);
+    }catch(e){}
+    setAutofilling(false);
+  }
+
+  function clearSuggested(field){
+    setSuggested(p=>({...p,[field]:false}));
+  }
+
+  async function addAsset(){
+    if(!form.name.trim())return;
+    setSaving(true);setMsg("");setErr("");
+    try{
+      const r=await api("/assets",{method:"POST",
+        body:JSON.stringify({...form,cpe:"",criticality:"high",description:""})},token);
+      if(r.ok){
+        setMsg(`✓ "${form.name}" added and queued for CVE monitoring.`);
+        setForm({name:"",vendor:"",version:"",asset_type:"application"});
+        setSuggested({});setAutofillNote("");
+        load();if(onChanged)onChanged();
+      }else{
+        const e=await r.json();
+        setErr(`Failed: ${e.detail||r.status}`);
+      }
+    }catch(e){setErr("Cannot reach server — is the backend running?");}
+    setSaving(false);
+  }
+
+  // Suggested field wrapper — shows teal dot + "suggested" label + edit clears suggestion
+  const SuggestedField=({field,label,children})=>(
+    <Field label={
+      <div style={{display:"flex",alignItems:"center",gap:6}}>
+        <span>{label}</span>
+        {suggested[field]&&(
+          <span style={{fontSize:10,padding:"1px 6px",borderRadius:3,
+            background:C.accent+"20",color:C.accentText,fontWeight:700,
+            letterSpacing:"0.03em"}}>
+            ✦ auto-filled
+          </span>
+        )}
+      </div>
+    } C={C}>
+      {children}
+    </Field>
+  );
+
+  return(
+    <div style={{maxWidth:800}}>
+      <Card C={C} style={{marginBottom:24}}>
+        <div style={{fontSize:14,fontWeight:700,color:C.white||C.textHi,marginBottom:4}}>
+          Add Software / Service to Monitor
+        </div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:20,lineHeight:1.6}}>
+          Type a product name — vendor, type, and version are filled automatically.
+          {" "}<span style={{color:C.amber,fontWeight:500}}>
+            Version defaults to latest−1 (the version before current release).
+          </span>
+          {" "}Override any field freely.
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:4}}>
+          {/* Name — triggers autofill */}
+          <Field label={
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span>Product / Software Name *</span>
+              {autofilling&&<span style={{fontSize:10,color:C.accentText,fontWeight:600}}>
+                looking up...
+              </span>}
+            </div>
+          } C={C}>
+            <Inp value={form.name} onChange={handleNameChange}
+              placeholder="e.g. Chrome, Cisco Catalyst, Windows 11, OpenSSL" C={C}/>
+          </Field>
+
+          <SuggestedField field="vendor" label="Vendor">
+            <Inp value={form.vendor} onChange={v=>{setForm(p=>({...p,vendor:v}));clearSuggested("vendor");}}
+              placeholder="e.g. Google, Cisco, Microsoft" C={C}/>
+          </SuggestedField>
+
+          <SuggestedField field="version" label="Installed Version">
+            <Inp value={form.version}
+              onChange={v=>{setForm(p=>({...p,version:v}));clearSuggested("version");}}
+              placeholder="e.g. 124.0.6367.60 — auto-filled with latest−1" C={C}/>
+          </SuggestedField>
+
+          <SuggestedField field="asset_type" label="Type">
+            <select value={form.asset_type}
+              onChange={e=>{setForm(p=>({...p,asset_type:e.target.value}));clearSuggested("asset_type");}}
+              style={{width:"100%",background:C.inputBg,border:`1px solid ${
+                suggested.asset_type?C.accent:C.inputBorder}`,
+                color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:14,
+                outline:"none",fontFamily:"inherit",
+                boxShadow:suggested.asset_type?`0 0 0 2px ${C.accent}20`:"none"}}>
+              {ASSET_TYPES.map(t=><option key={t.val} value={t.val}>{t.label}</option>)}
+            </select>
+          </SuggestedField>
+        </div>
+
+        {/* Auto-fill note (e.g. "Log4Shell — CRITICAL" or "EOL") */}
+        {autofillNote&&(
+          <div style={{marginBottom:12,padding:"8px 14px",background:C.amber+"12",
+            border:`1px solid ${C.amber}40`,borderRadius:7,fontSize:12,color:C.amber,
+            display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span>ℹ {autofillNote}</span>
+            <button onClick={()=>setAutofillNote("")}
+              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16,padding:0}}>×</button>
+          </div>
+        )}
+
+        {err&&<div style={{fontSize:12,color:C.red,margin:"10px 0",padding:"10px 14px",
+          background:C.red+"10",borderRadius:6,border:`1px solid ${C.red}30`}}>{err}</div>}
+        {msg&&<div style={{fontSize:12,color:C.green,margin:"10px 0",padding:"10px 14px",
+          background:C.green+"10",borderRadius:6,border:`1px solid ${C.green}30`}}>{msg}</div>}
+
+        <Btn onClick={addAsset} disabled={!form.name.trim()||saving} C={C}>
+          {saving?"Adding...":"Add to Monitor List"}
+        </Btn>
+      </Card>
+
+      <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,
+        textTransform:"uppercase",marginBottom:12}}>
+        Monitored Assets ({assets.length})
+      </div>
+      {assets.length===0&&(
+        <div style={{textAlign:"center",padding:40,color:C.muted,fontSize:13,
+          background:C.surface,border:`1px solid ${C.border}`,borderRadius:12}}>
+          No assets yet. Add a software or service above to start CVE monitoring.
+        </div>
+      )}
+      {assets.map(asset=>(
+        <div key={asset.id} style={{background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:12,padding:18,marginBottom:12,boxShadow:C.shadow}}>
+          <div style={{display:"flex",justifyContent:"space-between",
+            alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+                <span style={{fontSize:15,fontWeight:700,color:C.white||C.textHi}}>{asset.name}</span>
+                {asset.vendor&&<span style={{fontSize:12,color:C.muted}}>{asset.vendor}</span>}
+                {asset.version&&(
+                  <span style={{fontSize:11,padding:"1px 7px",borderRadius:3,
+                    background:C.badge||C.surfaceHi,color:C.muted,fontFamily:"monospace"}}>
+                    v{asset.version}
+                  </span>
+                )}
+                <span style={{fontSize:11,padding:"1px 7px",borderRadius:3,
+                  background:C.surfaceHi,color:C.accentText}}>
+                  {ASSET_TYPES.find(t=>t.val===asset.asset_type)?.label||asset.asset_type||"application"}
+                </span>
+              </div>
+              <div style={{display:"flex",gap:14,fontSize:12,flexWrap:"wrap",marginBottom:4}}>
+                <span style={{color:C.text}}>{asset.cve_count||0} CVEs found</span>
+                <span style={{color:C.muted}}>
+                  {asset.version?`Monitoring v${asset.version}`:"Monitoring all versions"}
+                </span>
+                {(asset.kev_unpatched||0)>0&&(
+                  <span style={{color:C.red,fontWeight:700}}>🚨 {asset.kev_unpatched} KEV unpatched</span>
+                )}
+                {(asset.critical_unpatched||0)>0&&(
+                  <span style={{color:C.amber,fontWeight:600}}>⚠ {asset.critical_unpatched} critical</span>
+                )}
+              </div>
+              {asset.cpe&&(
+                <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",
+                  marginTop:2,opacity:.6,wordBreak:"break-all"}}>{asset.cpe}</div>
+              )}
+            </div>
+            <Btn onClick={()=>{api(`/assets/${asset.id}`,{method:"DELETE"},token)
+              .then(()=>{load();if(onChanged)onChanged();});}}
+              variant="danger" C={C} sm>Remove</Btn>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
   const load=useCallback(()=>api("/assets",{},token).then(r=>r.ok?r.json():[]).then(setAssets),[token]);
   useEffect(()=>{load();},[load]);
