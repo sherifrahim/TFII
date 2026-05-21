@@ -949,26 +949,6 @@ function AssetManager({token,C,onChanged}){
   );
 }
 
-  const load=useCallback(()=>api("/assets",{},token).then(r=>r.ok?r.json():[]).then(setAssets),[token]);
-  useEffect(()=>{load();},[load]);
-
-  async function addAsset(){
-    if(!form.name.trim())return;
-    setSaving(true);setMsg("");setErr("");
-    try{
-      const r=await api("/assets",{method:"POST",body:JSON.stringify({...form,cpe:"",criticality:"high",description:""})},token);
-      if(r.ok){
-        const d=await r.json();
-        setMsg(`✓ "${form.name}" added and queued for CVE monitoring.`);
-        setForm({name:"",vendor:"",version:"",asset_type:"application"});
-        load();if(onChanged)onChanged();
-      }else{
-        const e=await r.json();
-        setErr(`Failed: ${e.detail||r.status}`);
-      }
-    }catch(e){setErr("Cannot reach server — is the backend running?");}
-    setSaving(false);
-  }
 
 // ── CVE DASHBOARD ─────────────────────────────────────────────────────────────
 function CVEDashboard({token,C}){
