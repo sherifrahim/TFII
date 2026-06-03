@@ -2470,6 +2470,7 @@ function ApiKeyModal({token, C, onClose}){
   const [keys,setKeys]=useState({});
   const [saving,setSaving]=useState({});
   const [saved,setSaved]=useState({});
+  const [existingKeys,setExistingKeys]=useState({});
   const [quota,setQuota]=useState(null);
 
   const SERVICES=[
@@ -2482,6 +2483,14 @@ function ApiKeyModal({token, C, onClose}){
   ];
 
   useEffect(()=>{
+    // Load existing keys so we don't prompt for ones already saved
+    api("/users/me/api-keys",{},token).then(r=>r.ok?r.json():null).then(d=>{
+      if(d){
+        const existing={};
+        d.forEach(k=>{ if(k.has_key) existing[k.service]=true; });
+        setExistingKeys(existing);
+      }
+    }).catch(()=>{});
     api("/users/me/quota",{},token).then(r=>r.ok?r.json():null).then(q=>{if(q)setQuota(q);});
   },[token]);
 
@@ -2525,35 +2534,38 @@ function ApiKeyModal({token, C, onClose}){
 
         {/* Service list */}
         <div style={{padding:"0 24px"}}>
-          {SERVICES.map(svc=>(
+          {SERVICES.map(svc=>{
+            const alreadySaved = existingKeys[svc.id] || saved[svc.id];
+            return(
             <div key={svc.id} style={{marginBottom:16,padding:14,background:C.surfaceHi,
-              border:`1px solid ${saved[svc.id]?C.green:C.border}`,borderRadius:10,
-              transition:"border-color .2s"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+              border:`1px solid ${alreadySaved?C.green:C.border}`,borderRadius:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",
+                alignItems:"flex-start",marginBottom:alreadySaved?0:8}}>
                 <div>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{fontSize:13,fontWeight:700,color:C.white}}>{svc.name}</span>
-                    {saved[svc.id]&&<span style={{fontSize:11,color:C.green,fontWeight:700}}>✓ Saved</span>}
-                    {quota&&quota[svc.id]&&!quota[svc.id].unlimited&&!saved[svc.id]&&(
-                      <span style={{fontSize:11,padding:"1px 6px",borderRadius:3,
-                        background:quota[svc.id].quota_remaining<=3?C.red+"20":C.accentDim,
-                        color:quota[svc.id].quota_remaining<=3?C.red:C.accentText,fontWeight:600}}>
-                        {quota[svc.id].quota_remaining}/{quota[svc.id].quota_total} free today
-                      </span>
-                    )}
-                    {quota&&quota[svc.id]?.unlimited&&!saved[svc.id]&&(
-                      <span style={{fontSize:11,color:C.green,fontWeight:600}}>✓ Key active</span>
-                    )}
+                    <span style={{fontSize:13,fontWeight:700,color:C.white||C.textHi}}>{svc.name}</span>
+                    {alreadySaved
+                      ? <span style={{fontSize:11,color:C.green,fontWeight:700}}>✓ Already saved</span>
+                      : quota&&quota[svc.id]&&!quota[svc.id].unlimited&&(
+                          <span style={{fontSize:11,padding:"1px 6px",borderRadius:3,
+                            background:quota[svc.id].quota_remaining<=3?C.red+"20":C.accentDim,
+                            color:quota[svc.id].quota_remaining<=3?C.red:C.accentText,fontWeight:600}}>
+                            {quota[svc.id].quota_remaining}/{quota[svc.id].quota_total} free today
+                          </span>
+                        )
+                    }
                   </div>
                   <div style={{fontSize:11,color:C.muted,marginTop:2}}>{svc.desc}</div>
                 </div>
-                <a href={svc.url} target="_blank" rel="noreferrer"
-                  style={{fontSize:11,color:C.accentText,fontWeight:600,whiteSpace:"nowrap",marginLeft:8}}>
-                  Get key →
-                </a>
+                {!alreadySaved&&(
+                  <a href={svc.url} target="_blank" rel="noreferrer"
+                    style={{fontSize:11,color:C.accentText,fontWeight:600,whiteSpace:"nowrap",marginLeft:8}}>
+                    Get key →
+                  </a>
+                )}
               </div>
-              {!saved[svc.id]&&(
-                <div style={{display:"flex",gap:8}}>
+              {!alreadySaved&&(
+                <div style={{display:"flex",gap:8,marginTop:8}}>
                   <input value={keys[svc.id]||""} onChange={e=>setKeys(p=>({...p,[svc.id]:e.target.value}))}
                     onKeyDown={e=>{if(e.key==="Enter")saveKey(svc.id);}}
                     placeholder={svc.placeholder}
@@ -2570,7 +2582,8 @@ function ApiKeyModal({token, C, onClose}){
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Footer */}
@@ -2583,7 +2596,7 @@ function ApiKeyModal({token, C, onClose}){
             style={{padding:"8px 20px",background:C.accentDim,border:`1px solid ${C.accent}40`,
               color:C.accentText,borderRadius:8,cursor:"pointer",fontSize:13,
               fontFamily:"inherit",fontWeight:600}}>
-            {Object.keys(saved).length>0?"Done":"Skip for now"}
+            {Object.keys(saved).length>0||Object.keys(existingKeys).length>0?"Done":"Skip for now"}
           </button>
         </div>
       </div>
@@ -2894,11 +2907,19 @@ export default function App(){
     api("/auth/me",{},token).then(r=>r.ok?r.json():null).then(d=>{
       if(d){
         setMe(d);
-        // Show API key modal on every login until they have at least one key saved
-        api("/users/me/api-keys",{},token).then(r=>r.ok?r.json():[]).then(keys=>{
-          const hasAny = Array.isArray(keys) && keys.some(k=>k.has_key);
-          if(!hasAny) setShowApiKeyModal(true);
-        }).catch(()=>{}); // backend not deployed yet — fail silently
+        // Only show API key modal if we can CONFIRM no keys are saved.
+        // If the API call fails for any reason, don't show it (avoids false positives).
+        api("/users/me/api-keys",{},token)
+          .then(r=>{
+            if(!r.ok) return; // API error — don't show modal
+            return r.json();
+          })
+          .then(keys=>{
+            if(!keys) return; // failed above
+            const hasAny = Array.isArray(keys) && keys.some(k=>k.has_key);
+            if(!hasAny) setShowApiKeyModal(true);
+          })
+          .catch(()=>{}); // network error — don't show modal
       }
     });
   },[token]);
