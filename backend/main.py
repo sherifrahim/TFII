@@ -706,33 +706,102 @@ def record_score(conn, ioc_id, old_score, new_score, reasons, by="system"):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 PATCH_REF_TAGS = {"Patch","Vendor Advisory","Third Party Advisory","Mitigation"}
-TRUSTED_DOMAINS = ["nvd.nist.gov","cisa.gov","microsoft.com","cisco.com","ubuntu.com",
-                   "debian.org","redhat.com","github.com","kb.cert.org","support.apple.com",
-                   "oracle.com","vmware.com","f5.com","paloaltonetworks.com"]
+# Domains that are security/vendor/advisory sites — never IOCs
+TRUSTED_DOMAINS = [
+    # Government & standards
+    "nvd.nist.gov","cisa.gov","cert.org","kb.cert.org","us-cert.gov","nist.gov",
+    # Vendors
+    "microsoft.com","cisco.com","apple.com","support.apple.com","oracle.com",
+    "vmware.com","f5.com","paloaltonetworks.com","fortinet.com","juniper.net",
+    "adobe.com","sap.com","ibm.com","hp.com","dell.com","lenovo.com",
+    # Linux / open source
+    "ubuntu.com","debian.org","redhat.com","centos.org","fedoraproject.org",
+    "opensuse.org","archlinux.org","gentoo.org","kernel.org",
+    # Security research / advisory archives — the ones in the screenshot
+    "securityfocus.com","secunia.com","osvdb.org","openwall.com",
+    "marc.info","archives.neohapsis.com","packetstormsecurity.com",
+    "exploit-db.com","full-disclosure","bugtraq","vulnwatch",
+    "iss.net","secnet.com","auscert.org","xforce.ibmcloud.com",
+    "calderasystems.com","linux-mandrake.com","linuxsecurity.com",
+    "novell.com","openbsd.org","freebsd.org","netbsd.org",
+    "secunia.com","vupen.com","zerodayinitiative.com",
+    # Code / issue trackers
+    "github.com","gitlab.com","bitbucket.org","sourceforge.net",
+    # CVE / vuln databases
+    "cve.org","cvedetails.com","cve.mitre.org","mitre.org",
+    # Misc common false positives
+    "w3.org","ietf.org","rfc-editor.org","iana.org",
+]
 
-def detect_patch(references: list) -> tuple:
-    for ref in references:
-        tags = set(ref.get("tags",[]))
-        url  = ref.get("url","")
-        if tags & PATCH_REF_TAGS:
-            return True, url
-        if any(kw in url.lower() for kw in ["advisory","security","patch","update","bulletin","kb"]):
-            return True, url
-    return False, None
+# Private/reserved IP ranges — never IOCs
+PRIVATE_IP_PREFIXES = ("10.","192.168.","172.16.","172.17.","172.18.","172.19.",
+                       "172.20.","172.21.","172.22.","172.23.","172.24.","172.25.",
+                       "172.26.","172.27.","172.28.","172.29.","172.30.","172.31.",
+                       "169.254.","100.64.")
 
-def extract_iocs_from_text(text: str) -> list:
+def extract_iocs_from_text(text: str, include_urls: bool = False) -> list:
+    """
+    Extract IOCs from free text.
+    - IPs: only public, routable IPs (not private/reserved ranges)
+    - URLs: only if include_urls=True AND not from a trusted/advisory domain
+    - Reference URLs from NVD CVE entries should NEVER be passed here
+    """
     found = []
+
+    # Extract public IPv4 addresses
     for ip in re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', text):
         parts = ip.split('.')
-        if all(0 <= int(p) <= 255 for p in parts) and ip not in ('0.0.0.0','127.0.0.1','255.255.255.255'):
-            found.append(("IPv4", ip))
-    for url in re.findall(r'https?://[^\s\'"<>]+', text):
-        found.append(("URL", url.rstrip('.,)')))
+        if not all(0 <= int(p) <= 255 for p in parts): continue
+        if ip in ('0.0.0.0','127.0.0.1','255.255.255.255','8.8.8.8','1.1.1.1'): continue
+        if ip.startswith(PRIVATE_IP_PREFIXES): continue
+        found.append(("IPv4", ip))
+
+    # URLs only when explicitly requested (not for CVE references)
+    if include_urls:
+        for url in re.findall(r'https?://[^\s\'"<>]+', text):
+            url = url.rstrip('.,)')
+            if any(td in url for td in TRUSTED_DOMAINS): continue
+            found.append(("URL", url))
+
     return found
 
 def auto_add_iocs_from_cve(conn, cve_id: str, cve_desc: str, refs: list, asset_name: str) -> list:
-    all_text = cve_desc + " " + " ".join(r.get("url","") for r in refs)
-    candidates = extract_iocs_from_text(all_text)
+    """
+    Extract genuine IOCs from CVE description text only.
+    Never extract from reference URLs — those are advisory links, not IOCs.
+    Only extracts IPs from description; URL extraction from CVE text is disabled
+    because CVE descriptions rarely contain malicious URLs worth tracking.
+    """
+    # Only use description text — refs are vendor/advisory links, not IOCs
+    candidates = extract_iocs_from_text(cve_desc, include_urls=False)
+    if not candidates:
+        return []
+
+    added = []; cur = conn.cursor()
+    for ioc_type, value in candidates:
+        if any(td in value for td in TRUSTED_DOMAINS): continue
+        cur.execute("SELECT id FROM iocs WHERE value = %s", (value,))
+        existing = cur.fetchone()
+        if existing:
+            try: cur.execute("INSERT INTO cve_ioc_links (cve_id,ioc_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                             (cve_id, existing[0]))
+            except Exception: pass
+            continue
+        ioc_id = f"indicator--{uuid.uuid4()}"
+        defanged = defang(value, ioc_type)
+        try:
+            cur.execute("""INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,description,tags,enrichment)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+                (ioc_id, ioc_type, value, defanged, "General", "AMBER", 60,
+                 f"Auto-extracted from {cve_id} — {asset_name}",
+                 [cve_id.lower(), "auto-extracted", "cve"],
+                 psycopg2.extras.Json({"note": f"Auto-extracted from {cve_id}",
+                                       "enriched_at": datetime.now(timezone.utc).isoformat()})))
+            cur.execute("INSERT INTO cve_ioc_links (cve_id,ioc_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                        (cve_id, ioc_id))
+            added.append(value)
+        except Exception: pass
+    return added
     added = []; cur = conn.cursor()
     for ioc_type, value in candidates:
         if any(td in value for td in TRUSTED_DOMAINS): continue
@@ -955,7 +1024,7 @@ async def poll_cves_for_asset(asset: dict, kev_catalog: dict, conn) -> dict:
                              "score":parsed["cvss_score"],"kev":bool(kev_info),
                              "asset":asset_name,"patch":parsed["patch_available"],
                              "patch_url":parsed["patch_url"]})
-            extracted = extract_iocs_from_text(parsed["description"] + " ".join(r.get("url","") for r in parsed["references"]))
+            extracted = extract_iocs_from_text(parsed["description"], include_urls=False)
             ioc_values = []
             for ioc_type, value in extracted:
                 if any(td in value for td in TRUSTED_DOMAINS): continue
@@ -1062,6 +1131,34 @@ async def signup(request: Request, body: SignupRequest, conn=Depends(get_db)):
 @app.get("/auth/me")
 def me(user=Depends(get_current_user)):
     return {"id":user["id"],"username":user["username"],"role":user["role"]}
+
+@app.post("/admin/cleanup-advisory-iocs")
+def cleanup_advisory_iocs(admin=Depends(require_admin), conn=Depends(get_db)):
+    """Remove IOCs that were incorrectly extracted from CVE reference URLs (advisory/vendor links)."""
+    cur = conn.cursor()
+    # Find IOCs tagged 'auto-extracted' that are advisory/vendor domains
+    cur.execute("SELECT id, value FROM iocs WHERE 'auto-extracted' = ANY(tags) AND type = 'URL'")
+    rows = cur.fetchall()
+    removed = 0
+    for ioc_id, value in rows:
+        if any(td in (value or "") for td in TRUSTED_DOMAINS):
+            cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
+            cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
+            removed += 1
+    # Also clean up Bugtraq, SecurityFocus, mailing list archive URLs
+    advisory_patterns = ["bugtraq","securityfocus","marc.info","neohapsis","vulnwatch",
+                         "iss.net","linuxsecurity","calderasystems","linux-mandrake",
+                         "openwall","secunia","osvdb","auscert","secnet","xforce"]
+    cur.execute("SELECT id, value FROM iocs WHERE 'auto-extracted' = ANY(tags) AND type = 'URL'")
+    rows = cur.fetchall()
+    for ioc_id, value in rows:
+        if any(p in (value or "").lower() for p in advisory_patterns):
+            cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
+            cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
+            removed += 1
+    conn.commit()
+    return {"status": "done", "removed": removed,
+            "message": f"Removed {removed} advisory URLs that were incorrectly tagged as IOCs"}
 
 @app.post("/auth/change-password")
 def change_password(body: PasswordChange, user=Depends(get_current_user), conn=Depends(get_db)):
