@@ -2428,7 +2428,215 @@ async def search_cves(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MITRE ATT&CK ACTOR LOOKUP
+# ═══════════════════════════════════════════════════════════════════════════════
+# MULTI-SOURCE CVE LOOKUP
+# ═══════════════════════════════════════════════════════════════════════════════
+
+CVE_ID_RE = re.compile(r'^CVE-\d{4}-\d{4,}$', re.IGNORECASE)
+
+async def lookup_nvd(cve_id: str, headers: dict) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=12) as c:
+            r = await c.get(f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}",
+                            headers=headers)
+        if r.status_code != 200:
+            return {"source":"NVD","status":"error","error":f"HTTP {r.status_code}"}
+        vulns = r.json().get("vulnerabilities",[])
+        if not vulns:
+            return {"source":"NVD","status":"not_found"}
+        cve = vulns[0].get("cve",{})
+        desc = next((d["value"] for d in cve.get("descriptions",[]) if d.get("lang")=="en"),"")
+        metrics = cve.get("metrics",{})
+        cvss = None
+        for key in ["cvssMetricV31","cvssMetricV30","cvssMetricV2"]:
+            if metrics.get(key):
+                m = metrics[key][0].get("cvssData",{})
+                cvss = {"score": m.get("baseScore"), "severity": m.get("baseSeverity"),
+                        "vector": m.get("vectorString"), "version": m.get("version")}
+                break
+        refs = [{"url":r.get("url",""),"tags":r.get("tags",[])}
+                for r in cve.get("references",[]) if r.get("url")]
+        cpes = []
+        for cfg in cve.get("configurations",[]):
+            for node in cfg.get("nodes",[]):
+                for match in node.get("cpeMatch",[]):
+                    if match.get("vulnerable") and match.get("criteria"):
+                        cpes.append(match["criteria"])
+        weaknesses = [w.get("description",[{}])[0].get("value","")
+                      for w in cve.get("weaknesses",[]) if w.get("description")]
+        return {
+            "source":      "NVD",
+            "status":      "ok",
+            "url":         f"https://nvd.nist.gov/vuln/detail/{cve_id}",
+            "description": desc,
+            "published":   cve.get("published","")[:10],
+            "modified":    cve.get("lastModified","")[:10],
+            "cvss":        cvss,
+            "references":  refs[:15],
+            "affected_cpes": list(dict.fromkeys(cpes))[:10],
+            "weaknesses":  weaknesses[:5],
+            "status_nvd":  cve.get("vulnStatus",""),
+        }
+    except Exception as e:
+        return {"source":"NVD","status":"error","error":str(e)}
+
+async def lookup_cve_org(cve_id: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=12,
+            headers={"User-Agent":"ThreatFeed-CTI/1.0"}) as c:
+            r = await c.get(f"https://cveawg.mitre.org/api/cve/{cve_id}")
+        if r.status_code == 404:
+            return {"source":"CVE.org","status":"not_found"}
+        if r.status_code != 200:
+            return {"source":"CVE.org","status":"error","error":f"HTTP {r.status_code}"}
+        data = r.json()
+        cna = data.get("containers",{}).get("cna",{})
+        desc = next((d.get("value","") for d in cna.get("descriptions",[]) if d.get("lang","").startswith("en")),"")
+        refs = [{"url":r.get("url",""),"tags":r.get("tags",[])}
+                for r in cna.get("references",[]) if r.get("url")]
+        affected = []
+        for a in cna.get("affected",[]):
+            vendor  = a.get("vendor","")
+            product = a.get("product","")
+            versions= [v.get("version","") for v in a.get("versions",[])
+                       if v.get("status") in ("affected","lessThan","lessThanOrEqual")]
+            if vendor or product:
+                affected.append(f"{vendor} {product}".strip() +
+                                 (f" ({', '.join(versions[:3])})" if versions else ""))
+        state = data.get("cveMetadata",{}).get("state","")
+        return {
+            "source":    "CVE.org",
+            "status":    "ok",
+            "url":       f"https://www.cve.org/CVERecord?id={cve_id}",
+            "description": desc,
+            "published": data.get("cveMetadata",{}).get("datePublished","")[:10],
+            "state":     state,
+            "references": refs[:15],
+            "affected":  affected[:8],
+        }
+    except Exception as e:
+        return {"source":"CVE.org","status":"error","error":str(e)}
+
+async def lookup_osv(cve_id: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=12,
+            headers={"User-Agent":"ThreatFeed-CTI/1.0"}) as c:
+            r = await c.post("https://api.osv.dev/v1/query",
+                             json={"cve_id": cve_id})
+        if r.status_code != 200:
+            return {"source":"OSV","status":"error","error":f"HTTP {r.status_code}"}
+        vulns = r.json().get("vulns",[])
+        if not vulns:
+            return {"source":"OSV","status":"not_found"}
+        items = []
+        for v in vulns[:5]:
+            pkgs = []
+            for a in v.get("affected",[]):
+                pkg = a.get("package",{})
+                ecosystem = pkg.get("ecosystem","")
+                name = pkg.get("name","")
+                fix_versions = []
+                for rng in a.get("ranges",[]):
+                    for ev in rng.get("events",[]):
+                        if "fixed" in ev:
+                            fix_versions.append(ev["fixed"])
+                pkgs.append({
+                    "ecosystem": ecosystem,
+                    "name":      name,
+                    "fix":       fix_versions[0] if fix_versions else None,
+                })
+            refs = [r.get("url","") for r in v.get("references",[]) if r.get("url")]
+            items.append({
+                "id":       v.get("id",""),
+                "summary":  v.get("summary","") or v.get("details","")[:200],
+                "packages": pkgs[:6],
+                "refs":     refs[:5],
+                "modified": v.get("modified","")[:10],
+            })
+        return {
+            "source":  "OSV",
+            "status":  "ok",
+            "url":     f"https://osv.dev/vulnerability/{cve_id}",
+            "vulns":   items,
+            "count":   len(vulns),
+        }
+    except Exception as e:
+        return {"source":"OSV","status":"error","error":str(e)}
+
+async def lookup_cve_trends(cve_id: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=8,
+            headers={"User-Agent":"ThreatFeed-CTI/1.0"}) as c:
+            r = await c.get(f"https://cvetrends.com/api/cve/{cve_id}")
+        if r.status_code == 404:
+            return {"source":"CVE Trends","status":"not_found"}
+        if r.status_code != 200:
+            return {"source":"CVE Trends","status":"error","error":f"HTTP {r.status_code}"}
+        data = r.json()
+        return {
+            "source":   "CVE Trends",
+            "status":   "ok",
+            "url":      f"https://cvetrends.com/cve/{cve_id}",
+            "tweets":   data.get("tweets",[])[:5],
+            "trending": data.get("trending", False),
+            "count_24h": data.get("tweet_count_24h", 0),
+        }
+    except Exception:
+        return {"source":"CVE Trends","status":"not_found"}
+
+@app.get("/cve/lookup")
+async def cve_multi_lookup(id: str, user=Depends(get_current_user)):
+    """
+    Aggregate CVE data from NVD, CVE.org, OSV, CVE Trends, EPSS, and CISA KEV.
+    Returns all sources in parallel with their references and affected packages.
+    """
+    cve_id = id.upper().strip()
+    if not CVE_ID_RE.match(cve_id):
+        raise HTTPException(status_code=400, detail=f"Invalid CVE ID format: {id}")
+
+    nvd_headers = {"User-Agent":"ThreatFeed-CTI/1.0"}
+    if NVD_API_KEY: nvd_headers["apiKey"] = NVD_API_KEY
+
+    # Fetch all sources in parallel
+    results = await asyncio.gather(
+        lookup_nvd(cve_id, nvd_headers),
+        lookup_cve_org(cve_id),
+        lookup_osv(cve_id),
+        lookup_cve_trends(cve_id),
+        return_exceptions=True
+    )
+    sources = [r if not isinstance(r, Exception) else {"source":"?","status":"error","error":str(r)}
+               for r in results]
+
+    # EPSS score
+    epss_data = await fetch_epss([cve_id])
+    epss = epss_data.get(cve_id)
+
+    # CISA KEV check
+    kev = await fetch_kev_catalog()
+    in_kev = cve_id in kev
+    kev_date = kev.get(cve_id,"") if in_kev else None
+
+    # Deduplicate all references across sources
+    all_refs = {}
+    for s in sources:
+        for ref in s.get("references",[]):
+            url = ref.get("url","") if isinstance(ref,dict) else ref
+            if url and url not in all_refs:
+                tags = ref.get("tags",[]) if isinstance(ref,dict) else []
+                src_name = s.get("source","")
+                all_refs[url] = {"url":url,"tags":tags,"source":src_name}
+
+    return {
+        "cve_id":    cve_id,
+        "sources":   sources,
+        "epss":      epss,
+        "in_kev":    in_kev,
+        "kev_date":  kev_date,
+        "all_refs":  list(all_refs.values())[:30],
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/mitre/actor")
