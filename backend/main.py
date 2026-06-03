@@ -900,20 +900,19 @@ def parse_nvd_entry(vuln: dict) -> dict:
             "references":refs,"patch_available":patch_available,"patch_url":patch_url,
             "title":f"{cve_id}: {desc[:80]}..." if len(desc)>80 else f"{cve_id}: {desc}"}
 
-async def fetch_nvd_cves(cpe: str, days_back: int = 120) -> list:
+async def fetch_nvd_cves(cpe: str, days_back: int = 730) -> list:
     """
     Fetch CVEs from NVD API 2.0.
-    NVD HARD LIMIT: pubStartDate to pubEndDate cannot exceed 120 days.
-    Larger ranges silently return 404. Default = 120 days.
+    Strategy: query WITHOUT date filters (avoids NVD date format issues),
+    then filter results by published date in Python. This is more reliable
+    than trying to match NVD's exact date format requirements.
     """
     headers = {"User-Agent":"ThreatFeed-CTI/1.0"}
     if NVD_API_KEY: headers["apiKey"] = NVD_API_KEY
 
-    end   = datetime.now(timezone.utc)
-    start = end - timedelta(days=min(days_back, 120))
-    # ISO 8601 with colon timezone — NVD accepts this format
-    start_str = start.strftime("%Y-%m-%dT00:00:00.000+00:00")
-    end_str   = end.strftime("%Y-%m-%dT23:59:59.999+00:00")
+    # Calculate cutoff date for post-fetch filtering
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    cutoff_str = cutoff.strftime("%Y-%m-%d")  # used for Python-side filtering
 
     # Extract vendor + product from CPE for keyword fallback
     parts   = cpe.split(":")
@@ -921,59 +920,62 @@ async def fetch_nvd_cves(cpe: str, days_back: int = 120) -> list:
     product = parts[4].replace("_", " ") if len(parts) > 4 else ""
     keyword = f"{vendor} {product}".strip()
 
-    # ── Strategy 1: virtualMatchString with wildcard CPE ────────────────────
-    # Strip version from CPE for broad matching — specific versions limit results
+    def filter_by_date(vulns):
+        """Keep only CVEs published within days_back days."""
+        kept = []
+        for v in vulns:
+            pub = v.get("cve",{}).get("published","")[:10]
+            if pub >= cutoff_str:
+                kept.append(v)
+        return kept
+
+    # ── Strategy 1: virtualMatchString, NO date filter ───────────────────────
+    # Strip version from CPE — specific versions miss all newer CVEs
     cpe_parts = cpe.split(":")
     if len(cpe_parts) >= 6 and cpe_parts[5] not in ("*", "-", ""):
-        cpe_wildcard = ":".join(cpe_parts[:5]) + ":*" + ":" + ":".join(cpe_parts[6:])
+        cpe_wildcard = ":".join(cpe_parts[:5]) + ":*:" + ":".join(cpe_parts[6:])
     else:
         cpe_wildcard = cpe
+
     try:
-        params = {
-            "virtualMatchString": cpe_wildcard,
-            "pubStartDate":       start_str,
-            "pubEndDate":         end_str,
-            "resultsPerPage":     100,
-        }
-        async with httpx.AsyncClient(timeout=25) as c:
+        params = {"virtualMatchString": cpe_wildcard, "resultsPerPage": 100}
+        async with httpx.AsyncClient(timeout=20) as c:
             r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
                             params=params, headers=headers)
-        count = len(r.json().get("vulnerabilities", [])) if r.status_code == 200 else "N/A"
-        print(f"[nvd] virtualMatchString '{cpe_wildcard[:50]}': HTTP {r.status_code}, {count} results")
-
         if r.status_code == 200:
-            results = r.json().get("vulnerabilities", [])
+            all_results = r.json().get("vulnerabilities", [])
+            results = filter_by_date(all_results)
+            print(f"[nvd] virtualMatchString '{cpe_wildcard[:50]}': {len(all_results)} total, {len(results)} in last {days_back}d")
             if results:
                 return results
         elif r.status_code == 429:
             print("[nvd] Rate limited — add NVD_API_KEY to .env")
             return []
+        else:
+            print(f"[nvd] virtualMatchString HTTP {r.status_code}")
     except Exception as e:
         print(f"[nvd] virtualMatchString error: {e}")
 
-    # ── Strategy 2: Keyword search (always with date range) ──────────────────
+    # ── Strategy 2: keywordSearch, NO date filter ────────────────────────────
     if keyword:
         try:
-            params = {
-                "keywordSearch":  keyword,
-                "pubStartDate":   start_str,
-                "pubEndDate":     end_str,
-                "resultsPerPage": 100,
-            }
-            async with httpx.AsyncClient(timeout=25) as c:
+            params = {"keywordSearch": keyword, "resultsPerPage": 100}
+            async with httpx.AsyncClient(timeout=20) as c:
                 r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
                                 params=params, headers=headers)
-            count = len(r.json().get("vulnerabilities", [])) if r.status_code == 200 else "N/A"
-            print(f"[nvd] keywordSearch '{keyword}': HTTP {r.status_code}, {count} results")
             if r.status_code == 200:
-                return r.json().get("vulnerabilities", [])
+                all_results = r.json().get("vulnerabilities", [])
+                results = filter_by_date(all_results)
+                print(f"[nvd] keywordSearch '{keyword}': {len(all_results)} total, {len(results)} in last {days_back}d")
+                return results
             elif r.status_code == 429:
                 print("[nvd] Rate limited on keyword search")
+            else:
+                print(f"[nvd] keywordSearch HTTP {r.status_code}")
         except Exception as e:
             print(f"[nvd] keywordSearch error: {e}")
 
     return []
-
 async def fetch_kev_catalog() -> dict:
     try:
         async with httpx.AsyncClient(timeout=15) as c:
