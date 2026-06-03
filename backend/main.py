@@ -706,7 +706,41 @@ def record_score(conn, ioc_id, old_score, new_score, reasons, by="system"):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 PATCH_REF_TAGS = {"Patch","Vendor Advisory","Third Party Advisory","Mitigation"}
-# Domains that are security/vendor/advisory sites — never IOCs
+
+def detect_patch(references: list) -> tuple:
+    """
+    Find the best patch/advisory URL from NVD references.
+    - Prefers HTTPS over HTTP, never returns FTP
+    - Prefers official vendor/government URLs
+    - Skips mailing list archives, Bugtraq, SecurityFocus etc.
+    """
+    SKIP_DOMAINS = ["marc.info","securityfocus.com","bugtraq","neohapsis",
+                    "osvdb","openwall","secunia","vulnwatch","iss.net",
+                    "packetstorm","exploit-db","xforce.ibm"]
+    candidates = []
+    for ref in references:
+        tags = set(ref.get("tags",[]))
+        url  = ref.get("url","")
+        if not url: continue
+        if url.startswith("ftp://"): continue          # never FTP
+        if any(s in url.lower() for s in SKIP_DOMAINS): continue
+        score = 0
+        if tags & PATCH_REF_TAGS:                      score += 30
+        if url.startswith("https://"):                 score += 20
+        if any(kw in url.lower() for kw in
+               ["advisory","patch","security","update","bulletin","kb"]): score += 10
+        if any(d in url for d in
+               ["microsoft.com","redhat.com","ubuntu.com","debian.org",
+                "cisco.com","apple.com","nvd.nist.gov","cisa.gov",
+                "kernel.org","github.com","oracle.com"]): score += 15
+        if score > 0:
+            candidates.append((score, url))
+    if candidates:
+        candidates.sort(reverse=True)
+        return True, candidates[0][1]
+    return False, None
+
+
 TRUSTED_DOMAINS = [
     # Government & standards
     "nvd.nist.gov","cisa.gov","cert.org","kb.cert.org","us-cert.gov","nist.gov",
@@ -866,7 +900,7 @@ def parse_nvd_entry(vuln: dict) -> dict:
             "references":refs,"patch_available":patch_available,"patch_url":patch_url,
             "title":f"{cve_id}: {desc[:80]}..." if len(desc)>80 else f"{cve_id}: {desc}"}
 
-async def fetch_nvd_cves(cpe: str, days_back: int = 365) -> list:
+async def fetch_nvd_cves(cpe: str, days_back: int = 730) -> list:
     """
     Fetch CVEs from NVD API 2.0.
     - Uses virtualMatchString (not cpeName) for wildcard CPE support
@@ -913,26 +947,8 @@ async def fetch_nvd_cves(cpe: str, days_back: int = 365) -> list:
     except Exception as e:
         print(f"[nvd] virtualMatchString error: {e}")
 
-    # ── Strategy 2: Remove date filter and try broader virtualMatchString ────
-    if keyword:
-        try:
-            params = {
-                "virtualMatchString": cpe,
-                "resultsPerPage":     100,
-            }
-            async with httpx.AsyncClient(timeout=25) as c:
-                r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
-                                params=params, headers=headers)
-            count = len(r.json().get("vulnerabilities", [])) if r.status_code == 200 else "N/A"
-            print(f"[nvd] virtualMatchString (no date) '{cpe[:60]}': HTTP {r.status_code}, {count} results")
-            if r.status_code == 200:
-                results = r.json().get("vulnerabilities", [])
-                if results:
-                    return results
-        except Exception as e:
-            print(f"[nvd] virtualMatchString (no date) error: {e}")
-
-    # ── Strategy 3: Keyword search fallback ─────────────────────────────────
+    # ── Strategy 2: Keyword search with date range ────────────────────────────
+    # NOTE: No "no-date" fallback — that returned 2001-era CVEs for broad keywords
     if keyword:
         try:
             params = {
@@ -1131,6 +1147,17 @@ async def signup(request: Request, body: SignupRequest, conn=Depends(get_db)):
 @app.get("/auth/me")
 def me(user=Depends(get_current_user)):
     return {"id":user["id"],"username":user["username"],"role":user["role"]}
+
+@app.delete("/admin/purge-old-cves")
+def purge_old_cves(before_year: int = 2023, admin=Depends(require_admin), conn=Depends(get_db)):
+    """Remove CVEs published before a given year. Default: remove pre-2023 CVEs."""
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM cve_findings WHERE published_date < %s", (f"{before_year}-01-01",))
+    count = cur.fetchone()[0]
+    cur.execute("DELETE FROM cve_ioc_links WHERE cve_id IN (SELECT cve_id FROM cve_findings WHERE published_date < %s)", (f"{before_year}-01-01",))
+    cur.execute("DELETE FROM cve_findings WHERE published_date < %s", (f"{before_year}-01-01",))
+    conn.commit()
+    return {"removed": count, "message": f"Removed {count} CVEs published before {before_year}"}
 
 @app.post("/admin/cleanup-advisory-iocs")
 def cleanup_advisory_iocs(admin=Depends(require_admin), conn=Depends(get_db)):
@@ -1973,9 +2000,19 @@ def geo_stats(user=Depends(get_current_user), conn=Depends(get_db)):
     rows = cur.fetchall(); country_counts = {}
     for row in rows:
         e = row.get("enrichment") or {}
-        country = e.get("abuseipdb",{}).get("country") or e.get("virustotal",{}).get("country")
-        if country and country != "?":
-            country_counts[country] = country_counts.get(country,0) + 1
+        # AbuseIPDB uses 'country' (2-letter code), VT uses 'country'
+        # Try all possible field locations
+        country = (
+            e.get("abuseipdb",{}).get("country") or
+            e.get("abuseipdb",{}).get("countryCode") or
+            e.get("virustotal",{}).get("country") or
+            e.get("country")
+        )
+        if country and country not in ("?", "Unknown", ""):
+            # Normalise to uppercase 2-letter code
+            country = str(country).strip().upper()[:2]
+            if len(country) == 2:
+                country_counts[country] = country_counts.get(country,0) + 1
     sorted_countries = sorted(country_counts.items(), key=lambda x: x[1], reverse=True)
     return {"countries":[{"code":k,"count":v} for k,v in sorted_countries[:30]]}
 
