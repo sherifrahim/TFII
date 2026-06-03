@@ -900,21 +900,20 @@ def parse_nvd_entry(vuln: dict) -> dict:
             "references":refs,"patch_available":patch_available,"patch_url":patch_url,
             "title":f"{cve_id}: {desc[:80]}..." if len(desc)>80 else f"{cve_id}: {desc}"}
 
-async def fetch_nvd_cves(cpe: str, days_back: int = 730) -> list:
+async def fetch_nvd_cves(cpe: str, days_back: int = 120) -> list:
     """
     Fetch CVEs from NVD API 2.0.
-    - Uses virtualMatchString (not cpeName) for wildcard CPE support
-    - cpeName requires exact CPE dictionary entry; wildcards need virtualMatchString
-    - Falls back to keywordSearch if virtualMatchString returns 0
-    - NVD returns 404 for 0 results on some endpoints (not an error)
+    NVD HARD LIMIT: pubStartDate to pubEndDate cannot exceed 120 days.
+    Larger ranges silently return 404. Default = 120 days.
     """
     headers = {"User-Agent":"ThreatFeed-CTI/1.0"}
     if NVD_API_KEY: headers["apiKey"] = NVD_API_KEY
 
     end   = datetime.now(timezone.utc)
-    start = end - timedelta(days=days_back)
-    # NVD API 2.0 requires ISO 8601 with timezone offset
-    fmt = "%Y-%m-%dT%H:%M:%S.000 +0000"
+    start = end - timedelta(days=min(days_back, 120))
+    # ISO 8601 with colon timezone — NVD accepts this format
+    start_str = start.strftime("%Y-%m-%dT00:00:00.000+00:00")
+    end_str   = end.strftime("%Y-%m-%dT23:59:59.999+00:00")
 
     # Extract vendor + product from CPE for keyword fallback
     parts   = cpe.split(":")
@@ -922,39 +921,43 @@ async def fetch_nvd_cves(cpe: str, days_back: int = 730) -> list:
     product = parts[4].replace("_", " ") if len(parts) > 4 else ""
     keyword = f"{vendor} {product}".strip()
 
-    # ── Strategy 1: virtualMatchString (supports wildcard CPEs) ─────────────
+    # ── Strategy 1: virtualMatchString with wildcard CPE ────────────────────
+    # Strip version from CPE for broad matching — specific versions limit results
+    cpe_parts = cpe.split(":")
+    if len(cpe_parts) >= 6 and cpe_parts[5] not in ("*", "-", ""):
+        cpe_wildcard = ":".join(cpe_parts[:5]) + ":*" + ":" + ":".join(cpe_parts[6:])
+    else:
+        cpe_wildcard = cpe
     try:
         params = {
-            "virtualMatchString": cpe,
-            "pubStartDate":       start.strftime(fmt),
-            "pubEndDate":         end.strftime(fmt),
+            "virtualMatchString": cpe_wildcard,
+            "pubStartDate":       start_str,
+            "pubEndDate":         end_str,
             "resultsPerPage":     100,
         }
         async with httpx.AsyncClient(timeout=25) as c:
             r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
                             params=params, headers=headers)
         count = len(r.json().get("vulnerabilities", [])) if r.status_code == 200 else "N/A"
-        print(f"[nvd] virtualMatchString '{cpe[:60]}': HTTP {r.status_code}, {count} results")
+        print(f"[nvd] virtualMatchString '{cpe_wildcard[:50]}': HTTP {r.status_code}, {count} results")
 
         if r.status_code == 200:
             results = r.json().get("vulnerabilities", [])
             if results:
                 return results
         elif r.status_code == 429:
-            print("[nvd] Rate limited — add NVD_API_KEY to .env (free at nvd.nist.gov/developers)")
+            print("[nvd] Rate limited — add NVD_API_KEY to .env")
             return []
-        # 404 = no results for this CPE in date range, fall through to keyword
     except Exception as e:
         print(f"[nvd] virtualMatchString error: {e}")
 
-    # ── Strategy 2: Keyword search with date range ────────────────────────────
-    # NOTE: No "no-date" fallback — that returned 2001-era CVEs for broad keywords
+    # ── Strategy 2: Keyword search (always with date range) ──────────────────
     if keyword:
         try:
             params = {
                 "keywordSearch":  keyword,
-                "pubStartDate":   start.strftime(fmt),
-                "pubEndDate":     end.strftime(fmt),
+                "pubStartDate":   start_str,
+                "pubEndDate":     end_str,
                 "resultsPerPage": 100,
             }
             async with httpx.AsyncClient(timeout=25) as c:
@@ -1795,13 +1798,14 @@ async def autofill_asset(name: str, user=Depends(get_current_user)):
 
     if kb_match:
         vendor, asset_type, cpe_vendor, cpe_product, notes = kb_match
-        version = await get_nvd_latest_version(cpe_vendor, cpe_product)
+        # Don't auto-suggest version — NVD CPE dict returns old versions
+        # User should enter their actual installed version
         return {
             "found":      True,
             "source":     "knowledge_base",
             "vendor":     vendor,
             "asset_type": asset_type,
-            "version":    version,
+            "version":    "",
             "notes":      notes,
             "cpe_hint":   f"cpe:2.3:{'o' if asset_type=='os' else 'h' if asset_type in ('hardware','firmware') else 'a'}:{cpe_vendor}:{cpe_product}:*:*:*:*:*:*:*:*",
             "confidence": "high",
@@ -1831,7 +1835,7 @@ async def autofill_asset(name: str, user=Depends(get_current_user)):
                 "source":     "nvd",
                 "vendor":     cpe_vendor,
                 "asset_type": asset_type,
-                "version":    version,
+                "version":    "",
                 "notes":      None,
                 "cpe_hint":   cpe_name,
                 "confidence": "medium",
