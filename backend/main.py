@@ -2147,6 +2147,146 @@ async def intel_news(body: IntelNewsRequest, user=Depends(get_current_user)):
             seen.add(item["title"]); unique.append(item)
     return {"items": unique[:16]}
 
+# ── CVE WALL ─────────────────────────────────────────────────────────────────
+CVE_FEEDS = [
+    # CISA Advisories
+    ("https://www.cisa.gov/cybersecurity-advisories/all.xml",             "CISA",          "Advisory"),
+    ("https://www.cisa.gov/known-exploited-vulnerabilities.xml",          "CISA KEV",      "KEV"),
+    # Vendor Security Advisories
+    ("https://www.redhat.com/en/rss/security-advisories",                 "Red Hat",       "Advisory"),
+    ("https://support.apple.com/en-us/100100/rss/feed.rss",              "Apple",         "Advisory"),
+    ("https://www.debian.org/security/dsa.en.rdf",                        "Debian",        "Advisory"),
+    ("https://ubuntu.com/security/notices/rss.xml",                       "Ubuntu",        "Advisory"),
+    ("https://www.openwall.com/lists/oss-security/",                      "OSS Security",  "Vulnerability"),
+    # CVE-focused news
+    ("https://nvd.nist.gov/feeds/xml/cve/misc/nvd-rss.xml",             "NVD",           "CVE"),
+    ("https://www.cvedetails.com/rss/vulnerabilities.php",               "CVE Details",   "CVE"),
+    ("https://securelist.com/feed/",                                      "Kaspersky",     "Analysis"),
+    ("https://www.zerodayinitiative.com/rss/published/",                  "Zero Day",      "0day"),
+    ("https://packetstormsecurity.com/files/tags/advisory/rss.xml",      "PacketStorm",   "Advisory"),
+]
+
+async def fetch_cve_rss(url: str, source: str, category: str) -> list:
+    try:
+        async with httpx.AsyncClient(timeout=8,
+            headers={"User-Agent":"Mozilla/5.0 ThreatFeed-CTI/1.0"}) as c:
+            r = await c.get(url)
+        if r.status_code != 200: return []
+        content = r.text
+        items = []
+        # Extract titles and links
+        titles = re.findall(r"<title><!\[CDATA\[(.*?)\]\]>|<title>(.*?)</title>", content, re.DOTALL)
+        links  = re.findall(r"<link>(.*?)</link>|<link href=[\"'](.*?)[\"']", content, re.DOTALL)
+        dates  = re.findall(r"<pubDate>(.*?)</pubDate>|<updated>(.*?)</updated>|<dc:date>(.*?)</dc:date>", content)
+        descs  = re.findall(r"<description><!\[CDATA\[(.*?)\]\]>|<description>(.*?)</description>", content, re.DOTALL)
+        for i, (t1,t2) in enumerate(titles[1:], 0):  # skip feed title
+            title = (t1 or t2).strip()
+            if not title or len(title) < 5: continue
+            link  = links[i+1][0] or links[i+1][1] if i+1 < len(links) else ""
+            link  = link.strip()
+            raw_date = (dates[i][0] or dates[i][1] or dates[i][2]).strip() if i < len(dates) else ""
+            try:
+                from email.utils import parsedate_to_datetime
+                dt = parsedate_to_datetime(raw_date)
+                date_str = dt.strftime("%Y-%m-%d")
+            except Exception:
+                date_str = raw_date[:10] if raw_date else ""
+            desc = ""
+            if i < len(descs):
+                raw = (descs[i][0] or descs[i][1]).strip()
+                desc = re.sub(r"<[^>]+>","",raw).strip()[:300]
+            # Extract CVE IDs mentioned
+            cves_mentioned = list(set(re.findall(r"CVE-\d{4}-\d{4,}", title + " " + desc)))
+            # Severity hint from title
+            sev = "Medium"
+            title_lc = title.lower()
+            if any(w in title_lc for w in ["critical","remote code","rce","unauthenticated"]):
+                sev = "Critical"
+            elif any(w in title_lc for w in ["high","elevation","privilege","bypass"]):
+                sev = "High"
+            elif any(w in title_lc for w in ["low","informational","denial of service"]):
+                sev = "Low"
+            items.append({
+                "title":         title,
+                "source":        source,
+                "category":      category,
+                "severity":      sev,
+                "date":          date_str,
+                "url":           link,
+                "description":   desc,
+                "cves_mentioned": cves_mentioned[:5],
+            })
+            if len(items) >= 8: break
+        return items
+    except Exception as e:
+        print(f"[cve-wall] {source}: {e}")
+        return []
+
+@app.get("/cve-wall")
+async def cve_wall(category: str = "all", user=Depends(get_current_user)):
+    """CVE-specific news wall: advisories, KEV, vendor patches, 0days."""
+    feeds_to_use = CVE_FEEDS if category == "all" else [
+        f for f in CVE_FEEDS if f[2].lower() == category.lower()
+    ]
+    tasks = [fetch_cve_rss(url, source, cat) for url, source, cat in feeds_to_use]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    items = []; seen = set()
+    for r in results:
+        if isinstance(r, list): items.extend(r)
+    unique = []
+    for item in sorted(items, key=lambda x: x.get("date",""), reverse=True):
+        k = item["title"][:60]
+        if k not in seen:
+            seen.add(k); unique.append(item)
+    return {"items": unique[:40], "total": len(unique)}
+
+@app.get("/cves/search")
+async def search_cves(
+    q: str = "",
+    severity: str = "",
+    kev_only: bool = False,
+    unpatched_only: bool = False,
+    min_epss: float = 0,
+    asset_id: str = "",
+    year: int = 0,
+    limit: int = 50,
+    offset: int = 0,
+    user=Depends(get_current_user),
+    conn=Depends(get_db)
+):
+    """Full CVE search with filters — OpenCVE-parity search endpoint."""
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    where = ["1=1"]; params = []
+    if q:
+        where.append("(cf.cve_id ILIKE %s OR cf.title ILIKE %s OR cf.description ILIKE %s)")
+        params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
+    if severity:
+        where.append("cf.cvss_severity = %s"); params.append(severity.capitalize())
+    if kev_only:
+        where.append("cf.kev_listed = TRUE")
+    if unpatched_only:
+        where.append("(cf.patch_available = FALSE OR cf.patch_available IS NULL)")
+    if min_epss > 0:
+        where.append("cf.epss_score >= %s"); params.append(min_epss)
+    if asset_id:
+        where.append("cf.asset_id = %s"); params.append(asset_id)
+    if year:
+        where.append("cf.published_date LIKE %s"); params.append(f"{year}%")
+    query = f"""SELECT cf.*, a.name as asset_name, a.vendor as asset_vendor
+        FROM cve_findings cf LEFT JOIN assets a ON cf.asset_id = a.id
+        WHERE {' AND '.join(where)}
+        ORDER BY cf.kev_listed DESC, cf.cvss_score DESC NULLS LAST, cf.published_date DESC
+        LIMIT %s OFFSET %s"""
+    params.extend([limit, offset])
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    # Total count
+    cur.execute(f"SELECT COUNT(*) FROM cve_findings cf WHERE {' AND '.join(where)}", params[:-2])
+    total = cur.fetchone()["count"]
+    return {"cves": rows, "total": total, "limit": limit, "offset": offset}
+
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # MITRE ATT&CK ACTOR LOOKUP
 # ═══════════════════════════════════════════════════════════════════════════════

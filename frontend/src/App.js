@@ -91,6 +91,7 @@ const IOC_NAV=[
 const CVE_NAV=[
   {id:"dashboard",label:"Dashboard",     icon:"grid"},
   {id:"cve",      label:"CVE Monitor",   icon:"shield"},
+  {id:"cvewall",  label:"CVE Wall",      icon:"rss"},
   {id:"intel",    label:"Intel Wall",    icon:"rss"},
   {id:"actors",   label:"Threat Actors", icon:"users"},
   {id:"osint",    label:"OSINT",         icon:"radar"},
@@ -955,19 +956,21 @@ function AssetManager({token,C,onChanged}){
 
 // ── CVE DASHBOARD ─────────────────────────────────────────────────────────────
 function CVEDashboard({token,C}){
-  const CURRENT_YEAR = new Date().getFullYear();
+  const THIS_YEAR = new Date().getFullYear();
+  const YEARS = [THIS_YEAR, THIS_YEAR-1, THIS_YEAR-2, 0]; // 0 = all time
 
   const [allCves,setAllCves]=useState([]);
   const [assets,setAssets]=useState([]);
   const [summary,setSummary]=useState(null);
   const [selectedCVE,setSelectedCVE]=useState(null);
-  const [selectedAsset,setSelectedAsset]=useState(null); // null = asset list view
+  const [selectedAsset,setSelectedAsset]=useState(null);
   const [loading,setLoading]=useState(false);
   const [polling,setPolling]=useState(false);
   const [pollResult,setPollResult]=useState(null);
   const [subView,setSubView]=useState("cves");
   const [filterPatch,setFilterPatch]=useState("all");
   const [filterKEV,setFilterKEV]=useState(false);
+  const [yearFilter,setYearFilter]=useState(0); // 0 = all time
 
   const fetchData=useCallback(async()=>{
     setLoading(true);
@@ -991,34 +994,43 @@ function CVEDashboard({token,C}){
     setPolling(false);
   }
 
-  // CVEs for the selected asset, filtered to current year
-  const assetCves = allCves.filter(c=>{
-    if(selectedAsset && c.asset_id !== selectedAsset.id) return false;
-    // Current year filter
-    const year = (c.published_date||"").slice(0,4);
-    if(year && parseInt(year) < CURRENT_YEAR) return false;
+  // Filter CVEs by year, patch status, KEV
+  const filterCve = (c, assetId=null) => {
+    if(assetId && c.asset_id !== assetId) return false;
+    if(yearFilter !== 0){
+      const year = (c.published_date||"").slice(0,4);
+      if(year && parseInt(year) !== yearFilter) return false;
+    }
     if(filterPatch==="patched"   &&  !c.patch_available) return false;
     if(filterPatch==="unpatched" && c.patch_available)   return false;
     if(filterKEV && !c.kev_listed) return false;
     return true;
-  });
+  };
 
-  // Build per-asset CVE summaries for the asset list view
+  const assetCves = allCves.filter(c => filterCve(c, selectedAsset?.id));
+
+  // Build per-asset summaries using the same year filter
   const assetSummaries = assets.map(a=>{
-    const thisCves = allCves.filter(c=>{
-      const year=(c.published_date||"").slice(0,4);
-      return c.asset_id===a.id && (!year || parseInt(year)>=CURRENT_YEAR);
+    const thisCves = allCves.filter(c => {
+      if(c.asset_id !== a.id) return false;
+      if(yearFilter !== 0){
+        const year = (c.published_date||"").slice(0,4);
+        if(year && parseInt(year) !== yearFilter) return false;
+      }
+      return true;
     });
     return {
       ...a,
-      cveCount:   thisCves.length,
-      critical:   thisCves.filter(c=>(c.cvss_score||0)>=9).length,
-      high:       thisCves.filter(c=>(c.cvss_score||0)>=7&&(c.cvss_score||0)<9).length,
-      kev:        thisCves.filter(c=>c.kev_listed).length,
-      unpatched:  thisCves.filter(c=>!c.patch_available).length,
-      patched:    thisCves.filter(c=>c.patch_available).length,
+      cveCount:  thisCves.length,
+      critical:  thisCves.filter(c=>(c.cvss_score||0)>=9).length,
+      high:      thisCves.filter(c=>(c.cvss_score||0)>=7&&(c.cvss_score||0)<9).length,
+      kev:       thisCves.filter(c=>c.kev_listed).length,
+      unpatched: thisCves.filter(c=>!c.patch_available).length,
+      patched:   thisCves.filter(c=>c.patch_available).length,
     };
   });
+
+  const yearLabel = yearFilter === 0 ? "All time" : String(yearFilter);
 
   return(
     <div>
@@ -1037,7 +1049,19 @@ function CVEDashboard({token,C}){
             </button>
           ))}
         </div>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          {/* Year selector */}
+          <div style={{display:"flex",gap:3,background:C.surfaceHi,borderRadius:8,padding:3}}>
+            {YEARS.map(y=>(
+              <button key={y} onClick={()=>{setYearFilter(y);setSelectedAsset(null);}}
+                style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:"pointer",
+                  fontSize:12,fontFamily:"inherit",fontWeight:600,
+                  background:yearFilter===y?C.accent:"transparent",
+                  color:yearFilter===y?"#fff":C.muted}}>
+                {y===0?"All":String(y)}
+              </button>
+            ))}
+          </div>
           {summary?.last_poll&&(
             <span style={{fontSize:11,color:C.muted}}>
               Last poll: {new Date(summary.last_poll).toLocaleString()}
@@ -1098,7 +1122,7 @@ function CVEDashboard({token,C}){
 
               {/* Year note */}
               <div style={{fontSize:12,color:C.muted,marginBottom:14}}>
-                Showing CVEs published in <strong style={{color:C.accentText}}>{CURRENT_YEAR}</strong>.
+                Showing CVEs published — <strong style={{color:C.accentText}}>{yearLabel}</strong>.
                 Click a software to view its CVEs.
               </div>
 
@@ -1149,7 +1173,7 @@ function CVEDashboard({token,C}){
                         {/* CVE breakdown pills */}
                         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                           {asset.cveCount===0?(
-                            <span style={{fontSize:12,color:C.muted}}>No CVEs found for {CURRENT_YEAR}</span>
+                            <span style={{fontSize:12,color:C.muted}}>No CVEs found ({yearLabel})</span>
                           ):(
                             <>
                               {asset.critical>0&&<span style={{fontSize:12,padding:"2px 10px",borderRadius:20,background:C.red+"15",color:C.red,fontWeight:600}}>{asset.critical} Critical</span>}
@@ -1163,7 +1187,7 @@ function CVEDashboard({token,C}){
                       <div style={{display:"flex",alignItems:"center",gap:16}}>
                         <div style={{textAlign:"right"}}>
                           <div style={{fontSize:32,fontWeight:700,color}}>{asset.cveCount}</div>
-                          <div style={{fontSize:11,color:C.muted}}>CVEs ({CURRENT_YEAR})</div>
+                          <div style={{fontSize:11,color:C.muted}}>CVEs ({yearLabel})</div>
                         </div>
                         <NavIcon name="chevronRight" size={20} color={C.muted}/>
                       </div>
@@ -1200,7 +1224,7 @@ function CVEDashboard({token,C}){
                     {selectedAsset.version&&<span style={{fontSize:13,color:C.muted,fontWeight:400,marginLeft:10}}>v{selectedAsset.version}</span>}
                   </div>
                   <div style={{fontSize:12,color:C.muted}}>
-                    {selectedAsset.vendor} · CVEs published in {CURRENT_YEAR}
+                    {selectedAsset.vendor} · CVEs — {yearLabel}
                   </div>
                 </div>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -1225,7 +1249,7 @@ function CVEDashboard({token,C}){
 
               {/* CVE count for this asset */}
               <div style={{fontSize:13,color:C.muted,marginBottom:12}}>
-                <strong style={{color:C.white||C.textHi}}>{assetCves.length}</strong> CVE{assetCves.length!==1?"s":""} found for {CURRENT_YEAR}
+                <strong style={{color:C.white||C.textHi}}>{assetCves.length}</strong> CVE{assetCves.length!==1?"s":""} found ({yearLabel})
                 {assetCves.length===0&&allCves.filter(c=>c.asset_id===selectedAsset.id).length>0&&(
                   <span style={{color:C.amber}}> — older CVEs exist but are filtered out</span>
                 )}
@@ -1237,7 +1261,7 @@ function CVEDashboard({token,C}){
                   border:`1px solid ${C.border}`,borderRadius:12,color:C.muted}}>
                   <div style={{fontSize:32,marginBottom:12}}>✅</div>
                   <div style={{fontSize:14,fontWeight:700,color:C.white||C.textHi,marginBottom:8}}>
-                    No {CURRENT_YEAR} CVEs found
+                    No CVEs found ({yearLabel})
                   </div>
                   <div style={{fontSize:13}}>
                     {filterPatch!=="all"||filterKEV?"Try removing filters.":"Run Poll Now to fetch the latest CVEs from NVD."}
@@ -1325,7 +1349,7 @@ function CVEDashboard({token,C}){
                   <div style={{padding:"10px 20px",borderTop:`1px solid ${C.border}`,
                     fontSize:11,color:C.muted,display:"flex",justifyContent:"space-between"}}>
                     <span>Click any row for full details, IOCs, references, and patch link</span>
-                    <span>{assetCves.length} CVEs · {CURRENT_YEAR} only · sorted by severity</span>
+                    <span>{assetCves.length} CVEs · {yearLabel} · sorted by severity</span>
                   </div>
                 </div>
               )}
@@ -1364,6 +1388,169 @@ function GeoMap({token,C}){
 }
 
 // ── INTEL WALL ────────────────────────────────────────────────────────────────
+// ── CVE WALL ──────────────────────────────────────────────────────────────────
+function CVEWall({token,C}){
+  const [items,setItems]=useState([]); const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState(""); const [activeSource,setActiveSource]=useState("all");
+  const [activeCat,setActiveCat]=useState("all");
+
+  const CATEGORIES=["all","CVE","Advisory","KEV","0day","Analysis"];
+  const SEV_COLORS={Critical:C.red,High:C.amber,Medium:C.purple,Low:C.green};
+
+  async function fetchWall(){
+    setLoading(true);setErr("");
+    try{
+      const r=await api(`/cve-wall?category=${activeCat}`,{},token);
+      if(r.ok){const d=await r.json();setItems(d.items||[]);}
+      else setErr("Failed to fetch CVE wall.");
+    }catch(e){setErr("Cannot reach server.");}
+    setLoading(false);
+  }
+
+  useEffect(()=>{fetchWall();},[]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  const sources=["all",...[...new Set(items.map(i=>i.source).filter(Boolean))]];
+  const filtered=items.filter(i=>{
+    if(activeSource!=="all"&&i.source!==activeSource) return false;
+    if(activeCat!=="all"&&i.category!==activeCat) return false;
+    return true;
+  });
+
+  return(
+    <div>
+      {/* Controls */}
+      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
+        <div style={{display:"flex",gap:3,background:C.surfaceHi,borderRadius:10,padding:3}}>
+          {CATEGORIES.map(cat=>(
+            <button key={cat} onClick={()=>setActiveCat(cat)}
+              style={{padding:"7px 14px",borderRadius:7,border:"none",cursor:"pointer",
+                fontSize:12,fontFamily:"inherit",fontWeight:600,
+                background:activeCat===cat?C.accent:"transparent",
+                color:activeCat===cat?"#fff":C.muted}}>
+              {cat==="all"?"All":cat}
+            </button>
+          ))}
+        </div>
+        <Btn onClick={fetchWall} disabled={loading} C={C}>{loading?"Fetching...":"⟳ Refresh"}</Btn>
+      </div>
+
+      {err&&<div style={{padding:14,background:C.red+"10",border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
+      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>Fetching vulnerability advisories from CISA, NVD, vendor feeds...</div>}
+
+      {!loading&&items.length===0&&!err&&(
+        <div style={{textAlign:"center",padding:48,color:C.muted}}>
+          <div style={{fontSize:32,marginBottom:12}}>🛡️</div>
+          <div style={{fontSize:14,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>CVE Wall</div>
+          <div style={{fontSize:13,marginBottom:20}}>
+            Pull the latest vulnerability advisories from CISA, NVD, Red Hat, Apple, Ubuntu and more.
+          </div>
+          <Btn onClick={fetchWall} C={C}>Fetch CVE Wall</Btn>
+        </div>
+      )}
+
+      {items.length>0&&(
+        <>
+          {/* Source filter pills */}
+          <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+            {sources.map(s=>(
+              <button key={s} onClick={()=>setActiveSource(s)}
+                style={{padding:"4px 14px",borderRadius:20,cursor:"pointer",fontFamily:"inherit",
+                  border:`1px solid ${activeSource===s?C.accent:C.border}`,
+                  background:activeSource===s?C.accentDim:"transparent",
+                  color:activeSource===s?C.accentText:C.muted,
+                  fontSize:12,fontWeight:activeSource===s?600:400}}>
+                {s==="all"?`All (${items.length})`:s}
+              </button>
+            ))}
+          </div>
+
+          {/* Table */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",boxShadow:C.shadow}}>
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr style={{background:C.surfaceHi}}>
+                    {[["Source","110px"],["Type","90px"],["Severity","90px"],["Advisory / CVE","auto"],["CVEs","90px"],["Date","100px"],["","50px"]].map(([h,w])=>(
+                      <th key={h} style={{padding:"10px 14px",textAlign:"left",color:C.muted,
+                        fontSize:11,fontWeight:600,letterSpacing:"0.04em",whiteSpace:"nowrap",
+                        borderBottom:`1px solid ${C.border}`,width:w}}>
+                        {h.toUpperCase()}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((item,i)=>(
+                    <tr key={i} style={{borderBottom:`1px solid ${C.border}`,transition:"background .1s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHi}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      <td style={{padding:"12px 14px"}}>
+                        <span style={{fontSize:11,fontWeight:700,color:C.accentText}}>{item.source}</span>
+                      </td>
+                      <td style={{padding:"12px 14px"}}>
+                        <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
+                          background:item.category==="KEV"?C.red+"20":item.category==="0day"?C.purple+"20":C.accentDim,
+                          color:item.category==="KEV"?C.red:item.category==="0day"?C.purple:C.accentText}}>
+                          {item.category}
+                        </span>
+                      </td>
+                      <td style={{padding:"12px 14px"}}>
+                        <span style={{fontSize:12,fontWeight:600,color:SEV_COLORS[item.severity]||C.muted}}>
+                          {item.severity}
+                        </span>
+                      </td>
+                      <td style={{padding:"12px 14px",maxWidth:380}}>
+                        <div style={{fontSize:13,fontWeight:600,color:C.white||C.textHi,
+                          marginBottom:3,lineHeight:1.4}}>{item.title}</div>
+                        {item.description&&(
+                          <div style={{fontSize:11,color:C.muted,overflow:"hidden",
+                            textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:360}}
+                            title={item.description}>{item.description}</div>
+                        )}
+                      </td>
+                      <td style={{padding:"12px 14px"}}>
+                        {item.cves_mentioned?.length>0?(
+                          <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+                            {item.cves_mentioned.slice(0,2).map(cve=>(
+                              <a key={cve} href={`https://nvd.nist.gov/vuln/detail/${cve}`}
+                                target="_blank" rel="noreferrer"
+                                style={{fontSize:10,padding:"1px 6px",borderRadius:3,
+                                  background:C.red+"15",color:C.red,fontFamily:"monospace",
+                                  fontWeight:700,textDecoration:"none"}}>
+                                {cve}
+                              </a>
+                            ))}
+                            {item.cves_mentioned.length>2&&(
+                              <span style={{fontSize:10,color:C.muted}}>+{item.cves_mentioned.length-2}</span>
+                            )}
+                          </div>
+                        ):<span style={{color:C.muted,fontSize:11}}>—</span>}
+                      </td>
+                      <td style={{padding:"12px 14px",fontSize:11,color:C.muted,whiteSpace:"nowrap"}}>{item.date}</td>
+                      <td style={{padding:"12px 14px"}}>
+                        {item.url&&(
+                          <a href={item.url} target="_blank" rel="noreferrer"
+                            style={{fontSize:11,color:C.accentText,fontWeight:600,
+                              display:"flex",alignItems:"center",gap:3}}>
+                            <NavIcon name="externalLink" size={11} color={C.accentText}/>
+                          </a>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding:"8px 16px",borderTop:`1px solid ${C.border}`,fontSize:11,color:C.muted}}>
+              {filtered.length} advisories · Sources: CISA, NVD, Red Hat, Apple, Ubuntu, Zero Day Initiative, PacketStorm
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function IntelNews({token,C}){
   const [news,setNews]=useState([]); const [loading,setLoading]=useState(false);
   const [err,setErr]=useState(""); const [category,setCategory]=useState("all");
@@ -2932,6 +3119,7 @@ export default function App(){
         <div style={{flex:1,overflow:"auto",padding:"24px"}}>
           {view==="dashboard"&&<><Dashboard token={token} C={C}/><CVESummaryStrip token={token} C={C}/></>}
           {view==="cve"&&<CVEDashboard token={token} C={C}/>}
+          {view==="cvewall"&&<CVEWall token={token} C={C}/>}
           {view==="map"&&<GeoMap token={token} C={C}/>}
           {view==="intel"&&<IntelNews token={token} C={C}/>}
           {view==="actors"&&<ThreatActors token={token} C={C}/>}
