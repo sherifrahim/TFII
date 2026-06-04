@@ -308,7 +308,9 @@ async def startup():
             cpe TEXT, description TEXT, created_by VARCHAR(100),
             active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT NOW())""",
         """CREATE TABLE IF NOT EXISTS cve_findings (
-            id VARCHAR(100) PRIMARY KEY, cve_id VARCHAR(50) UNIQUE NOT NULL,
+            id VARCHAR(100) PRIMARY KEY, cve_id VARCHAR(50) NOT NULL,
+            asset_id VARCHAR(100) REFERENCES assets(id) ON DELETE CASCADE,
+            UNIQUE(cve_id, asset_id),
             asset_id VARCHAR(100), title TEXT, description TEXT,
             cvss_score FLOAT, cvss_severity VARCHAR(20), cvss_vector TEXT,
             epss_score FLOAT, epss_percentile FLOAT,
@@ -1059,7 +1061,7 @@ async def poll_cves_for_asset(asset: dict, kev_catalog: dict, conn) -> dict:
                  epss_score,epss_percentile,kev_listed,kev_date,cwe,affected_versions,
                  published_date,modified_date,patch_available,patch_url,patch_detected_at,"references")
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (cve_id) DO NOTHING""",
+                ON CONFLICT (cve_id, asset_id) DO NOTHING""",
                 (finding_id,cve_id,asset_id,parsed["title"],parsed["description"],
                  parsed["cvss_score"],parsed["cvss_severity"],parsed["cvss_vector"],
                  epss.get("epss"),epss.get("percentile"),bool(kev_info),kev_info or None,
@@ -1073,26 +1075,11 @@ async def poll_cves_for_asset(asset: dict, kev_catalog: dict, conn) -> dict:
                              "patch_url":parsed["patch_url"]})
             extracted = extract_iocs_from_text(parsed["description"], include_urls=False)
             ioc_values = []
-            for ioc_type, value in extracted:
-                if any(td in value for td in TRUSTED_DOMAINS): continue
-                cur.execute("SELECT id FROM iocs WHERE value = %s", (value,))
-                ex = cur.fetchone()
-                if not ex:
-                    ioc_id = f"indicator--{uuid.uuid4()}"
-                    defanged = defang(value, ioc_type)
-                    try:
-                        conn.cursor().execute("""INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,description,tags,enrichment)
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
-                            (ioc_id,ioc_type,value,defanged,"General","AMBER",60,
-                             f"Auto-extracted from {cve_id}",
-                             [cve_id.lower(),"auto-extracted","cve"],
-                             psycopg2.extras.Json({"note":f"Auto-extracted from {cve_id}",
-                                                   "enriched_at":datetime.now(timezone.utc).isoformat()})))
-                        conn.cursor().execute("INSERT INTO cve_ioc_links (cve_id,ioc_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",(cve_id,ioc_id))
-                        ioc_values.append(value)
-                    except Exception: pass
-            if ioc_values:
-                new_iocs.extend([{"value":v,"cve_id":cve_id} for v in ioc_values])
+            # NOTE: IOC auto-extraction from CVEs disabled
+            # CVE descriptions contain version numbers and bug tracker IDs
+            # that match IP patterns but are not threat indicators.
+            # Legitimate IOCs come from threat intel feeds, not CVE descriptions.
+            # if extracted: ...  (disabled)
     conn.commit()
     return {"new_cves":new_cves,"new_iocs":new_iocs,"patched":patched_cves}
 
@@ -1914,6 +1901,55 @@ def list_cves(asset_id: Optional[str]=None, patch_available: Optional[bool]=None
     cur.execute(query, params); return cur.fetchall()
 
 # NOTE: poll-now and stats/summary MUST be before /{cve_id} — specific routes first
+@app.get("/admin/nvd-test")
+async def nvd_test(q: str = "chrome", admin=Depends(require_admin)):
+    """Diagnostic: test NVD API directly for a given keyword or CPE."""
+    headers = {"User-Agent":"ThreatFeed-CTI/1.0"}
+    if NVD_API_KEY: headers["apiKey"] = NVD_API_KEY
+    results = {}
+    # Test 1: keyword search
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
+                params={"keywordSearch":q,"resultsPerPage":5}, headers=headers)
+        data = r.json() if r.status_code==200 else {}
+        results["keyword"] = {
+            "status": r.status_code,
+            "total":  data.get("totalResults","N/A"),
+            "sample": [v["cve"]["id"] for v in data.get("vulnerabilities",[])[:3]]
+        }
+    except Exception as e:
+        results["keyword"] = {"error": str(e)}
+    # Test 2: virtualMatchString with full CPE
+    cpe = f"cpe:2.3:a:google:{q.lower()}:*:*:*:*:*:*:*:*"
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
+                params={"virtualMatchString":cpe,"resultsPerPage":5}, headers=headers)
+        data = r.json() if r.status_code==200 else {}
+        results["virtualMatch_full"] = {
+            "cpe": cpe, "status": r.status_code,
+            "total": data.get("totalResults","N/A"),
+            "sample": [v["cve"]["id"] for v in data.get("vulnerabilities",[])[:3]]
+        }
+    except Exception as e:
+        results["virtualMatch_full"] = {"cpe": cpe, "error": str(e)}
+    # Test 3: virtualMatchString with short CPE (no trailing wildcards)
+    cpe_short = f"cpe:2.3:a:google:{q.lower()}"
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
+                params={"virtualMatchString":cpe_short,"resultsPerPage":5}, headers=headers)
+        data = r.json() if r.status_code==200 else {}
+        results["virtualMatch_short"] = {
+            "cpe": cpe_short, "status": r.status_code,
+            "total": data.get("totalResults","N/A"),
+            "sample": [v["cve"]["id"] for v in data.get("vulnerabilities",[])[:3]]
+        }
+    except Exception as e:
+        results["virtualMatch_short"] = {"cpe": cpe_short, "error": str(e)}
+    return results
+
 @app.post("/cves/poll-now")
 async def poll_now(admin=Depends(require_admin), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

@@ -3209,19 +3209,24 @@ export default function App(){
     api("/auth/me",{},token).then(r=>r.ok?r.json():null).then(d=>{
       if(d){
         setMe(d);
-        // Only show API key modal if we can CONFIRM no keys are saved.
-        // If the API call fails for any reason, don't show it (avoids false positives).
+        // Only show API key modal if:
+        // 1. User hasn't dismissed it before (localStorage check)
+        // 2. We confirm no keys are saved
+        const dismissed = localStorage.getItem(`apikeys_setup_done_${d.id}`);
+        if(dismissed) return; // user already set up or dismissed — never show again
         api("/users/me/api-keys",{},token)
-          .then(r=>{
-            if(!r.ok) return; // API error — don't show modal
-            return r.json();
-          })
+          .then(r=>{ if(!r.ok) return; return r.json(); })
           .then(keys=>{
-            if(!keys) return; // failed above
+            if(!keys) return;
             const hasAny = Array.isArray(keys) && keys.some(k=>k.has_key);
-            if(!hasAny) setShowApiKeyModal(true);
+            if(hasAny){
+              // Keys exist — mark as done so we never check again
+              localStorage.setItem(`apikeys_setup_done_${d.id}`,"1");
+            } else {
+              setShowApiKeyModal(true);
+            }
           })
-          .catch(()=>{}); // network error — don't show modal
+          .catch(()=>{});
       }
     });
   },[token]);
@@ -3329,7 +3334,10 @@ export default function App(){
       `}</style>
 
       {selectedIOC&&<EnrichmentPanel ioc={selectedIOC} token={token} onClose={()=>setSelectedIOC(null)} C={C} me={me}/>}
-      {showApiKeyModal&&<ApiKeyModal token={token} C={C} onClose={()=>setShowApiKeyModal(false)}/>}
+      {showApiKeyModal&&<ApiKeyModal token={token} C={C} onClose={()=>{
+        setShowApiKeyModal(false);
+        if(me?.id) localStorage.setItem(`apikeys_setup_done_${me.id}`,"1");
+      }}/>}
 
       {/* ── Sidebar ── */}
       <div className="sidebar" style={{
