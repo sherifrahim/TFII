@@ -1001,13 +1001,39 @@ async def fetch_epss(cve_ids: list) -> dict:
     return {}
 
 async def poll_cves_for_asset(asset: dict, kev_catalog: dict, conn) -> dict:
-    cpe = asset.get("cpe","")
-    if not cpe: return {"new_cves":[],"new_iocs":[],"patched":[]}
-    asset_id = asset["id"]; asset_name = asset["name"]
+    cpe = asset.get("cpe","").strip()
+    asset_id   = asset["id"]
+    asset_name = asset["name"]
+    vendor     = (asset.get("vendor") or "").strip().lower().replace(" ","_")
+    product    = asset_name.strip().lower().replace(" ","_")
+    asset_type = asset.get("asset_type","application")
+    version    = (asset.get("version") or "").strip().lstrip("vV")
+
+    # ── Build CPE from asset fields if not explicitly set ──────────────────
+    if not cpe:
+        # Map asset_type to CPE part
+        part = "o" if asset_type == "os" else "h" if asset_type in ("hardware","firmware") else "a"
+        ver  = version if version else "*"
+        # Try KB lookup first for correct cpe_vendor/cpe_product
+        name_lc = asset_name.lower().strip()
+        kb_hit  = None
+        for key, val in PRODUCT_KB.items():
+            if name_lc == key or key in name_lc or name_lc in key:
+                kb_hit = val; break
+        if kb_hit:
+            _, _, cpe_vendor, cpe_product, _ = kb_hit
+        else:
+            cpe_vendor  = vendor or "unknown"
+            cpe_product = product
+        cpe = f"cpe:2.3:{part}:{cpe_vendor}:{cpe_product}:{ver}:*:*:*:*:*:*:*"
+        print(f"[cve-poll] Built CPE for '{asset_name}': {cpe}")
+
     new_cves = []; new_iocs = []; patched_cves = []
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     vulns = await fetch_nvd_cves(cpe)
-    if not vulns: return {"new_cves":[],"new_iocs":[],"patched":[]}
+    if not vulns:
+        print(f"[cve-poll] No CVEs found for '{asset_name}' ({cpe})")
+        return {"new_cves":[],"new_iocs":[],"patched":[]}
     cve_ids = [v.get("cve",{}).get("id","") for v in vulns]
     epss_data = await fetch_epss([c for c in cve_ids if c])
     for vuln in vulns:
@@ -2336,7 +2362,14 @@ async def fetch_cve_rss(url: str, source: str, category: str) -> list:
                 raw = (descs[i][0] or descs[i][1]).strip()
                 desc = re.sub(r"<[^>]+>","",raw).strip()[:300]
             # Extract CVE IDs mentioned
-            cves_mentioned = list(set(re.findall(r"CVE-\d{4}-\d{4,}", title + " " + desc)))
+            # Strip HTML tags and decode entities before extracting CVE IDs
+            clean_title = re.sub(r"<[^>]+>", "", title)
+            clean_desc  = re.sub(r"<[^>]+>", "", desc)
+            # Decode common HTML entities
+            for ent, ch in [("&amp;","&"),("&lt;","<"),("&gt;",">"),("&quot;",'"'),("&#39;","'"),("&nbsp;"," ")]:
+                clean_title = clean_title.replace(ent, ch)
+                clean_desc  = clean_desc.replace(ent, ch)
+            cves_mentioned = list(set(re.findall(r"CVE-\d{4}-\d{4,}", clean_title + " " + clean_desc)))
             # Severity hint from title
             sev = "Medium"
             title_lc = title.lower()

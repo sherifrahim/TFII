@@ -1390,91 +1390,109 @@ function GeoMap({token,C}){
 // ── CVE WALL ──────────────────────────────────────────────────────────────────
 function CVEWall({token,C}){
   const [items,setItems]=useState([]); const [loading,setLoading]=useState(false);
-  const [err,setErr]=useState(""); const [activeSource,setActiveSource]=useState("all");
+  const [err,setErr]=useState("");
+  const [activeSource,setActiveSource]=useState("all");
+  const [activeSev,setActiveSev]=useState("all");
   const [activeCat,setActiveCat]=useState("all");
+  const [timeRange,setTimeRange]=useState("all");
 
   const CATEGORIES=["all","CVE","Advisory","KEV","0day","Analysis"];
+  const SEVERITIES=["all","Critical","High","Medium","Low"];
+  const TIME_OPTS=[["all","All time"],["today","Today"],["7d","7 days"],["30d","30 days"]];
   const SEV_COLORS={Critical:C.red,High:C.amber,Medium:C.purple,Low:C.green};
 
   async function fetchWall(){
     setLoading(true);setErr("");
     try{
-      const r=await api(`/cve-wall?category=${activeCat}`,{},token);
+      const r=await api("/cve-wall?category=all",{},token);
       if(r.ok){const d=await r.json();setItems(d.items||[]);}
       else setErr("Failed to fetch CVE wall.");
     }catch(e){setErr("Cannot reach server.");}
     setLoading(false);
   }
-
   useEffect(()=>{fetchWall();},[]);// eslint-disable-line react-hooks/exhaustive-deps
 
   const sources=["all",...[...new Set(items.map(i=>i.source).filter(Boolean))]];
   const filtered=items.filter(i=>{
     if(activeSource!=="all"&&i.source!==activeSource) return false;
     if(activeCat!=="all"&&i.category!==activeCat) return false;
+    if(activeSev!=="all"&&i.severity!==activeSev) return false;
+    if(timeRange!=="all"&&i.date){
+      const now=new Date(); const d=new Date(i.date);
+      if(timeRange==="today"){const s=new Date(now);s.setHours(0,0,0,0);if(d<s)return false;}
+      else if(timeRange==="7d"&&d<new Date(now-7*864e5))return false;
+      else if(timeRange==="30d"&&d<new Date(now-30*864e5))return false;
+    }
     return true;
   });
 
+  const Pill=({label,active,onClick})=>(
+    <button onClick={onClick} style={{padding:"5px 11px",borderRadius:6,border:"none",
+      cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600,
+      background:active?C.accent:"transparent",color:active?"#fff":C.muted}}>
+      {label}
+    </button>
+  );
+
   return(
     <div>
-      {/* Controls */}
-      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
-        <div style={{display:"flex",gap:3,background:C.surfaceHi,borderRadius:10,padding:3}}>
-          {CATEGORIES.map(cat=>(
-            <button key={cat} onClick={()=>setActiveCat(cat)}
-              style={{padding:"7px 14px",borderRadius:7,border:"none",cursor:"pointer",
-                fontSize:12,fontFamily:"inherit",fontWeight:600,
-                background:activeCat===cat?C.accent:"transparent",
-                color:activeCat===cat?"#fff":C.muted}}>
-              {cat==="all"?"All":cat}
-            </button>
+      {/* Filter bar */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+        padding:"14px 16px",marginBottom:16,boxShadow:C.shadow}}>
+        <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
+          {[["Type",CATEGORIES,activeCat,setActiveCat,c=>c==="all"?"All":c],
+            ["Severity",SEVERITIES,activeSev,setActiveSev,s=>s==="all"?"All":s],
+            ["Time",TIME_OPTS.map(([v])=>v),timeRange,setTimeRange,v=>TIME_OPTS.find(([k])=>k===v)?.[1]||v]
+          ].map(([label,opts,val,setVal,fmt])=>(
+            <div key={label}>
+              <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:5,
+                textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</div>
+              <div style={{display:"flex",gap:2,background:C.surfaceHi,borderRadius:8,padding:2}}>
+                {opts.map(o=><Pill key={o} label={fmt(o)} active={val===o} onClick={()=>setVal(o)}/>)}
+              </div>
+            </div>
           ))}
-        </div>
-        <Btn onClick={fetchWall} disabled={loading} C={C}>{loading?"Fetching...":"⟳ Refresh"}</Btn>
-      </div>
-
-      {err&&<div style={{padding:14,background:C.red+"10",border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
-      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>Fetching vulnerability advisories from CISA, NVD, vendor feeds...</div>}
-
-      {!loading&&items.length===0&&!err&&(
-        <div style={{textAlign:"center",padding:48,color:C.muted}}>
-          <div style={{fontSize:32,marginBottom:12}}>🛡️</div>
-          <div style={{fontSize:14,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>CVE Wall</div>
-          <div style={{fontSize:13,marginBottom:20}}>
-            Pull the latest vulnerability advisories from CISA, NVD, Red Hat, Apple, Ubuntu and more.
+          <div style={{marginLeft:"auto"}}>
+            <Btn onClick={fetchWall} disabled={loading} C={C}>{loading?"Fetching...":"⟳ Refresh"}</Btn>
           </div>
-          <Btn onClick={fetchWall} C={C}>Fetch CVE Wall</Btn>
         </div>
-      )}
-
-      {items.length>0&&(
-        <>
-          {/* Source filter pills */}
-          <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+        {/* Source pills */}
+        {items.length>0&&(
+          <div style={{display:"flex",gap:5,marginTop:12,flexWrap:"wrap"}}>
             {sources.map(s=>(
               <button key={s} onClick={()=>setActiveSource(s)}
-                style={{padding:"4px 14px",borderRadius:20,cursor:"pointer",fontFamily:"inherit",
+                style={{padding:"3px 12px",borderRadius:20,cursor:"pointer",fontFamily:"inherit",
                   border:`1px solid ${activeSource===s?C.accent:C.border}`,
                   background:activeSource===s?C.accentDim:"transparent",
-                  color:activeSource===s?C.accentText:C.muted,
-                  fontSize:12,fontWeight:activeSource===s?600:400}}>
+                  color:activeSource===s?C.accentText:C.muted,fontSize:11,
+                  fontWeight:activeSource===s?600:400}}>
                 {s==="all"?`All (${items.length})`:s}
               </button>
             ))}
           </div>
+        )}
+      </div>
 
-          {/* Table */}
+      {err&&<div style={{padding:14,background:C.red+"10",border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
+      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>Fetching vulnerability advisories from CISA, NVD, vendor feeds...</div>}
+      {!loading&&items.length===0&&!err&&(
+        <div style={{textAlign:"center",padding:48,color:C.muted}}>
+          <div style={{fontSize:32,marginBottom:12}}>🛡️</div>
+          <div style={{fontSize:14,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>CVE Wall</div>
+          <div style={{fontSize:13,marginBottom:20}}>Pull the latest vulnerability advisories from CISA, NVD, Red Hat, Apple, Ubuntu and more.</div>
+          <Btn onClick={fetchWall} C={C}>Fetch CVE Wall</Btn>
+        </div>
+      )}
+      {items.length>0&&(
+        <>
+          {filtered.length===0?<div style={{textAlign:"center",padding:32,color:C.muted,background:C.surface,border:`1px solid ${C.border}`,borderRadius:12}}>No advisories match current filters.</div>:(
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",boxShadow:C.shadow}}>
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
                 <thead>
                   <tr style={{background:C.surfaceHi}}>
-                    {[["Source","110px"],["Type","90px"],["Severity","90px"],["Advisory / CVE","auto"],["CVEs","90px"],["Date","100px"],["","50px"]].map(([h,w])=>(
-                      <th key={h} style={{padding:"10px 14px",textAlign:"left",color:C.muted,
-                        fontSize:11,fontWeight:600,letterSpacing:"0.04em",whiteSpace:"nowrap",
-                        borderBottom:`1px solid ${C.border}`,width:w}}>
-                        {h.toUpperCase()}
-                      </th>
+                    {[["Source","110px"],["Type","80px"],["Severity","90px"],["Advisory / CVE","auto"],["CVEs","130px"],["Date","100px"],["","40px"]].map(([h,w])=>(
+                      <th key={h} style={{padding:"10px 14px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:600,letterSpacing:"0.04em",whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}`,width:w}}>{h.toUpperCase()}</th>
                     ))}
                   </tr>
                 </thead>
@@ -1483,67 +1501,47 @@ function CVEWall({token,C}){
                     <tr key={i} style={{borderBottom:`1px solid ${C.border}`,transition:"background .1s"}}
                       onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHi}
                       onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                      <td style={{padding:"12px 14px"}}>
-                        <span style={{fontSize:11,fontWeight:700,color:C.accentText}}>{item.source}</span>
-                      </td>
-                      <td style={{padding:"12px 14px"}}>
-                        <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
+                      <td style={{padding:"11px 14px"}}><span style={{fontSize:11,fontWeight:700,color:C.accentText}}>{item.source}</span></td>
+                      <td style={{padding:"11px 14px"}}>
+                        <span style={{fontSize:10,padding:"2px 7px",borderRadius:4,fontWeight:700,
                           background:item.category==="KEV"?C.red+"20":item.category==="0day"?C.purple+"20":C.accentDim,
                           color:item.category==="KEV"?C.red:item.category==="0day"?C.purple:C.accentText}}>
                           {item.category}
                         </span>
                       </td>
-                      <td style={{padding:"12px 14px"}}>
-                        <span style={{fontSize:12,fontWeight:600,color:SEV_COLORS[item.severity]||C.muted}}>
-                          {item.severity}
-                        </span>
+                      <td style={{padding:"11px 14px"}}><span style={{fontSize:12,fontWeight:700,color:SEV_COLORS[item.severity]||C.muted}}>{item.severity}</span></td>
+                      <td style={{padding:"11px 14px",maxWidth:380}}>
+                        <div style={{fontSize:13,fontWeight:600,color:C.white||C.textHi,marginBottom:2,lineHeight:1.4}}>{item.title}</div>
+                        {item.description&&<div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:360}} title={item.description}>{item.description}</div>}
                       </td>
-                      <td style={{padding:"12px 14px",maxWidth:380}}>
-                        <div style={{fontSize:13,fontWeight:600,color:C.white||C.textHi,
-                          marginBottom:3,lineHeight:1.4}}>{item.title}</div>
-                        {item.description&&(
-                          <div style={{fontSize:11,color:C.muted,overflow:"hidden",
-                            textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:360}}
-                            title={item.description}>{item.description}</div>
-                        )}
-                      </td>
-                      <td style={{padding:"12px 14px"}}>
+                      <td style={{padding:"11px 14px",minWidth:130}}>
                         {item.cves_mentioned?.length>0?(
                           <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
-                            {item.cves_mentioned.slice(0,2).map(cve=>(
-                              <a key={cve} href={`https://nvd.nist.gov/vuln/detail/${cve}`}
-                                target="_blank" rel="noreferrer"
-                                style={{fontSize:10,padding:"1px 6px",borderRadius:3,
-                                  background:C.red+"15",color:C.red,fontFamily:"monospace",
-                                  fontWeight:700,textDecoration:"none"}}>
+                            {item.cves_mentioned.slice(0,3).map(cve=>(
+                              <a key={cve} href={`https://nvd.nist.gov/vuln/detail/${cve}`} target="_blank" rel="noreferrer"
+                                style={{fontSize:10,padding:"2px 6px",borderRadius:3,background:C.red+"15",color:C.red,fontFamily:"monospace",fontWeight:700,textDecoration:"none"}}>
                                 {cve}
                               </a>
                             ))}
-                            {item.cves_mentioned.length>2&&(
-                              <span style={{fontSize:10,color:C.muted}}>+{item.cves_mentioned.length-2}</span>
-                            )}
+                            {item.cves_mentioned.length>3&&<span style={{fontSize:10,color:C.muted}}>+{item.cves_mentioned.length-3}</span>}
                           </div>
                         ):<span style={{color:C.muted,fontSize:11}}>—</span>}
                       </td>
-                      <td style={{padding:"12px 14px",fontSize:11,color:C.muted,whiteSpace:"nowrap"}}>{item.date}</td>
-                      <td style={{padding:"12px 14px"}}>
-                        {item.url&&(
-                          <a href={item.url} target="_blank" rel="noreferrer"
-                            style={{fontSize:11,color:C.accentText,fontWeight:600,
-                              display:"flex",alignItems:"center",gap:3}}>
-                            <NavIcon name="externalLink" size={11} color={C.accentText}/>
-                          </a>
-                        )}
+                      <td style={{padding:"11px 14px",fontSize:11,color:C.muted,whiteSpace:"nowrap"}}>{item.date}</td>
+                      <td style={{padding:"11px 14px"}}>
+                        {item.url&&<a href={item.url} target="_blank" rel="noreferrer" style={{color:C.accentText,display:"flex",alignItems:"center"}}><NavIcon name="externalLink" size={11} color={C.accentText}/></a>}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div style={{padding:"8px 16px",borderTop:`1px solid ${C.border}`,fontSize:11,color:C.muted}}>
-              {filtered.length} advisories · Sources: CISA, NVD, Red Hat, Apple, Ubuntu, Zero Day Initiative, PacketStorm
+            <div style={{padding:"8px 16px",borderTop:`1px solid ${C.border}`,fontSize:11,color:C.muted,display:"flex",justifyContent:"space-between"}}>
+              <span>Showing {filtered.length} of {items.length} advisories</span>
+              <span>CISA · NVD · Red Hat · Apple · Ubuntu · Zero Day Initiative · PacketStorm · Kaspersky</span>
             </div>
           </div>
+          )}
         </>
       )}
     </div>
