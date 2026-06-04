@@ -1032,33 +1032,37 @@ async def fetch_epss(cve_ids: list) -> dict:
     return {}
 
 async def poll_cves_for_asset(asset: dict, kev_catalog: dict, conn) -> dict:
-    cpe = asset.get("cpe","").strip()
     asset_id   = asset["id"]
     asset_name = asset["name"]
     vendor     = (asset.get("vendor") or "").strip().lower().replace(" ","_")
-    product    = asset_name.strip().lower().replace(" ","_")
     asset_type = asset.get("asset_type","application")
     version    = (asset.get("version") or "").strip().lstrip("vV")
 
-    # ── Build CPE from asset fields if not explicitly set ──────────────────
-    if not cpe:
-        # Map asset_type to CPE part
-        part = "o" if asset_type == "os" else "h" if asset_type in ("hardware","firmware") else "a"
-        ver  = version if version else "*"
-        # Try KB lookup first for correct cpe_vendor/cpe_product
-        name_lc = asset_name.lower().strip()
-        kb_hit  = None
-        for key, val in PRODUCT_KB.items():
-            if name_lc == key or key in name_lc or name_lc in key:
-                kb_hit = val; break
-        if kb_hit:
-            _, _, cpe_vendor, cpe_product, _ = kb_hit
+    # Always rebuild CPE from KB when possible — stored CPE may be stale
+    # (e.g. igor_sysoev→nginx) or have edition specifiers that limit results.
+    part = "o" if asset_type == "os" else "h" if asset_type in ("hardware","firmware") else "a"
+    ver  = version if version else "*"
+    name_lc = asset_name.lower().strip()
+    kb_hit  = None
+    for key, val in PRODUCT_KB.items():
+        if name_lc == key or key in name_lc or name_lc in key:
+            kb_hit = val; break
+
+    if kb_hit:
+        _, _, cpe_vendor, cpe_product, _ = kb_hit
+        cpe = f"cpe:2.3:{part}:{cpe_vendor}:{cpe_product}:{ver}:*:*:*:*:*:*:*"
+    else:
+        stored = asset.get("cpe","").strip()
+        if stored:
+            # Strip edition/language fields — only keep part:vendor:product:version
+            sp = stored.split(":")
+            cpe = ":".join(sp[:6]) + ":*:*:*:*:*:*:*" if len(sp) >= 6 else stored
         else:
             cpe_vendor  = vendor or "unknown"
-            cpe_product = product
-        cpe = f"cpe:2.3:{part}:{cpe_vendor}:{cpe_product}:{ver}:*:*:*:*:*:*:*"
-        print(f"[cve-poll] Built CPE for '{asset_name}': {cpe}")
+            cpe_product = asset_name.strip().lower().replace(" ","_")
+            cpe = f"cpe:2.3:{part}:{cpe_vendor}:{cpe_product}:{ver}:*:*:*:*:*:*:*"
 
+    print(f"[cve-poll] '{asset_name}' → {cpe}")
     new_cves = []; new_iocs = []; patched_cves = []
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     vulns = await fetch_nvd_cves(cpe)
@@ -1721,6 +1725,8 @@ PRODUCT_KB = {
     "centos":           ("Red Hat",      "os",          "centos",    "centos",           "EOL — migrate to Rocky/Alma"),
     "rhel":             ("Red Hat",      "os",          "redhat",    "enterprise_linux",  None),
     "red hat":          ("Red Hat",      "os",          "redhat",    "enterprise_linux",  None),
+    "red hat linux":    ("Red Hat",      "os",          "redhat",    "enterprise_linux",  None),
+    "red hat enterprise linux": ("Red Hat","os",         "redhat",    "enterprise_linux",  None),
     "macos":            ("Apple",        "os",          "apple",     "macos",            None),
     "mac os":           ("Apple",        "os",          "apple",     "macos",            None),
     "android":          ("Google",       "os",          "google",    "android",          None),
@@ -1728,8 +1734,7 @@ PRODUCT_KB = {
 
     # Web Servers / Middleware
     "nginx":            ("Nginx",        "application", "nginx",     "nginx",            None),
-    "apache":           ("Apache",       "application", "apache",    "http_server",      None),
-    "iis":              ("Microsoft",    "application", "microsoft", "iis",              "Internet Information Services"),
+    "apache":           ("Apache",       "application", "apache",    "http_server",      None),    "iis":              ("Microsoft",    "application", "microsoft", "iis",              "Internet Information Services"),
     "tomcat":           ("Apache",       "application", "apache",    "tomcat",           None),
 
     # Databases
