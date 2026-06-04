@@ -1848,6 +1848,265 @@ function GeoMap({token,C}){
 
 // ── INTEL WALL ────────────────────────────────────────────────────────────────
 // ── CVE WALL ──────────────────────────────────────────────────────────────────
+function CVELookup({token,C,initialId=""}){
+  const [cveId,setCveId]=useState(initialId);
+  const [result,setResult]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+  const CVE_RE=/^CVE-\d{4}-\d{4,}$/i;
+
+  useEffect(()=>{ if(initialId&&CVE_RE.test(initialId)) doLookup(initialId); },[initialId]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  async function doLookup(id){
+    const q=(id||cveId).trim().toUpperCase();
+    if(!CVE_RE.test(q)){setErr("Enter a valid CVE ID e.g. CVE-2024-12345");return;}
+    setLoading(true);setErr("");setResult(null);
+    try{
+      const r=await api(`/cve/lookup?id=${q}`,{},token);
+      if(r.ok) setResult(await r.json());
+      else {const e=await r.json();setErr(e.detail||"Lookup failed");}
+    }catch{setErr("Cannot reach server.");}
+    setLoading(false);
+  }
+
+  const SEV_COLORS={CRITICAL:C.red,HIGH:C.amber,MEDIUM:C.purple,LOW:C.green};
+  const STATUS_ICON={"ok":"✓","not_found":"—","error":"✗"};
+
+  return(
+    <div style={{maxWidth:1000}}>
+      {/* Search bar */}
+      <div style={{display:"flex",gap:10,marginBottom:24}}>
+        <input value={cveId} onChange={e=>setCveId(e.target.value)}
+          onKeyDown={e=>{if(e.key==="Enter")doLookup();}}
+          placeholder="Enter CVE ID — e.g. CVE-2024-12345"
+          style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+            color:C.inputText,padding:"12px 16px",borderRadius:10,fontSize:15,
+            outline:"none",fontFamily:"monospace",letterSpacing:"0.02em"}}/>
+        <Btn onClick={()=>doLookup()} disabled={loading||!cveId.trim()} C={C}>
+          {loading?"Looking up...":"Lookup CVE"}
+        </Btn>
+      </div>
+
+      {err&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
+      {loading&&(
+        <div style={{textAlign:"center",padding:48,color:C.muted}}>
+          <div style={{fontSize:14,marginBottom:8}}>Querying NVD, CVE.org, OSV, CVE Trends, EPSS...</div>
+          <div style={{fontSize:12}}>Fetching from all sources in parallel</div>
+        </div>
+      )}
+
+      {result&&(
+        <div>
+          {/* Header */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+            padding:"20px 24px",marginBottom:16,boxShadow:C.shadow}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+              flexWrap:"wrap",gap:12,marginBottom:12}}>
+              <div>
+                <div style={{fontSize:22,fontWeight:700,color:C.white||C.textHi,
+                  fontFamily:"monospace",marginBottom:6}}>{result.cve_id}</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {result.in_kev&&(
+                    <span style={{fontSize:12,padding:"3px 10px",borderRadius:4,fontWeight:700,
+                      background:C.red+"20",color:C.red,border:`1px solid ${C.red}30`}}>
+                      🚨 CISA KEV — Added {result.kev_date}
+                    </span>
+                  )}
+                  {result.epss&&(
+                    <span style={{fontSize:12,padding:"3px 10px",borderRadius:4,fontWeight:600,
+                      background:result.epss.epss>=0.5?C.red+"15":result.epss.epss>=0.1?C.amber+"15":C.accentDim,
+                      color:result.epss.epss>=0.5?C.red:result.epss.epss>=0.1?C.amber:C.accentText}}>
+                      EPSS {(result.epss.epss*100).toFixed(1)}% · {(result.epss.percentile*100).toFixed(0)}th percentile
+                    </span>
+                  )}
+                  {/* CVSS from NVD */}
+                  {result.sources?.find(s=>s.source==="NVD"&&s.cvss)?.cvss&&(()=>{
+                    const cvss=result.sources.find(s=>s.source==="NVD").cvss;
+                    return(
+                      <span style={{fontSize:12,padding:"3px 10px",borderRadius:4,fontWeight:700,
+                        background:(SEV_COLORS[cvss.severity]||C.muted)+"20",
+                        color:SEV_COLORS[cvss.severity]||C.muted,
+                        border:`1px solid ${(SEV_COLORS[cvss.severity]||C.muted)}30`}}>
+                        {cvss.severity} {cvss.score}
+                      </span>
+                    );
+                  })()}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {[
+                  {name:"NVD",    url:`https://nvd.nist.gov/vuln/detail/${result.cve_id}`},
+                  {name:"CVE.org",url:`https://www.cve.org/CVERecord?id=${result.cve_id}`},
+                  {name:"OSV",    url:`https://osv.dev/vulnerability/${result.cve_id}`},
+                ].map(link=>(
+                  <a key={link.name} href={link.url} target="_blank" rel="noreferrer"
+                    style={{fontSize:11,padding:"5px 12px",borderRadius:6,background:C.accentDim,
+                      color:C.accentText,fontWeight:600,border:`1px solid ${C.accent}30`,
+                      display:"flex",alignItems:"center",gap:4,textDecoration:"none"}}>
+                    {link.name} <NavIcon name="externalLink" size={10} color={C.accentText}/>
+                  </a>
+                ))}
+              </div>
+            </div>
+            {/* Description from NVD */}
+            {result.sources?.find(s=>s.source==="NVD"&&s.description)?.description&&(
+              <div style={{fontSize:13,color:C.text,lineHeight:1.7,padding:"12px 14px",
+                background:C.surfaceHi,borderRadius:8}}>
+                {result.sources.find(s=>s.source==="NVD").description}
+              </div>
+            )}
+          </div>
+
+          {/* Source cards */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",
+            gap:14,marginBottom:16}}>
+            {result.sources.map(src=>(
+              <div key={src.source} style={{background:C.surface,
+                border:`1px solid ${src.status==="ok"?C.border:C.border+"60"}`,
+                borderRadius:12,padding:"16px 18px",boxShadow:C.shadow,
+                opacity:src.status==="ok"?1:0.7}}>
+                <div style={{display:"flex",justifyContent:"space-between",
+                  alignItems:"center",marginBottom:10}}>
+                  <span style={{fontSize:14,fontWeight:700,color:C.white||C.textHi}}>
+                    {src.source}
+                  </span>
+                  <span style={{fontSize:11,fontWeight:600,
+                    color:src.status==="ok"?C.green:src.status==="not_found"?C.muted:C.red}}>
+                    {STATUS_ICON[src.status]} {src.status==="ok"?"Found":src.status==="not_found"?"Not in database":"Error"}
+                  </span>
+                </div>
+
+                {src.status==="ok"&&src.source==="NVD"&&(
+                  <div>
+                    {src.cvss&&<div style={{fontSize:12,color:SEV_COLORS[src.cvss.severity]||C.muted,
+                      fontWeight:600,marginBottom:6}}>
+                      CVSS {src.cvss.version}: {src.cvss.score} {src.cvss.severity}
+                    </div>}
+                    {src.weaknesses?.length>0&&<div style={{fontSize:11,color:C.muted,marginBottom:4}}>
+                      CWE: {src.weaknesses.join(", ")}
+                    </div>}
+                    {src.published&&<div style={{fontSize:11,color:C.muted}}>Published: {src.published}</div>}
+                    {src.affected_cpes?.length>0&&(
+                      <div style={{marginTop:8}}>
+                        <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:4,textTransform:"uppercase"}}>
+                          Affected CPEs
+                        </div>
+                        <div style={{maxHeight:80,overflowY:"auto"}}>
+                          {src.affected_cpes.slice(0,4).map((cpe,i)=>(
+                            <div key={i} style={{fontSize:10,color:C.muted,fontFamily:"monospace",
+                              marginBottom:2,wordBreak:"break-all"}}>{cpe}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {src.status==="ok"&&src.source==="CVE.org"&&(
+                  <div>
+                    {src.state&&<div style={{fontSize:11,color:C.muted,marginBottom:6}}>
+                      State: <span style={{fontWeight:600,color:C.accentText}}>{src.state}</span>
+                    </div>}
+                    {src.affected?.length>0&&(
+                      <div>
+                        <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:4,textTransform:"uppercase"}}>Affected</div>
+                        {src.affected.slice(0,4).map((a,i)=>(
+                          <div key={i} style={{fontSize:11,color:C.text,marginBottom:2}}>{a}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {src.status==="ok"&&src.source==="OSV"&&(
+                  <div>
+                    <div style={{fontSize:12,color:C.muted,marginBottom:8}}>
+                      {src.count} related {src.count===1?"advisory":"advisories"}
+                    </div>
+                    {src.vulns?.slice(0,2).map((v,i)=>(
+                      <div key={i} style={{marginBottom:8,padding:"8px 10px",
+                        background:C.surfaceHi,borderRadius:6}}>
+                        <div style={{fontSize:11,fontWeight:700,color:C.accentText,marginBottom:4}}>
+                          {v.id}
+                        </div>
+                        {v.packages?.slice(0,3).map((p,j)=>(
+                          <div key={j} style={{fontSize:10,color:C.muted}}>
+                            {p.ecosystem}: <span style={{color:C.text}}>{p.name}</span>
+                            {p.fix&&<span style={{color:C.green}}> → fix: {p.fix}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {src.status==="ok"&&src.source==="CVE Trends"&&(
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600,color:src.trending?C.accentText:C.muted,marginBottom:6}}>
+                      {src.trending?"📈 Currently trending":"Not trending"}
+                    </div>
+                    {src.count_24h>0&&(
+                      <div style={{fontSize:12,color:C.muted}}>{src.count_24h} mentions in last 24h</div>
+                    )}
+                  </div>
+                )}
+
+                {src.status==="error"&&(
+                  <div style={{fontSize:11,color:C.red}}>{src.error||"Failed to fetch"}</div>
+                )}
+                {src.status==="not_found"&&(
+                  <div style={{fontSize:11,color:C.muted}}>This CVE is not in the {src.source} database</div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* All References unified */}
+          {result.all_refs?.length>0&&(
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+              padding:"18px 20px",boxShadow:C.shadow}}>
+              <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:14,
+                textTransform:"uppercase",letterSpacing:"0.06em"}}>
+                All References ({result.all_refs.length})
+              </div>
+              <div style={{display:"grid",gap:8}}>
+                {result.all_refs.map((ref,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,
+                    padding:"8px 10px",background:C.surfaceHi,borderRadius:6}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <a href={ref.url} target="_blank" rel="noreferrer"
+                        style={{fontSize:12,color:C.accentText,wordBreak:"break-all",
+                          textDecoration:"none",display:"flex",alignItems:"center",gap:4}}>
+                        <NavIcon name="externalLink" size={11} color={C.accentText}/>
+                        {ref.url}
+                      </a>
+                    </div>
+                    <div style={{display:"flex",gap:4,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                      {ref.source&&(
+                        <span style={{fontSize:9,padding:"1px 5px",borderRadius:3,
+                          background:C.accentDim,color:C.accentText,fontWeight:700}}>
+                          {ref.source}
+                        </span>
+                      )}
+                      {ref.tags?.slice(0,2).map(t=>(
+                        <span key={t} style={{fontSize:9,padding:"1px 5px",borderRadius:3,
+                          background:C.surfaceHi,color:C.muted,border:`1px solid ${C.border}`}}>
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function CVEWall({token,C}){
   const [items,setItems]=useState([]); const [loading,setLoading]=useState(false);
   const [err,setErr]=useState("");
