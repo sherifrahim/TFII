@@ -466,7 +466,7 @@ function RelGraph({iocId,iocValue,token,C}){
       });
     },50);
     return()=>clearInterval(animRef.current);
-  },[rels]);
+  },[rels]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function startDrag(e,nodeId){e.preventDefault();setDragging(nodeId);clearInterval(animRef.current);}
   function onMove(e){if(!dragging||!svgRef.current)return;const rect=svgRef.current.getBoundingClientRect();setPos(p=>({...p,[dragging]:{x:e.clientX-rect.left,y:e.clientY-rect.top}}));}
