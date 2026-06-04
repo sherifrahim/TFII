@@ -349,80 +349,540 @@ function NotificationBell({token,C,isAdmin}){
 }
 
 // ── CVE DETAIL MODAL ──────────────────────────────────────────────────────────
+// ── CVE DETAIL — OpenCVE-parity full-panel view ──────────────────────────────
 function CVEDetail({cve,token,onClose,C}){
-  const [detail,setDetail]=useState(null);
+  const [enriched,setEnriched]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [tab,setTab]=useState("overview");
+
   useEffect(()=>{
-    api(`/cves/${encodeURIComponent(cve.cve_id)}`,{},token).then(r=>r.ok?r.json():null).then(d=>{if(d)setDetail(d);});
-  },[cve.cve_id,token]);
-  const d=detail||cve;
+    setLoading(true);setEnriched(null);setTab("overview");
+    // Fetch from multi-source lookup for enriched data
+    api(`/cve/lookup?id=${encodeURIComponent(cve.cve_id)}`,{},token)
+      .then(r=>r.ok?r.json():null)
+      .then(d=>{if(d)setEnriched(d);setLoading(false);})
+      .catch(()=>setLoading(false));
+  },[cve.cve_id,token]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  const d=cve;
+  const nvd=enriched?.sources?.find(s=>s.source==="NVD"&&s.status==="ok");
+  const cveOrg=enriched?.sources?.find(s=>s.source==="CVE.org"&&s.status==="ok");
+  const osv=enriched?.sources?.find(s=>s.source==="OSV"&&s.status==="ok");
+  const epss=enriched?.epss;
+  const inKev=enriched?.in_kev||d.kev_listed;
+  const kevDate=enriched?.kev_date||d.kev_date;
+
+  // Merge references from all sources + DB, deduplicated
+  const allRefs=[...(d.references||[]),...(nvd?.references||[])]
+    .reduce((acc,r)=>{
+      const url=r?.url||r;
+      if(url&&!acc.find(x=>x.url===url)) acc.push({url,tags:r?.tags||[]});
+      return acc;
+    },[]);
+
+  const CVSS_META={
+    AV:{label:"Attack Vector",   N:{l:"Network",   risk:3},A:{l:"Adjacent",risk:2},L:{l:"Local",  risk:1},P:{l:"Physical",risk:0}},
+    AC:{label:"Attack Complexity",L:{l:"Low",       risk:2},H:{l:"High",   risk:0}},
+    PR:{label:"Privileges Req.",  N:{l:"None",      risk:2},L:{l:"Low",    risk:1},H:{l:"High",   risk:0}},
+    UI:{label:"User Interaction", N:{l:"None",      risk:2},R:{l:"Required",risk:0}},
+    S: {label:"Scope",            C:{l:"Changed",   risk:2},U:{l:"Unchanged",risk:0}},
+    C: {label:"Confidentiality",  H:{l:"High",      risk:2},L:{l:"Low",    risk:1},N:{l:"None",   risk:0}},
+    I: {label:"Integrity",        H:{l:"High",      risk:2},L:{l:"Low",    risk:1},N:{l:"None",   risk:0}},
+    A: {label:"Availability",     H:{l:"High",      risk:2},L:{l:"Low",    risk:1},N:{l:"None",   risk:0}},
+  };
+
+  function parseCVSS(vec){
+    if(!vec) return null;
+    const m={}; (vec||"").replace("CVSS:3.1/","").replace("CVSS:3.0/","").split("/").forEach(p=>{
+      const [k,v]=p.split(":"); if(k&&v) m[k]=v;
+    }); return m;
+  }
+  const cvssMetrics=parseCVSS(d.cvss_vector||nvd?.cvss?.vector);
+
+  function cvssRiskColor(key,val){
+    const risk=CVSS_META[key]?.[val]?.risk??0;
+    return risk>=2?C.red:risk===1?C.amber:C.muted;
+  }
+  function cvssRiskBg(key,val){
+    const risk=CVSS_META[key]?.[val]?.risk??0;
+    return risk>=2?C.red+"20":risk===1?C.amber+"20":C.surfaceHi;
+  }
+
+  // Categorize references
+  const REF_CATS={
+    Patch:["Patch","Fix","Mitigation"],
+    Advisory:["Vendor Advisory","Third Party Advisory"],
+    Exploit:["Exploit","Proof of Concept"],
+    Technical:["Technical Description","Issue Tracking"],
+    Other:[]
+  };
+  function categorizeRef(tags){
+    if(!tags?.length) return "Other";
+    for(const[cat,keywords] of Object.entries(REF_CATS)){
+      if(tags.some(t=>keywords.some(k=>t.toLowerCase().includes(k.toLowerCase())))) return cat;
+    }
+    return "Other";
+  }
+  const refsByCategory=allRefs.reduce((acc,ref)=>{
+    const cat=categorizeRef(ref.tags);
+    if(!acc[cat]) acc[cat]=[];
+    acc[cat].push(ref); return acc;
+  },{});
+
+  const score=d.cvss_score;
+  const scoreColor=score>=9?C.red:score>=7?C.amber:score>=4?C.purple:C.green;
+  const sevLabel=d.cvss_severity||nvd?.cvss?.severity||"";
+
+  const TABS=[
+    {id:"overview",  label:"Overview"},
+    {id:"cvss",      label:"CVSS Details"},
+    {id:"references",label:`References (${allRefs.length})`},
+    {id:"sources",   label:"All Sources"},
+  ];
+  if(osv?.vulns?.length>0) TABS.splice(3,0,{id:"packages",label:"Affected Packages"});
+
   return(
-    <div style={{position:"fixed",inset:0,background:"#00000090",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,padding:16}} onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:720,maxHeight:"92vh",overflowY:"auto",background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,boxShadow:C.shadow}}>
-        <div style={{padding:"20px 24px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-            <div style={{flex:1,marginRight:12}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
-                <span style={{fontSize:14,fontWeight:700,color:C.accentText,fontFamily:"monospace"}}>{d.cve_id}</span>
-                <SevBadge severity={d.cvss_severity} score={d.cvss_score} C={C}/>
-                {d.kev_listed&&<span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,background:C.red+"20",color:C.red,border:`1px solid ${C.red}40`}}>🚨 CISA KEV</span>}
-                <PatchBadge available={d.patch_available} url={d.patch_url} C={C}/>
+    <div style={{position:"fixed",inset:0,background:"#00000095",display:"flex",
+      alignItems:"flex-start",justifyContent:"flex-end",zIndex:600,padding:0}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{width:"min(820px,100%)",height:"100vh",overflowY:"auto",
+          background:C.surface,borderLeft:`1px solid ${C.border}`,
+          boxShadow:"-8px 0 40px #0006"}}>
+
+        {/* ── Header ── */}
+        <div style={{padding:"20px 24px 0",borderBottom:`1px solid ${C.border}`,
+          background:C.surfaceHi,position:"sticky",top:0,zIndex:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+            <div style={{flex:1,minWidth:0,marginRight:12}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
+                <span style={{fontSize:16,fontWeight:800,color:C.accentText,fontFamily:"monospace",
+                  letterSpacing:"-0.01em"}}>{d.cve_id}</span>
+                {inKev&&<span style={{fontSize:11,padding:"3px 9px",borderRadius:5,fontWeight:700,
+                  background:C.red+"20",color:C.red,border:`1px solid ${C.red}40`}}>🚨 CISA KEV</span>}
+                {d.patch_available&&<span style={{fontSize:11,padding:"3px 9px",borderRadius:5,fontWeight:700,
+                  background:C.green+"20",color:C.green,border:`1px solid ${C.green}40`}}>✅ Patch Available</span>}
+                <a href={`https://nvd.nist.gov/vuln/detail/${d.cve_id}`} target="_blank" rel="noreferrer"
+                  style={{fontSize:11,color:C.muted,display:"flex",alignItems:"center",gap:3}}>
+                  <NavIcon name="externalLink" size={11} color={C.muted}/>NVD
+                </a>
               </div>
-              <div style={{fontSize:13,color:C.muted}}>Asset: <strong style={{color:C.white}}>{d.asset_name}</strong></div>
+              {d.asset_name&&<div style={{fontSize:12,color:C.muted}}>
+                Asset: <span style={{color:C.accentText,fontWeight:600}}>{d.asset_name}</span>
+              </div>}
             </div>
-            <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,fontSize:22,cursor:"pointer",padding:0}}>×</button>
+
+            {/* Big score */}
+            <div style={{display:"flex",gap:12,alignItems:"center",flexShrink:0}}>
+              {score&&(
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:32,fontWeight:800,color:scoreColor,lineHeight:1}}>{score}</div>
+                  <div style={{fontSize:10,color:scoreColor,fontWeight:700,letterSpacing:"0.05em",
+                    textTransform:"uppercase"}}>{sevLabel}</div>
+                </div>
+              )}
+              {epss&&(
+                <div style={{textAlign:"center",padding:"6px 12px",background:C.accentDim,
+                  border:`1px solid ${C.accent}30`,borderRadius:8}}>
+                  <div style={{fontSize:18,fontWeight:700,color:C.accentText}}>
+                    {(epss.epss*100).toFixed(1)}%
+                  </div>
+                  <div style={{fontSize:10,color:C.muted,fontWeight:600}}>EPSS</div>
+                </div>
+              )}
+              <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,
+                fontSize:22,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
+            </div>
           </div>
-        </div>
-        <div style={{padding:24}}>
-          <div style={{background:C.surfaceHi,borderRadius:10,padding:16,marginBottom:16,fontSize:13,color:C.text,lineHeight:1.7}}>{d.description}</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:16}}>
-            {[["CVSS Score",d.cvss_score?`${d.cvss_score}/10`:"N/A",(d.cvss_score||0)>=9?C.red:(d.cvss_score||0)>=7?C.amber:C.green],
-              ["EPSS Score",d.epss_score?`${(d.epss_score*100).toFixed(1)}%`:"N/A",C.accentText],
-              ["Published",d.published_date||"?",C.muted],["Modified",d.modified_date||"?",C.muted],
-              ["CWE",d.cwe||"N/A",C.purple],
-              ["KEV Status",d.kev_listed?`Listed ${d.kev_date||""}`:"Not Listed",d.kev_listed?C.red:C.muted],
-            ].map(([label,value,color])=>(
-              <div key={label} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:8,padding:12}}>
-                <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:4,letterSpacing:.5,textTransform:"uppercase"}}>{label}</div>
-                <div style={{fontSize:13,color,fontWeight:600}}>{value}</div>
+
+          {/* Score bar */}
+          {score&&(
+            <div style={{marginBottom:14}}>
+              <div style={{height:6,background:C.border,borderRadius:3,overflow:"hidden",position:"relative"}}>
+                <div style={{position:"absolute",left:0,top:0,height:"100%",borderRadius:3,
+                  width:`${(score/10)*100}%`,
+                  background:`linear-gradient(90deg, ${C.green}, ${C.amber} 50%, ${C.red})`}}/>
+                <div style={{position:"absolute",top:-3,height:12,width:3,borderRadius:2,
+                  background:C.white||"#fff",left:`calc(${(score/10)*100}% - 1px)`}}/>
               </div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:9,
+                color:C.muted,marginTop:3}}>
+                <span>0.0 None</span><span>4.0 Low</span><span>7.0 High</span><span>9.0 Critical</span>
+              </div>
+            </div>
+          )}
+
+          {/* Tabs */}
+          <div style={{display:"flex",gap:0,overflowX:"auto"}}>
+            {TABS.map(t=>(
+              <button key={t.id} onClick={()=>setTab(t.id)}
+                style={{padding:"8px 16px",border:"none",cursor:"pointer",fontFamily:"inherit",
+                  fontSize:12,fontWeight:600,background:"transparent",
+                  color:tab===t.id?C.accentText:C.muted,whiteSpace:"nowrap",
+                  borderBottom:tab===t.id?`2px solid ${C.accentText}`:"2px solid transparent"}}>
+                {t.label}
+              </button>
             ))}
           </div>
-          {d.patch_available&&(
-            <div style={{background:C.green+"10",border:`1px solid ${C.green}30`,borderRadius:10,padding:14,marginBottom:16}}>
-              <div style={{fontSize:12,fontWeight:700,color:C.green,marginBottom:6}}>✅ Patch Available</div>
-              {d.patch_detected_at&&<div style={{fontSize:11,color:C.muted,marginBottom:8}}>Detected: {new Date(d.patch_detected_at).toLocaleString()}</div>}
-              {d.patch_url&&<a href={d.patch_url} target="_blank" rel="noreferrer" style={{fontSize:12,color:C.green,fontWeight:600,display:"inline-block",padding:"4px 14px",border:`1px solid ${C.green}40`,borderRadius:6}}>View Vendor Patch / Advisory →</a>}
-            </div>
-          )}
-          {d.affected_versions&&(
-            <div style={{marginBottom:16}}>
-              <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,letterSpacing:.5,textTransform:"uppercase"}}>Affected Versions</div>
-              <div style={{fontSize:12,color:C.text,padding:"8px 12px",background:C.surfaceHi,borderRadius:6,fontFamily:"monospace"}}>{d.affected_versions}</div>
-            </div>
-          )}
-          {d.cvss_vector&&(
-            <div style={{marginBottom:16}}>
-              <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,letterSpacing:.5,textTransform:"uppercase"}}>CVSS Vector</div>
-              <div style={{fontSize:11,color:C.accentText,padding:"8px 12px",background:C.surfaceHi,borderRadius:6,fontFamily:"monospace",wordBreak:"break-all"}}>{d.cvss_vector}</div>
-            </div>
-          )}
-          {detail?.linked_iocs?.length>0&&(
-            <div style={{marginBottom:16}}>
-              <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,letterSpacing:.5,textTransform:"uppercase"}}>Auto-Extracted IOCs ({detail.linked_iocs.length})</div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                {detail.linked_iocs.map(ioc=>(
-                  <span key={ioc.id} style={{fontSize:11,padding:"3px 10px",borderRadius:4,background:C.accentDim,color:C.accentText,border:`1px solid ${C.accent}40`,fontFamily:"monospace"}}>{ioc.value_defanged||ioc.value}</span>
-                ))}
-              </div>
-            </div>
-          )}
-          {d.references?.length>0&&(
+        </div>
+
+        {/* ── Body ── */}
+        <div style={{padding:"20px 24px"}}>
+
+          {/* ── OVERVIEW TAB ── */}
+          {tab==="overview"&&(
             <div>
-              <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,letterSpacing:.5,textTransform:"uppercase"}}>References</div>
-              {d.references.slice(0,8).map((ref,i)=>(
-                <div key={i} style={{marginBottom:6,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                  <a href={ref.url} target="_blank" rel="noreferrer" style={{fontSize:12,color:C.accentText,wordBreak:"break-all",flex:1}}>{ref.url}</a>
-                  {ref.tags?.map(tag=><span key={tag} style={{fontSize:10,padding:"1px 6px",borderRadius:3,background:C.surfaceHi,color:C.muted,border:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{tag}</span>)}
+              {/* Description */}
+              <div style={{fontSize:13,color:C.text,lineHeight:1.8,padding:"14px 16px",
+                background:C.surfaceHi,borderRadius:10,marginBottom:18,border:`1px solid ${C.border}`}}>
+                {d.description||nvd?.description||"No description available."}
+              </div>
+
+              {/* Timeline */}
+              <div style={{marginBottom:18}}>
+                <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:10,
+                  textTransform:"uppercase",letterSpacing:"0.06em"}}>Timeline</div>
+                <div style={{display:"flex",gap:0,flexWrap:"wrap"}}>
+                  {[
+                    {label:"Published",  date:d.published_date||nvd?.published,     color:C.accentText},
+                    {label:"Modified",   date:d.modified_date||nvd?.modified,       color:C.muted},
+                    {label:"KEV Added",  date:kevDate,                               color:C.red,   show:inKev},
+                    {label:"Patch Found",date:d.patch_detected_at?.slice(0,10),     color:C.green, show:d.patch_available},
+                  ].filter(x=>x.date&&x.show!==false).map((item,i,arr)=>(
+                    <div key={item.label} style={{display:"flex",alignItems:"center"}}>
+                      <div style={{textAlign:"center",padding:"6px 14px",
+                        background:C.surfaceHi,border:`1px solid ${C.border}`,
+                        borderRadius:i===0?"8px 0 0 8px":i===arr.length-1?"0 8px 8px 0":"0",
+                        borderLeft:i>0?"none":"auto"}}>
+                        <div style={{fontSize:10,color:item.color,fontWeight:600,marginBottom:2}}>
+                          {item.label}
+                        </div>
+                        <div style={{fontSize:12,color:C.text,fontWeight:500,fontFamily:"monospace"}}>
+                          {item.date?.slice(0,10)||"—"}
+                        </div>
+                      </div>
+                      {i<arr.length-1&&<div style={{fontSize:14,color:C.muted}}>→</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Scores grid */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",
+                gap:10,marginBottom:18}}>
+                {/* CVSS */}
+                <div style={{padding:"12px 14px",background:C.surfaceHi,
+                  border:`1px solid ${score>=9?C.red:score>=7?C.amber:C.border}30`,borderRadius:10}}>
+                  <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6,textTransform:"uppercase"}}>CVSS v{nvd?.cvss?.version||"3.1"}</div>
+                  <div style={{fontSize:22,fontWeight:800,color:scoreColor,lineHeight:1}}>{score||"N/A"}</div>
+                  <div style={{fontSize:10,color:scoreColor,fontWeight:600,marginTop:2}}>{sevLabel}</div>
+                </div>
+                {/* EPSS */}
+                {epss&&(
+                  <div style={{padding:"12px 14px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
+                    <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6,textTransform:"uppercase"}}>EPSS Score</div>
+                    <div style={{fontSize:22,fontWeight:800,color:C.accentText,lineHeight:1}}>
+                      {(epss.epss*100).toFixed(2)}%
+                    </div>
+                    <div style={{fontSize:10,color:C.muted,marginTop:2}}>
+                      Top {(100-epss.percentile*100).toFixed(0)}% exploited
+                    </div>
+                    {/* Percentile bar */}
+                    <div style={{marginTop:6,height:3,background:C.border,borderRadius:2,overflow:"hidden"}}>
+                      <div style={{width:`${epss.percentile*100}%`,height:"100%",background:C.accent,borderRadius:2}}/>
+                    </div>
+                  </div>
+                )}
+                {/* KEV */}
+                <div style={{padding:"12px 14px",background:inKev?C.red+"08":C.surfaceHi,
+                  border:`1px solid ${inKev?C.red+"40":C.border}`,borderRadius:10}}>
+                  <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6,textTransform:"uppercase"}}>CISA KEV</div>
+                  <div style={{fontSize:14,fontWeight:700,color:inKev?C.red:C.muted}}>
+                    {inKev?"In Catalog":"Not Listed"}
+                  </div>
+                  {kevDate&&<div style={{fontSize:10,color:C.muted,marginTop:2}}>Added {kevDate}</div>}
+                </div>
+                {/* CWE */}
+                {d.cwe&&(
+                  <div style={{padding:"12px 14px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
+                    <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6,textTransform:"uppercase"}}>Weakness</div>
+                    <div style={{fontSize:13,fontWeight:700,color:C.purple}}>{d.cwe}</div>
+                    <a href={`https://cwe.mitre.org/data/definitions/${d.cwe.replace("CWE-","")}.html`}
+                      target="_blank" rel="noreferrer"
+                      style={{fontSize:10,color:C.muted,marginTop:2,display:"block"}}>
+                      View on MITRE →
+                    </a>
+                  </div>
+                )}
+              </div>
+
+              {/* Patch section */}
+              {d.patch_available&&d.patch_url&&(
+                <div style={{padding:"14px 16px",background:C.green+"08",
+                  border:`1px solid ${C.green}30`,borderRadius:10,marginBottom:18}}>
+                  <div style={{fontSize:11,fontWeight:700,color:C.green,marginBottom:8}}>
+                    ✅ Vendor Patch / Advisory Available
+                  </div>
+                  {d.patch_detected_at&&(
+                    <div style={{fontSize:11,color:C.muted,marginBottom:8}}>
+                      Detected: {new Date(d.patch_detected_at).toLocaleString()}
+                    </div>
+                  )}
+                  <a href={d.patch_url} target="_blank" rel="noreferrer"
+                    style={{fontSize:12,color:C.green,fontWeight:600,padding:"6px 14px",
+                      border:`1px solid ${C.green}40`,borderRadius:6,
+                      background:C.green+"10",display:"inline-flex",alignItems:"center",gap:6}}>
+                    <NavIcon name="externalLink" size={12} color={C.green}/>
+                    View Patch / Advisory
+                  </a>
+                </div>
+              )}
+
+              {/* CVE.org affected products */}
+              {cveOrg?.affected?.length>0&&(
+                <div style={{marginBottom:18}}>
+                  <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:10,
+                    textTransform:"uppercase",letterSpacing:"0.06em"}}>
+                    Affected Products (CVE.org)
+                  </div>
+                  <div style={{background:C.surfaceHi,border:`1px solid ${C.border}`,
+                    borderRadius:10,overflow:"hidden"}}>
+                    {cveOrg.affected.map((a,i)=>(
+                      <div key={i} style={{padding:"10px 14px",
+                        borderBottom:i<cveOrg.affected.length-1?`1px solid ${C.border}20`:"none",
+                        display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{fontSize:12,color:C.white||C.textHi,fontWeight:500}}>{a}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Top references preview */}
+              {allRefs.length>0&&(
+                <div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                    <div style={{fontSize:10,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em"}}>
+                      Key References
+                    </div>
+                    {allRefs.length>4&&(
+                      <button onClick={()=>setTab("references")}
+                        style={{fontSize:11,color:C.accentText,background:"none",border:"none",
+                          cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+                        View all {allRefs.length} →
+                      </button>
+                    )}
+                  </div>
+                  {allRefs.filter(r=>r.tags?.includes("Patch")||r.tags?.includes("Vendor Advisory")).slice(0,4).map((ref,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:8,
+                      padding:"8px 12px",background:C.surfaceHi,borderRadius:7}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <a href={ref.url} target="_blank" rel="noreferrer"
+                          style={{fontSize:12,color:C.accentText,wordBreak:"break-all",lineHeight:1.5}}>
+                          {ref.url}
+                        </a>
+                      </div>
+                      <div style={{display:"flex",gap:4,flexShrink:0}}>
+                        {ref.tags?.slice(0,2).map(t=>(
+                          <span key={t} style={{fontSize:9,padding:"1px 6px",borderRadius:3,
+                            background:t==="Patch"?C.green+"20":t.includes("Advisory")?C.amber+"20":C.surfaceHi,
+                            color:t==="Patch"?C.green:t.includes("Advisory")?C.amber:C.muted,
+                            fontWeight:600,whiteSpace:"nowrap"}}>{t}</span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── CVSS DETAILS TAB ── */}
+          {tab==="cvss"&&(
+            <div>
+              <div style={{fontSize:13,color:C.muted,marginBottom:16,lineHeight:1.6}}>
+                The CVSS vector breaks down into 8 metrics that determine exploitability and impact.
+                Red = high risk, amber = medium risk, grey = low risk for that metric.
+              </div>
+              {!cvssMetrics&&<div style={{color:C.muted,fontSize:13}}>No CVSS vector available for this CVE.</div>}
+              {cvssMetrics&&(
+                <div>
+                  {/* Vector string */}
+                  <div style={{padding:"10px 14px",background:C.surfaceHi,borderRadius:8,
+                    marginBottom:20,fontFamily:"monospace",fontSize:12,color:C.accentText,
+                    wordBreak:"break-all",border:`1px solid ${C.border}`}}>
+                    {d.cvss_vector||nvd?.cvss?.vector}
+                  </div>
+                  {/* Metric grid */}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10,marginBottom:20}}>
+                    {Object.entries(cvssMetrics).filter(([k])=>CVSS_META[k]).map(([key,val])=>{
+                      const meta=CVSS_META[key];
+                      const valMeta=meta[val];
+                      const color=cvssRiskColor(key,val);
+                      const bg=cvssRiskBg(key,val);
+                      return(
+                        <div key={key} style={{padding:"12px 14px",background:bg,
+                          border:`1px solid ${color}40`,borderRadius:10}}>
+                          <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6,
+                            textTransform:"uppercase",letterSpacing:"0.05em"}}>
+                            {meta.label}
+                          </div>
+                          <div style={{display:"flex",alignItems:"center",gap:6}}>
+                            <span style={{fontSize:16,fontWeight:800,color:color,
+                              fontFamily:"monospace"}}>{key}:{val}</span>
+                            <span style={{fontSize:13,color:color,fontWeight:600}}>
+                              {valMeta?.l||val}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {/* Score breakdown */}
+                  <div style={{padding:"16px",background:C.surfaceHi,borderRadius:12,
+                    border:`1px solid ${C.border}`}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <span style={{fontSize:13,fontWeight:600,color:C.white||C.textHi}}>Base Score</span>
+                      <span style={{fontSize:22,fontWeight:800,color:scoreColor}}>{score}</span>
+                    </div>
+                    <div style={{height:8,background:C.border,borderRadius:4,overflow:"hidden",marginBottom:6}}>
+                      <div style={{height:"100%",borderRadius:4,
+                        width:`${(score/10)*100}%`,
+                        background:`linear-gradient(90deg,${C.green},${C.amber} 55%,${C.red})`}}/>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.muted}}>
+                      <span>Low (0.1–3.9)</span><span>Medium (4.0–6.9)</span>
+                      <span>High (7.0–8.9)</span><span>Critical (9.0–10.0)</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── REFERENCES TAB ── */}
+          {tab==="references"&&(
+            <div>
+              {allRefs.length===0&&<div style={{color:C.muted,fontSize:13}}>No references available.</div>}
+              {Object.entries(refsByCategory).map(([cat,refs])=>(
+                <div key={cat} style={{marginBottom:20}}>
+                  <div style={{fontSize:11,fontWeight:700,color:
+                    cat==="Patch"?C.green:cat==="Exploit"?C.red:cat==="Advisory"?C.amber:C.muted,
+                    marginBottom:10,textTransform:"uppercase",letterSpacing:"0.06em",
+                    display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{width:6,height:6,borderRadius:"50%",display:"inline-block",
+                      background:cat==="Patch"?C.green:cat==="Exploit"?C.red:cat==="Advisory"?C.amber:C.border}}/>
+                    {cat} ({refs.length})
+                  </div>
+                  {refs.map((ref,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"center",gap:8,
+                      padding:"8px 12px",marginBottom:4,
+                      background:C.surfaceHi,borderRadius:7,
+                      border:`1px solid ${C.border}`}}>
+                      <a href={ref.url} target="_blank" rel="noreferrer"
+                        style={{flex:1,fontSize:12,color:C.accentText,
+                          wordBreak:"break-all",lineHeight:1.5}}>
+                        <NavIcon name="externalLink" size={10} color={C.accentText}/>{" "}{ref.url}
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── AFFECTED PACKAGES TAB (OSV) ── */}
+          {tab==="packages"&&osv&&(
+            <div>
+              <div style={{fontSize:12,color:C.muted,marginBottom:16}}>
+                Package-level data from OSV (Open Source Vulnerabilities). Shows affected ecosystems and fix versions.
+              </div>
+              {osv.vulns?.map((v,i)=>(
+                <div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:12,padding:"16px 18px",marginBottom:12,boxShadow:C.shadow}}>
+                  <div style={{fontSize:13,fontWeight:700,color:C.accentText,marginBottom:10}}>
+                    {v.id}
+                  </div>
+                  {v.packages?.map((p,j)=>(
+                    <div key={j} style={{display:"flex",alignItems:"center",gap:10,
+                      padding:"8px 12px",background:C.surfaceHi,borderRadius:7,marginBottom:6}}>
+                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,
+                        background:C.accentDim,color:C.accentText,fontWeight:700}}>
+                        {p.ecosystem}
+                      </span>
+                      <span style={{fontSize:13,color:C.white||C.textHi,fontWeight:500}}>{p.name}</span>
+                      {p.fix&&(
+                        <span style={{marginLeft:"auto",fontSize:11,color:C.green,fontWeight:700}}>
+                          Fix: {p.fix}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── ALL SOURCES TAB ── */}
+          {tab==="sources"&&(
+            <div>
+              {loading&&<div style={{textAlign:"center",padding:40,color:C.muted}}>
+                Loading data from all sources...
+              </div>}
+              {!loading&&enriched?.sources?.map(src=>(
+                <div key={src.source} style={{background:C.surface,border:`1px solid ${
+                  src.status==="ok"?C.border:C.border+"50"}`,borderRadius:12,
+                  padding:"16px 18px",marginBottom:12,opacity:src.status==="ok"?1:0.6,
+                  boxShadow:C.shadow}}>
+                  <div style={{display:"flex",justifyContent:"space-between",
+                    alignItems:"center",marginBottom:src.status==="ok"?12:0}}>
+                    <span style={{fontSize:14,fontWeight:700,color:C.white||C.textHi}}>
+                      {src.source}
+                    </span>
+                    <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:600,
+                      background:src.status==="ok"?C.green+"20":C.muted+"20",
+                      color:src.status==="ok"?C.green:C.muted}}>
+                      {src.status==="ok"?"Found":src.status==="not_found"?"Not in database":"Error"}
+                    </span>
+                  </div>
+                  {src.status==="ok"&&src.source==="NVD"&&src.cvss&&(
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
+                      <span style={{fontSize:12,fontWeight:700,
+                        color:(SEV_COLORS=>{return SEV_COLORS[src.cvss.severity]||C.muted;})({CRITICAL:C.red,HIGH:C.amber,MEDIUM:C.purple,LOW:C.green})
+                      }}>CVSS {src.cvss.version}: {src.cvss.score} {src.cvss.severity}</span>
+                      {src.weaknesses?.map(w=>(
+                        <span key={w} style={{fontSize:11,padding:"2px 8px",borderRadius:4,
+                          background:C.purple+"20",color:C.purple}}>{w}</span>
+                      ))}
+                    </div>
+                  )}
+                  {src.status==="ok"&&src.source==="CVE.org"&&(
+                    <div>
+                      <div style={{fontSize:11,color:C.muted,marginBottom:4}}>
+                        State: <span style={{color:C.accentText,fontWeight:600}}>{src.state}</span>
+                        {src.published&&<span style={{marginLeft:10}}>Published: {src.published}</span>}
+                      </div>
+                      {src.affected?.slice(0,3).map((a,i)=>(
+                        <div key={i} style={{fontSize:11,color:C.text,padding:"3px 0"}}>→ {a}</div>
+                      ))}
+                    </div>
+                  )}
+                  {src.status==="ok"&&src.source==="CVE Trends"&&(
+                    <div style={{fontSize:12,color:src.trending?C.accentText:C.muted}}>
+                      {src.trending?"📈 Currently trending":"Not trending"}
+                      {src.count_24h>0&&<span style={{marginLeft:8,color:C.muted}}>{src.count_24h} mentions/24h</span>}
+                    </div>
+                  )}
+                  {src.status==="error"&&(
+                    <div style={{fontSize:11,color:C.red}}>{src.error||"Failed to fetch"}</div>
+                  )}
+                  {src.url&&src.status==="ok"&&(
+                    <a href={src.url} target="_blank" rel="noreferrer"
+                      style={{fontSize:11,color:C.accentText,marginTop:8,
+                        display:"flex",alignItems:"center",gap:4}}>
+                      <NavIcon name="externalLink" size={10} color={C.accentText}/>View on {src.source}
+                    </a>
+                  )}
                 </div>
               ))}
             </div>
