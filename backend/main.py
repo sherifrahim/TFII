@@ -2923,115 +2923,277 @@ def taxii_objects(collection_id: str, user=Depends(get_current_user), conn=Depen
         media_type="application/taxii+json;version=2.1")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SPL / KQL GENERATOR — powered by Groq (free, llama3-70b)
+# QUERY BUILDER & EXPLAINER — powered by Groq (llama-3.3-70b)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class QueryGenRequest(BaseModel):
-    use_case: str
-    query_type: str      # "spl" | "kql"
-    context: Optional[str] = ""   # optional: log source, product, field names
+    use_case:    str
+    query_type:  str            # "kql" | "spl"
+    context:     Optional[str] = ""
+    tactic_hint: Optional[str] = ""  # optional MITRE tactic hint
 
-SYSTEM_PROMPT_SPL = """You are a security engineer expert in Splunk SPL (Search Processing Language).
-The user will describe a detection use case or investigation need.
-You will respond with:
-1. A ready-to-use SPL query
-2. A brief explanation of what each clause does
-3. Any important notes about tuning or prerequisites (index names, sourcetypes etc.)
+class QueryExplainRequest(BaseModel):
+    query:      str
+    query_type: str  # "kql" | "spl"
 
-Format your response exactly like this:
-QUERY:
-```spl
-<the query here>
-```
-EXPLANATION:
-<line by line explanation>
-NOTES:
-<tuning tips, required sourcetypes/indexes, field dependencies>"""
+SENTINEL_TABLES = """
+MICROSOFT SENTINEL / DEFENDER TABLES (use these, know their key fields):
+-- Identity & Auth --
+SecurityEvent           EventID,Account,Computer,LogonType,IpAddress,SubjectUserName
+SigninLogs              UserPrincipalName,IPAddress,AppDisplayName,ResultType,ConditionalAccessStatus,RiskLevelDuringSignIn
+AADNonInteractiveUserSignInLogs  same schema as SigninLogs
+AuditLogs               OperationName,InitiatedBy,TargetResources,Result
+IdentityLogonEvents     AccountName,DeviceName,Protocol,LogonType,FailureReason
+IdentityQueryEvents     QueryType,QueryTarget,AccountName  (Kerberos/LDAP)
+IdentityDirectoryEvents AccountName,ActionType,TargetAccountName
 
-SYSTEM_PROMPT_KQL = """You are a security engineer expert in KQL (Kusto Query Language) for Microsoft Sentinel and Defender.
-The user will describe a detection use case or investigation need.
-You will respond with:
-1. A ready-to-use KQL query
-2. A brief explanation of what each clause does
-3. Any important notes about tuning or prerequisites (tables, connectors needed etc.)
+-- Endpoint (MDE) --
+DeviceProcessEvents     DeviceName,FileName,FolderPath,ProcessCommandLine,InitiatingProcessFileName,InitiatingProcessCommandLine,AccountName,SHA256
+DeviceNetworkEvents     DeviceName,RemoteIP,RemotePort,RemoteUrl,InitiatingProcessFileName,InitiatingProcessCommandLine,ActionType
+DeviceFileEvents        DeviceName,FileName,FolderPath,SHA256,InitiatingProcessFileName,ActionType
+DeviceRegistryEvents    DeviceName,RegistryKey,RegistryValueName,RegistryValueData,ActionType,InitiatingProcessFileName
+DeviceLogonEvents       DeviceName,AccountName,LogonType,RemoteIP,Protocol,ActionType
+DeviceImageLoadEvents   DeviceName,FileName,SHA256,IsSigned,IsAzureADJoined,InitiatingProcessFileName
+DeviceAlertEvents       AlertId,Title,Severity,Category,MitreTechniques,DeviceName
 
-Format your response exactly like this:
-QUERY:
-```kql
-<the query here>
-```
-EXPLANATION:
-<line by line explanation>
-NOTES:
-<tuning tips, required tables/connectors, field dependencies>"""
+-- Network & Cloud --
+CommonSecurityLog       DeviceVendor,DeviceProduct,SourceIP,DestinationIP,DestinationPort,RequestURL,Activity,DeviceAction,BytesSent,BytesReceived
+DnsEvents               Name,QueryType,QueryResults,ClientIP,Computer
+AzureActivity           OperationName,Caller,CallerIpAddress,ResourceGroup,Properties,Level
+AzureDiagnostics        ResourceType,OperationName,ResultType
+StorageBlobLogs         OperationName,CallerIpAddress,Uri,StatusCode
+KeyVaultLogs            OperationName,CallerIPAddress,ResultType,Id
+
+-- O365 --
+OfficeActivity          UserId,Operation,ClientIP,UserType,RecordType,ObjectId,Parameters
+EmailEvents             NetworkMessageId,SenderFromAddress,RecipientEmailAddress,Subject,DeliveryAction,ThreatTypes
+EmailUrlInfo            NetworkMessageId,Url,UrlDomain
+"""
+
+SPLUNK_SOURCETYPES = """
+COMMON SPLUNK SOURCETYPES & INDEXES (use these, know their key fields):
+index=windows  sourcetype=WinEventLog:Security   EventCode,Account_Name,Computer,Logon_Type,IpAddress
+index=windows  sourcetype=WinEventLog:System      EventCode,ComputerName,Message
+index=endpoint sourcetype=crowdstrike:events      aid,aip,CommandLine,FileName,SHA256,UserName,LocalIP
+index=network  sourcetype=cisco:asa               src_ip,dest_ip,dest_port,action,bytes
+index=network  sourcetype=pan:traffic             src_ip,dest_ip,dest_port,action,bytes,app
+index=network  sourcetype=stream:dns              query,query_type,src_ip,answer
+index=proxy    sourcetype=bluecoat:proxysg:access  cs-uri-stem,cs-host,c-ip,sc-status,cs-bytes,sc-bytes
+index=o365     sourcetype=o365:management:activity Operation,UserId,ClientIP,ObjectId
+index=azure    sourcetype=azure:audit             operationName,caller,callerIpAddress,resultType
+index=endpoint sourcetype=sysmon                  EventCode,Image,CommandLine,ParentImage,ParentCommandLine
+"""
+
+KQL_BEST_PRACTICES = """
+KQL BEST PRACTICES (follow these strictly for production quality):
+1. Always use 'let' statements at the top for tunable parameters (lookback, thresholds, allowlist)
+2. Filter EARLY — where clauses before join/summarize for performance
+3. Use has/has_any for substring matching on indexed fields (NOT contains)
+4. Use in~ for case-insensitive list lookups
+5. Use startswith for prefix matching (faster than contains)
+6. Comment every major section with // Description
+7. Use extend to add computed fields (risk scores, enrichment)
+8. Use project at the end to select only necessary columns
+9. For aggregation detections: summarize → where count > threshold
+10. For time-series: bin() + summarize for beaconing/periodic detection
+11. Always include entity columns needed for Sentinel incidents: AccountName/UPN, DeviceName/Computer, IPAddress
+12. Use tostring(), toint() for type safety on dynamic fields
+13. For joins: use leftsemi/leftanti for inclusion/exclusion checks
+14. Avoid cross-joins; always join on a specific key
+15. For hunting: add | sort by timestamp desc | take 1000 at the end
+"""
+
+SYSTEM_PROMPT_KQL_BUILDER = f"""You are a senior detection engineer who has written production KQL queries for Fortune 500 SOC teams for 10+ years. Your queries are deployed in real Microsoft Sentinel environments. They are used by Tier 1-3 analysts and must actually work.
+
+{SENTINEL_TABLES}
+{KQL_BEST_PRACTICES}
+
+MISSION: Write 3 KQL query variants for the described detection use case:
+1. HIGH FIDELITY — Precise detection, very low false positives, may miss edge cases. Uses tight filters, specific field values, correlated with additional signals.
+2. BALANCED — Good detection rate, manageable FP rate. Suitable for production scheduling.
+3. THREAT HUNTING — Wide net, expect noise, designed for analyst-driven hunts. Include anomaly/statistical approaches where appropriate.
+
+Each query MUST:
+- Have let statements for all tunable parameters
+- Be fully commented
+- Be immediately deployable (no placeholders like YOUR_DOMAIN)
+- Include realistic detection logic (not just a basic where clause)
+- For HIGH FIDELITY: correlate at least 2 signals or add behavioral context
+- For HUNTING: use summarize/arg_max or statistical outlier detection where relevant
+
+RESPOND WITH VALID JSON ONLY (no markdown, no backticks around JSON):
+{{
+  "queries": [
+    {{
+      "label": "High Fidelity",
+      "description": "What makes this precise",
+      "query": "the full kql query as a single string with \\n for newlines",
+      "severity": "High",
+      "confidence": 85,
+      "schedule": "Every 5 minutes, lookback 1h"
+    }},
+    {{
+      "label": "Balanced",
+      "description": "...",
+      "query": "...",
+      "severity": "Medium",
+      "confidence": 70,
+      "schedule": "Every 15 minutes, lookback 4h"
+    }},
+    {{
+      "label": "Threat Hunting",
+      "description": "...",
+      "query": "...",
+      "severity": "Low",
+      "confidence": 50,
+      "schedule": "On-demand / weekly hunt"
+    }}
+  ],
+  "mitre": {{
+    "tactic": "Credential Access",
+    "technique": "T1003.001",
+    "technique_name": "OS Credential Dumping: LSASS Memory",
+    "url": "https://attack.mitre.org/techniques/T1003/001/"
+  }},
+  "required_tables": ["DeviceProcessEvents"],
+  "required_connectors": ["Microsoft Defender for Endpoint"],
+  "false_positives": ["Security tools like Process Monitor", "AV software performing scans"],
+  "tuning_tips": ["Whitelist known security tool hashes", "Add parent process validation"],
+  "performance": "Medium — DeviceProcessEvents is large; time-bound with has() filters recommended"
+}}"""
+
+SYSTEM_PROMPT_SPL_BUILDER = f"""You are a senior detection engineer who has written production Splunk SPL searches for Fortune 500 SOC teams for 10+ years. Your searches are deployed in real Splunk SIEM environments with ES (Enterprise Security) and are used by analysts who will actually run them.
+
+{SPLUNK_SOURCETYPES}
+
+MISSION: Write 3 SPL search variants:
+1. HIGH FIDELITY — Tight filters, correlated signals, low FP. Use eval+case for risk scoring, stats for aggregation.
+2. BALANCED — Good detection/FP balance. Production-ready.
+3. THREAT HUNTING — Wide net. Use outlier detection, rare(), eventstats, or machine-learning SPL commands.
+
+Each search MUST:
+- Start with the most restrictive index/sourcetype filters
+- Use earliest/latest time modifiers as macros or variables
+- Include | eval risk_score statements for risk-based alerting
+- Be commented with | `comment("...")` or inline notes
+- For HIGH FIDELITY: correlate 2+ event types via subsearch or lookup
+- For HUNTING: use stats/eventstats/streamstats for behavioral baselining
+
+RESPOND WITH VALID JSON ONLY (no markdown, no backticks around JSON):
+{{
+  "queries": [
+    {{
+      "label": "High Fidelity",
+      "description": "...",
+      "query": "the full spl as single string with \\n",
+      "severity": "High",
+      "confidence": 85,
+      "schedule": "Cron: */5 * * * *, Earliest: -1h"
+    }},
+    {{"label":"Balanced","description":"...","query":"...","severity":"Medium","confidence":70,"schedule":"*/15 * * * *, Earliest: -4h"}},
+    {{"label":"Threat Hunting","description":"...","query":"...","severity":"Low","confidence":50,"schedule":"On-demand"}}
+  ],
+  "mitre": {{"tactic":"...","technique":"T1XXX","technique_name":"...","url":"https://attack.mitre.org/techniques/T1XXX/"}},
+  "required_indexes": ["windows","endpoint"],
+  "required_sourcetypes": ["WinEventLog:Security"],
+  "false_positives": ["..."],
+  "tuning_tips": ["..."],
+  "performance": "..."
+}}"""
+
+SYSTEM_PROMPT_KQL_EXPLAIN = """You are a KQL detection query expert and security educator. Your job is to explain KQL queries to security analysts — both those who wrote the query and those seeing it for the first time.
+
+When given a KQL or SPL query, return a structured explanation that covers:
+- What threat/attack scenario this detects
+- What each line/clause does in plain English
+- MITRE ATT&CK mapping
+- What it will catch vs. what it will miss
+- Common false positive scenarios
+- Specific improvement suggestions (not generic advice)
+
+RESPOND WITH VALID JSON ONLY (no markdown, no backticks around JSON):
+{
+  "summary": "One sentence: what attack/behavior does this detect?",
+  "threat_description": "2-3 sentences describing the threat this targets and why it matters",
+  "severity": "Critical|High|Medium|Low",
+  "line_by_line": [
+    {"code": "let lookback = 1d;", "explanation": "Defines a 1-day lookback window. Change to 7d for weekly hunts."},
+    {"code": "DeviceProcessEvents", "explanation": "Queries the MDE process creation table — logs every process launched on enrolled endpoints."},
+    ...
+  ],
+  "mitre": {
+    "tactic": "Credential Access",
+    "technique": "T1003.001",
+    "technique_name": "OS Credential Dumping: LSASS Memory",
+    "url": "https://attack.mitre.org/techniques/T1003/001/"
+  },
+  "what_it_catches": [
+    "Direct lsass.exe memory access via OpenProcess",
+    "Task Manager dump of lsass"
+  ],
+  "what_it_misses": [
+    "Kernel-level dumps (PPLDump, Nt* syscalls)",
+    "Comsvcs.dll MiniDump technique if DLL name is renamed"
+  ],
+  "false_positives": [
+    "SentinelOne/CrowdStrike agents access lsass legitimately",
+    "Windows Defender scheduled scans"
+  ],
+  "improvements": [
+    {"issue": "No parent process validation", "fix": "Add | where InitiatingProcessFileName !in~ ('svchost.exe','MsMpEng.exe') to reduce FPs"},
+    {"issue": "Missing allowlist for known security tools", "fix": "Add let allowlisted_tools = dynamic(['MsMpEng.exe','SentinelAgent.exe']); and filter with !has_any(allowlisted_tools)"}
+  ],
+  "data_sources": ["DeviceProcessEvents (MDE required)"],
+  "estimated_fidelity": "Medium — catches common techniques, misses advanced evasion"
+}"""
+
+async def call_groq(system: str, user: str, max_tokens: int = 2500) -> str:
+    async with httpx.AsyncClient(timeout=45) as c:
+        r = await c.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role":"system","content":system},{"role":"user","content":user}],
+                "temperature": 0.2,
+                "max_tokens": max_tokens,
+                "response_format": {"type": "json_object"},
+            }
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Groq API error: {r.status_code}")
+    return r.json()["choices"][0]["message"]["content"]
 
 @app.post("/query-gen/generate")
 async def generate_query(body: QueryGenRequest, user=Depends(get_current_user)):
     if not GROQ_API_KEY:
-        raise HTTPException(status_code=503,
-            detail="GROQ_API_KEY not configured. Add it to .env and restart the backend.")
+        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured. Add it to .env and restart.")
 
-    system_prompt = SYSTEM_PROMPT_KQL if body.query_type == "kql" else SYSTEM_PROMPT_SPL
-
-    user_message = body.use_case
+    system = SYSTEM_PROMPT_KQL_BUILDER if body.query_type == "kql" else SYSTEM_PROMPT_SPL_BUILDER
+    user_msg = body.use_case
+    if body.tactic_hint:
+        user_msg += f"\n\nMITRE Tactic hint: {body.tactic_hint}"
     if body.context:
-        user_message += f"\n\nAdditional context: {body.context}"
+        user_msg += f"\n\nEnvironment context: {body.context}"
 
     try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user",   "content": user_message},
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 1500,
-                },
-            )
-        if r.status_code != 200:
-            raise HTTPException(status_code=502,
-                detail=f"Groq API error: {r.status_code} — {r.text[:200]}")
-
-        content = r.json()["choices"][0]["message"]["content"]
-
-        # Parse the structured response
-        query    = ""
-        explanation = ""
-        notes    = ""
-
-        if "QUERY:" in content:
-            after_query = content.split("QUERY:", 1)[1]
-            code_match = re.search(r"```(?:spl|kql)?\n(.*?)```", after_query, re.DOTALL)
-            if code_match:
-                query = code_match.group(1).strip()
-
-        if "EXPLANATION:" in content:
-            after_exp = content.split("EXPLANATION:", 1)[1]
-            notes_split = after_exp.split("NOTES:", 1)
-            explanation = notes_split[0].strip()
-            if len(notes_split) > 1:
-                notes = notes_split[1].strip()
-
-        if not query:
-            # fallback — return raw if parsing failed
-            return {"raw": content, "query": "", "explanation": content, "notes": ""}
-
-        return {
-            "query":       query,
-            "explanation": explanation,
-            "notes":       notes,
-            "query_type":  body.query_type,
-            "raw":         content,
-        }
-
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Groq API timed out. Try again.")
+        raw = await call_groq(system, user_msg, max_tokens=3000)
+        import json as _json
+        data = _json.loads(raw)
+        return data
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
+
+@app.post("/query-gen/explain")
+async def explain_query(body: QueryExplainRequest, user=Depends(get_current_user)):
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured. Add it to .env and restart.")
+
+    user_msg = f"Explain this {'KQL' if body.query_type == 'kql' else 'SPL'} query:\n\n{body.query}"
+    try:
+        raw = await call_groq(SYSTEM_PROMPT_KQL_EXPLAIN, user_msg, max_tokens=2500)
+        import json as _json
+        return _json.loads(raw)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
+

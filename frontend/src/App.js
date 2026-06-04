@@ -2106,443 +2106,439 @@ function OSINTTool({token,C}){
 // ── GLOBAL SEARCH ─────────────────────────────────────────────────────────────
 // ── SPL / KQL GENERATOR ───────────────────────────────────────────────────────
 function QueryGenerator({token,C}){
-  const [queryType,setQueryType]=useState("kql");
+  const [mode,setMode]=useState("builder"); // builder | explainer
   const [useCase,setUseCase]=useState("");
   const [context,setContext]=useState("");
+  const [tacticHint,setTacticHint]=useState("");
+  const [queryType,setQueryType]=useState("kql");
   const [result,setResult]=useState(null);
+  const [activeVariant,setActiveVariant]=useState(0);
   const [loading,setLoading]=useState(false);
   const [err,setErr]=useState("");
   const [copied,setCopied]=useState(false);
 
-  const EXAMPLES={
-    kql:[
-      "Detect brute force login attempts against Azure AD",
-      "Find PowerShell downloading files from the internet",
-      "Alert on lateral movement using PsExec",
-      "Detect DNS tunneling via unusually long queries",
-      "Hunt for LOLBin execution (certutil, mshta, wscript)",
-      "Detect privilege escalation via token impersonation",
-      "Find failed MFA attempts followed by successful login",
-    ],
-    spl:[
-      "Detect multiple failed SSH logins from same IP",
-      "Alert on large outbound data transfers",
-      "Find new admin accounts created on Windows hosts",
-      "Detect Mimikatz-style credential dumping",
-      "Hunt for beaconing via regular outbound intervals",
-      "Alert on processes spawning cmd.exe or powershell.exe",
-      "Detect web shell activity on IIS servers",
-    ],
-  };
+  // Explainer state
+  const [explainQuery,setExplainQuery]=useState("");
+  const [explainResult,setExplainResult]=useState(null);
+  const [explaining,setExplaining]=useState(false);
+  const [explainErr,setExplainErr]=useState("");
+
+  const TACTICS=["","Initial Access","Execution","Persistence","Privilege Escalation",
+    "Defense Evasion","Credential Access","Discovery","Lateral Movement",
+    "Collection","Exfiltration","Command & Control","Impact"];
+
+  const SEV_COLORS={Critical:C.red,High:C.amber,Medium:C.purple,Low:C.green};
+  const CONF_COLORS={85:C.green,70:C.amber,50:C.muted};
 
   async function generate(){
-    if(!useCase.trim())return;
-    setLoading(true);setErr("");setResult(null);setCopied(false);
-    const r=await api("/query-gen/generate",{method:"POST",
-      body:JSON.stringify({use_case:useCase,query_type:queryType,context})},token);
-    if(r.ok){setResult(await r.json());}
-    else{const e=await r.json();setErr(e.detail||"Generation failed.");}
-    setLoading(false);
-  }
-
-  function copy(){
-    if(!result?.query)return;
-    navigator.clipboard.writeText(result.query);
-    setCopied(true);setTimeout(()=>setCopied(false),2000);
-  }
-
-  return(
-    <div style={{maxWidth:900}}>
-      {/* Header */}
-      <div style={{marginBottom:20,padding:14,background:C.accentDim,
-        border:`1px solid ${C.accent}28`,borderRadius:10,fontSize:13,
-        color:C.accentText,lineHeight:1.6}}>
-        Generate detection and hunting queries for <strong>Splunk (SPL)</strong> or{" "}
-        <strong>Microsoft Sentinel / Defender (KQL)</strong>. Powered by Groq — free, no API quota used on your end.
-      </div>
-
-      {/* Type selector */}
-      <div style={{display:"flex",gap:4,background:C.surfaceHi,borderRadius:10,
-        padding:3,width:"fit-content",marginBottom:20}}>
-        {[["kql","KQL","Microsoft Sentinel / Defender"],["spl","SPL","Splunk"]].map(([t,label,sub])=>(
-          <button key={t} onClick={()=>{setQueryType(t);setResult(null);setErr("");}}
-            style={{padding:"10px 20px",borderRadius:8,border:"none",cursor:"pointer",
-              fontFamily:"inherit",fontWeight:700,transition:"all .15s",
-              background:queryType===t?C.accent:"transparent",
-              color:queryType===t?"#fff":C.muted}}>
-            <div style={{fontSize:13}}>{label}</div>
-            <div style={{fontSize:10,opacity:.7,fontWeight:400}}>{sub}</div>
-          </button>
-        ))}
-      </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:20,alignItems:"start"}}>
-        {/* Left — input */}
-        <div>
-          <Field label="Describe your use case or detection goal" C={C}>
-            <textarea value={useCase} onChange={e=>setUseCase(e.target.value)}
-              rows={4} placeholder={`e.g. "${EXAMPLES[queryType][0]}"`}
-              style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-                color:C.inputText,padding:"12px 14px",borderRadius:8,fontSize:14,
-                outline:"none",fontFamily:"inherit",resize:"vertical",boxSizing:"border-box"}}/>
-          </Field>
-          <Field label="Additional context (optional)" C={C}>
-            <input value={context} onChange={e=>setContext(e.target.value)}
-              placeholder="e.g. field names, log sources, index names, specific product versions..."
-              style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-                color:C.inputText,padding:"10px 14px",borderRadius:8,fontSize:13,
-                outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
-          </Field>
-          <Btn onClick={generate} disabled={!useCase.trim()||loading} C={C}>
-            {loading?`Generating ${queryType.toUpperCase()}...`:`Generate ${queryType.toUpperCase()} Query`}
-          </Btn>
-          {err&&(
-            <div style={{marginTop:12,padding:"10px 14px",background:C.red+"10",
-              border:`1px solid ${C.red}30`,borderRadius:8,fontSize:13,color:C.red}}>
-              {err}
-            </div>
-          )}
-        </div>
-
-        {/* Right — examples */}
-        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:16,boxShadow:C.shadow}}>
-          <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:.5,
-            textTransform:"uppercase",marginBottom:12}}>Example Prompts</div>
-          {EXAMPLES[queryType].map((ex,i)=>(
-            <div key={i} onClick={()=>{setUseCase(ex);setResult(null);}}
-              style={{fontSize:12,color:C.text,padding:"8px 10px",borderRadius:6,
-                cursor:"pointer",marginBottom:4,lineHeight:1.4,transition:"background .1s",
-                border:`1px solid transparent`}}
-              onMouseEnter={e=>{e.currentTarget.style.background=C.surfaceHi;e.currentTarget.style.borderColor=C.border;}}
-              onMouseLeave={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.borderColor="transparent";}}>
-              {ex}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Result */}
-      {result&&(
-        <div style={{marginTop:24}}>
-          {/* Query block */}
-          <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,
-            overflow:"hidden",boxShadow:C.shadow,marginBottom:16}}>
-            <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}`,
-              display:"flex",justifyContent:"space-between",alignItems:"center",
-              background:C.surfaceHi}}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
-                  background:queryType==="kql"?C.purple+"30":C.amber+"30",
-                  color:queryType==="kql"?C.purple:C.amber,
-                  border:`1px solid ${queryType==="kql"?C.purple:C.amber}40`}}>
-                  {queryType.toUpperCase()}
-                </span>
-                <span style={{fontSize:12,color:C.muted}}>Generated query</span>
-              </div>
-              <button onClick={copy} style={{padding:"5px 14px",background:copied?C.green+"20":C.accentDim,
-                border:`1px solid ${copied?C.green:C.accent}40`,color:copied?C.green:C.accentText,
-                borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600,
-                transition:"all .2s"}}>
-                {copied?"✓ Copied!":"Copy Query"}
-              </button>
-            </div>
-            <pre style={{margin:0,padding:"16px 18px",fontSize:13,color:C.accentText,
-              fontFamily:"'Space Mono',monospace",overflowX:"auto",lineHeight:1.6,
-              whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
-              {result.query}
-            </pre>
-          </div>
-
-          {/* Explanation */}
-          {result.explanation&&(
-            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-              padding:18,marginBottom:14,boxShadow:C.shadow}}>
-              <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:.5,
-                textTransform:"uppercase",marginBottom:10}}>How it works</div>
-              <div style={{fontSize:13,color:C.text,lineHeight:1.8,whiteSpace:"pre-line"}}>
-                {result.explanation}
-              </div>
-            </div>
-          )}
-
-          {/* Notes */}
-          {result.notes&&(
-            <div style={{background:C.amber+"08",border:`1px solid ${C.amber}30`,
-              borderRadius:12,padding:18,boxShadow:C.shadow}}>
-              <div style={{fontSize:11,color:C.amber,fontWeight:700,letterSpacing:.5,
-                textTransform:"uppercase",marginBottom:10}}>⚠ Tuning Notes</div>
-              <div style={{fontSize:13,color:C.text,lineHeight:1.8,whiteSpace:"pre-line"}}>
-                {result.notes}
-              </div>
-            </div>
-          )}
-
-          {/* Regenerate */}
-          <div style={{marginTop:16,display:"flex",gap:8}}>
-            <Btn onClick={generate} variant="ghost" C={C} disabled={loading}>
-              {loading?"Regenerating...":"↻ Regenerate"}
-            </Btn>
-            <Btn onClick={()=>{setUseCase("");setResult(null);setContext("");}} variant="ghost" C={C}>
-              New Query
-            </Btn>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── CVE MULTI-SOURCE LOOKUP ───────────────────────────────────────────────────
-function CVELookup({token,C,initialId=""}){
-  const [cveId,setCveId]=useState(initialId);
-  const [result,setResult]=useState(null);
-  const [loading,setLoading]=useState(false);
-  const [err,setErr]=useState("");
-  const CVE_RE=/^CVE-\d{4}-\d{4,}$/i;
-
-  useEffect(()=>{ if(initialId&&CVE_RE.test(initialId)) doLookup(initialId); },[initialId]);// eslint-disable-line react-hooks/exhaustive-deps
-
-  async function doLookup(id){
-    const q=(id||cveId).trim().toUpperCase();
-    if(!CVE_RE.test(q)){setErr("Enter a valid CVE ID e.g. CVE-2024-12345");return;}
-    setLoading(true);setErr("");setResult(null);
+    if(!useCase.trim()) return;
+    setLoading(true);setErr("");setResult(null);setActiveVariant(0);
     try{
-      const r=await api(`/cve/lookup?id=${q}`,{},token);
+      const r=await api("/query-gen/generate",{method:"POST",
+        body:JSON.stringify({use_case:useCase,query_type:queryType,
+          context,tactic_hint:tacticHint})},token);
       if(r.ok) setResult(await r.json());
-      else {const e=await r.json();setErr(e.detail||"Lookup failed");}
+      else {const e=await r.json();setErr(e.detail||"Generation failed");}
     }catch{setErr("Cannot reach server.");}
     setLoading(false);
   }
 
-  const SEV_COLORS={CRITICAL:C.red,HIGH:C.amber,MEDIUM:C.purple,LOW:C.green};
-  const STATUS_ICON={"ok":"✓","not_found":"—","error":"✗"};
+  async function explain(){
+    if(!explainQuery.trim()) return;
+    setExplaining(true);setExplainErr("");setExplainResult(null);
+    try{
+      const r=await api("/query-gen/explain",{method:"POST",
+        body:JSON.stringify({query:explainQuery,query_type:queryType})},token);
+      if(r.ok) setExplainResult(await r.json());
+      else {const e=await r.json();setExplainErr(e.detail||"Failed");}
+    }catch{setExplainErr("Cannot reach server.");}
+    setExplaining(false);
+  }
+
+  function copyQuery(q){
+    navigator.clipboard.writeText(q);setCopied(true);
+    setTimeout(()=>setCopied(false),2000);
+  }
+
+  const variant=result?.queries?.[activeVariant];
+  const CONF_COLOR=c=>c>=80?C.green:c>=60?C.amber:C.muted;
 
   return(
-    <div style={{maxWidth:1000}}>
-      {/* Search bar */}
-      <div style={{display:"flex",gap:10,marginBottom:24}}>
-        <input value={cveId} onChange={e=>setCveId(e.target.value)}
-          onKeyDown={e=>{if(e.key==="Enter")doLookup();}}
-          placeholder="Enter CVE ID — e.g. CVE-2024-12345"
-          style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-            color:C.inputText,padding:"12px 16px",borderRadius:10,fontSize:15,
-            outline:"none",fontFamily:"monospace",letterSpacing:"0.02em"}}/>
-        <Btn onClick={()=>doLookup()} disabled={loading||!cveId.trim()} C={C}>
-          {loading?"Looking up...":"Lookup CVE"}
-        </Btn>
+    <div style={{maxWidth:960}}>
+      {/* Mode + Platform Switcher */}
+      <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
+        <div style={{display:"flex",background:C.surfaceHi,borderRadius:10,padding:3,gap:2}}>
+          {[["builder","⚡ Builder"],["explainer","🔍 Explainer"]].map(([id,label])=>(
+            <button key={id} onClick={()=>setMode(id)}
+              style={{padding:"8px 18px",borderRadius:8,border:"none",cursor:"pointer",
+                fontSize:13,fontFamily:"inherit",fontWeight:600,
+                background:mode===id?C.accent:"transparent",color:mode===id?"#fff":C.muted}}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div style={{display:"flex",background:C.surfaceHi,borderRadius:10,padding:3,gap:2}}>
+          {[["kql","KQL / Sentinel"],["spl","SPL / Splunk"]].map(([id,label])=>(
+            <button key={id} onClick={()=>setQueryType(id)}
+              style={{padding:"7px 16px",borderRadius:8,border:"none",cursor:"pointer",
+                fontSize:12,fontFamily:"inherit",fontWeight:600,
+                background:queryType===id?C.purple:"transparent",color:queryType===id?"#fff":C.muted}}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {err&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
-      {loading&&(
-        <div style={{textAlign:"center",padding:48,color:C.muted}}>
-          <div style={{fontSize:14,marginBottom:8}}>Querying NVD, CVE.org, OSV, CVE Trends, EPSS...</div>
-          <div style={{fontSize:12}}>Fetching from all sources in parallel</div>
+      {/* ── BUILDER MODE ── */}
+      {mode==="builder"&&(
+        <div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+            <div style={{gridColumn:"1/-1"}}>
+              <Field label="Describe what you want to detect *" C={C}>
+                <textarea value={useCase} onChange={e=>setUseCase(e.target.value)}
+                  onKeyDown={e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey))generate();}}
+                  placeholder={queryType==="kql"
+                    ?"e.g. Detect PowerShell downloading a file from the internet using Invoke-WebRequest or WebClient — flag processes spawned from Office apps, exclude known AV paths"
+                    :"e.g. Detect brute force login attempts — more than 10 failed authentications within 5 minutes from the same source IP, followed by a successful login"}
+                  rows={4}
+                  style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                    color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:13,
+                    outline:"none",fontFamily:"inherit",resize:"vertical",boxSizing:"border-box"}}/>
+              </Field>
+            </div>
+            <Field label={`MITRE Tactic (optional)`} C={C}>
+              <select value={tacticHint} onChange={e=>setTacticHint(e.target.value)}
+                style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                  color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:13,
+                  outline:"none",fontFamily:"inherit"}}>
+                {TACTICS.map(t=><option key={t} value={t}>{t||"— Any —"}</option>)}
+              </select>
+            </Field>
+            <Field label="Environment context (optional)" C={C}>
+              <Inp value={context} onChange={setContext}
+                placeholder="e.g. Azure AD P2, MDE deployed, no EDR on servers" C={C}/>
+            </Field>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:20}}>
+            <Btn onClick={generate} disabled={loading||!useCase.trim()} C={C}>
+              {loading?"Generating production queries...":"⚡ Generate Detection Queries"}
+            </Btn>
+            <span style={{fontSize:11,color:C.muted}}>Ctrl+Enter in description box also works</span>
+          </div>
+
+          {err&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,
+            borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
+
+          {loading&&(
+            <div style={{textAlign:"center",padding:60,color:C.muted}}>
+              <div style={{fontSize:14,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>
+                Writing production-grade detection queries...
+              </div>
+              <div style={{fontSize:12}}>Building 3 variants: High Fidelity → Balanced → Threat Hunting</div>
+            </div>
+          )}
+
+          {result&&(
+            <div>
+              {/* Variant tabs */}
+              <div style={{display:"flex",gap:3,background:C.surfaceHi,borderRadius:10,
+                padding:3,marginBottom:16,width:"fit-content"}}>
+                {result.queries?.map((q,i)=>(
+                  <button key={i} onClick={()=>setActiveVariant(i)}
+                    style={{padding:"8px 18px",borderRadius:8,border:"none",cursor:"pointer",
+                      fontSize:13,fontFamily:"inherit",fontWeight:600,
+                      background:activeVariant===i?C.accent:"transparent",
+                      color:activeVariant===i?"#fff":C.muted}}>
+                    {q.label}
+                  </button>
+                ))}
+              </div>
+
+              {variant&&(
+                <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:14}}>
+                  {/* Left: Query */}
+                  <div>
+                    <div style={{background:C.surface,border:`1px solid ${C.border}`,
+                      borderRadius:12,overflow:"hidden",boxShadow:C.shadow}}>
+                      {/* Query header */}
+                      <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}`,
+                        display:"flex",justifyContent:"space-between",alignItems:"center",
+                        background:C.surfaceHi}}>
+                        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                          <span style={{fontSize:12,fontWeight:700,color:C.white||C.textHi}}>
+                            {variant.label}
+                          </span>
+                          <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:600,
+                            background:(SEV_COLORS[variant.severity]||C.muted)+"20",
+                            color:SEV_COLORS[variant.severity]||C.muted}}>
+                            {variant.severity}
+                          </span>
+                          <span style={{fontSize:11,color:CONF_COLOR(variant.confidence||0),fontWeight:600}}>
+                            {variant.confidence||"—"}% confidence
+                          </span>
+                        </div>
+                        <button onClick={()=>copyQuery(variant.query)}
+                          style={{fontSize:11,padding:"5px 12px",borderRadius:6,cursor:"pointer",
+                            background:copied?C.green+"20":C.accentDim,
+                            border:`1px solid ${copied?C.green:C.accent}40`,
+                            color:copied?C.green:C.accentText,fontWeight:600,fontFamily:"inherit"}}>
+                          {copied?"✓ Copied":"Copy Query"}
+                        </button>
+                      </div>
+                      {/* Query body */}
+                      <div style={{padding:16,overflowX:"auto"}}>
+                        <pre style={{margin:0,fontSize:11,color:C.text,lineHeight:1.6,
+                          fontFamily:"'JetBrains Mono','Fira Code',monospace",
+                          whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
+                          {variant.query}
+                        </pre>
+                      </div>
+                      {variant.description&&(
+                        <div style={{padding:"10px 16px",borderTop:`1px solid ${C.border}`,
+                          fontSize:12,color:C.muted,background:C.surfaceHi}}>
+                          {variant.description}
+                        </div>
+                      )}
+                    </div>
+                    {/* Schedule */}
+                    {variant.schedule&&(
+                      <div style={{marginTop:8,padding:"8px 12px",background:C.accentDim,
+                        border:`1px solid ${C.accent}30`,borderRadius:8,
+                        fontSize:11,color:C.accentText}}>
+                        🕐 Recommended schedule: {variant.schedule}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right: Metadata */}
+                  <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                    {/* MITRE */}
+                    {result.mitre&&(
+                      <div style={{background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:10,padding:"14px 16px",boxShadow:C.shadow}}>
+                        <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:8,
+                          textTransform:"uppercase",letterSpacing:"0.05em"}}>MITRE ATT&CK</div>
+                        <div style={{fontSize:12,color:C.red,fontWeight:700,marginBottom:4}}>
+                          {result.mitre.technique}
+                        </div>
+                        <div style={{fontSize:12,color:C.white||C.textHi,fontWeight:600,marginBottom:4}}>
+                          {result.mitre.technique_name}
+                        </div>
+                        <div style={{fontSize:11,color:C.muted,marginBottom:8}}>{result.mitre.tactic}</div>
+                        {result.mitre.url&&(
+                          <a href={result.mitre.url} target="_blank" rel="noreferrer"
+                            style={{fontSize:11,color:C.accentText,display:"flex",alignItems:"center",gap:4}}>
+                            <NavIcon name="externalLink" size={10} color={C.accentText}/>View on MITRE
+                          </a>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Required tables */}
+                    {(result.required_tables||result.required_indexes)?.length>0&&(
+                      <div style={{background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:10,padding:"14px 16px",boxShadow:C.shadow}}>
+                        <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:8,
+                          textTransform:"uppercase",letterSpacing:"0.05em"}}>
+                          Required {queryType==="kql"?"Tables":"Indexes"}
+                        </div>
+                        {(result.required_tables||result.required_indexes||[]).map(t=>(
+                          <div key={t} style={{fontSize:11,color:C.text,padding:"3px 0",
+                            fontFamily:"monospace"}}>{t}</div>
+                        ))}
+                        {(result.required_connectors||result.required_sourcetypes||[]).map(t=>(
+                          <div key={t} style={{fontSize:10,color:C.muted,marginTop:2}}>→ {t}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* False positives */}
+                    {result.false_positives?.length>0&&(
+                      <div style={{background:C.surface,border:`1px solid ${C.amber}30`,
+                        borderRadius:10,padding:"14px 16px",boxShadow:C.shadow}}>
+                        <div style={{fontSize:10,color:C.amber,fontWeight:600,marginBottom:8,
+                          textTransform:"uppercase",letterSpacing:"0.05em"}}>⚠ False Positives</div>
+                        {result.false_positives.map((fp,i)=>(
+                          <div key={i} style={{fontSize:11,color:C.text,marginBottom:4,
+                            lineHeight:1.5}}>• {fp}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Tuning tips */}
+                    {result.tuning_tips?.length>0&&(
+                      <div style={{background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:10,padding:"14px 16px",boxShadow:C.shadow}}>
+                        <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:8,
+                          textTransform:"uppercase",letterSpacing:"0.05em"}}>Tuning Tips</div>
+                        {result.tuning_tips.map((tip,i)=>(
+                          <div key={i} style={{fontSize:11,color:C.text,marginBottom:4,
+                            lineHeight:1.5}}>• {tip}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Performance */}
+                    {result.performance&&(
+                      <div style={{fontSize:11,color:C.muted,padding:"8px 12px",
+                        background:C.surfaceHi,borderRadius:8,lineHeight:1.5}}>
+                        ⚡ {result.performance}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
-      {result&&(
+      {/* ── EXPLAINER MODE ── */}
+      {mode==="explainer"&&(
         <div>
-          {/* Header */}
-          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-            padding:"20px 24px",marginBottom:16,boxShadow:C.shadow}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
-              flexWrap:"wrap",gap:12,marginBottom:12}}>
-              <div>
-                <div style={{fontSize:22,fontWeight:700,color:C.white||C.textHi,
-                  fontFamily:"monospace",marginBottom:6}}>{result.cve_id}</div>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                  {result.in_kev&&(
-                    <span style={{fontSize:12,padding:"3px 10px",borderRadius:4,fontWeight:700,
-                      background:C.red+"20",color:C.red,border:`1px solid ${C.red}30`}}>
-                      🚨 CISA KEV — Added {result.kev_date}
-                    </span>
-                  )}
-                  {result.epss&&(
-                    <span style={{fontSize:12,padding:"3px 10px",borderRadius:4,fontWeight:600,
-                      background:result.epss.epss>=0.5?C.red+"15":result.epss.epss>=0.1?C.amber+"15":C.accentDim,
-                      color:result.epss.epss>=0.5?C.red:result.epss.epss>=0.1?C.amber:C.accentText}}>
-                      EPSS {(result.epss.epss*100).toFixed(1)}% · {(result.epss.percentile*100).toFixed(0)}th percentile
-                    </span>
-                  )}
-                  {/* CVSS from NVD */}
-                  {result.sources?.find(s=>s.source==="NVD"&&s.cvss)?.cvss&&(()=>{
-                    const cvss=result.sources.find(s=>s.source==="NVD").cvss;
-                    return(
-                      <span style={{fontSize:12,padding:"3px 10px",borderRadius:4,fontWeight:700,
-                        background:(SEV_COLORS[cvss.severity]||C.muted)+"20",
-                        color:SEV_COLORS[cvss.severity]||C.muted,
-                        border:`1px solid ${(SEV_COLORS[cvss.severity]||C.muted)}30`}}>
-                        {cvss.severity} {cvss.score}
-                      </span>
-                    );
-                  })()}
-                </div>
-              </div>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                {[
-                  {name:"NVD",    url:`https://nvd.nist.gov/vuln/detail/${result.cve_id}`},
-                  {name:"CVE.org",url:`https://www.cve.org/CVERecord?id=${result.cve_id}`},
-                  {name:"OSV",    url:`https://osv.dev/vulnerability/${result.cve_id}`},
-                ].map(link=>(
-                  <a key={link.name} href={link.url} target="_blank" rel="noreferrer"
-                    style={{fontSize:11,padding:"5px 12px",borderRadius:6,background:C.accentDim,
-                      color:C.accentText,fontWeight:600,border:`1px solid ${C.accent}30`,
-                      display:"flex",alignItems:"center",gap:4,textDecoration:"none"}}>
-                    {link.name} <NavIcon name="externalLink" size={10} color={C.accentText}/>
-                  </a>
-                ))}
-              </div>
-            </div>
-            {/* Description from NVD */}
-            {result.sources?.find(s=>s.source==="NVD"&&s.description)?.description&&(
-              <div style={{fontSize:13,color:C.text,lineHeight:1.7,padding:"12px 14px",
-                background:C.surfaceHi,borderRadius:8}}>
-                {result.sources.find(s=>s.source==="NVD").description}
-              </div>
-            )}
+          <Field label={`Paste a ${queryType==="kql"?"KQL":"SPL"} query to explain *`} C={C}>
+            <textarea value={explainQuery} onChange={e=>setExplainQuery(e.target.value)}
+              placeholder={queryType==="kql"
+                ?"Paste any KQL query here — Sentinel analytics rule, hunting query, or custom detection..."
+                :"Paste any SPL search here — ES correlation search, dashboard query, or custom search..."}
+              rows={8}
+              style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                color:C.inputText,padding:"12px",borderRadius:8,fontSize:12,
+                outline:"none",fontFamily:"'JetBrains Mono','Fira Code',monospace",
+                resize:"vertical",lineHeight:1.6,boxSizing:"border-box"}}/>
+          </Field>
+          <div style={{display:"flex",gap:8,marginBottom:20,marginTop:10}}>
+            <Btn onClick={explain} disabled={explaining||!explainQuery.trim()} C={C}>
+              {explaining?"Analyzing query...":"🔍 Explain This Query"}
+            </Btn>
+            {explainResult&&<Btn onClick={()=>{setExplainResult(null);setExplainQuery("");}} variant="dim" C={C}>Clear</Btn>}
           </div>
 
-          {/* Source cards */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",
-            gap:14,marginBottom:16}}>
-            {result.sources.map(src=>(
-              <div key={src.source} style={{background:C.surface,
-                border:`1px solid ${src.status==="ok"?C.border:C.border+"60"}`,
-                borderRadius:12,padding:"16px 18px",boxShadow:C.shadow,
-                opacity:src.status==="ok"?1:0.7}}>
-                <div style={{display:"flex",justifyContent:"space-between",
-                  alignItems:"center",marginBottom:10}}>
-                  <span style={{fontSize:14,fontWeight:700,color:C.white||C.textHi}}>
-                    {src.source}
-                  </span>
-                  <span style={{fontSize:11,fontWeight:600,
-                    color:src.status==="ok"?C.green:src.status==="not_found"?C.muted:C.red}}>
-                    {STATUS_ICON[src.status]} {src.status==="ok"?"Found":src.status==="not_found"?"Not in database":"Error"}
-                  </span>
-                </div>
+          {explainErr&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,
+            borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{explainErr}</div>}
 
-                {src.status==="ok"&&src.source==="NVD"&&(
-                  <div>
-                    {src.cvss&&<div style={{fontSize:12,color:SEV_COLORS[src.cvss.severity]||C.muted,
-                      fontWeight:600,marginBottom:6}}>
-                      CVSS {src.cvss.version}: {src.cvss.score} {src.cvss.severity}
-                    </div>}
-                    {src.weaknesses?.length>0&&<div style={{fontSize:11,color:C.muted,marginBottom:4}}>
-                      CWE: {src.weaknesses.join(", ")}
-                    </div>}
-                    {src.published&&<div style={{fontSize:11,color:C.muted}}>Published: {src.published}</div>}
-                    {src.affected_cpes?.length>0&&(
-                      <div style={{marginTop:8}}>
-                        <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:4,textTransform:"uppercase"}}>
-                          Affected CPEs
-                        </div>
-                        <div style={{maxHeight:80,overflowY:"auto"}}>
-                          {src.affected_cpes.slice(0,4).map((cpe,i)=>(
-                            <div key={i} style={{fontSize:10,color:C.muted,fontFamily:"monospace",
-                              marginBottom:2,wordBreak:"break-all"}}>{cpe}</div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+          {explaining&&(
+            <div style={{textAlign:"center",padding:48,color:C.muted}}>
+              <div style={{fontSize:14,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>Analyzing query...</div>
+              <div style={{fontSize:12}}>Breaking down each clause, identifying the threat pattern, checking for improvements</div>
+            </div>
+          )}
 
-                {src.status==="ok"&&src.source==="CVE.org"&&(
-                  <div>
-                    {src.state&&<div style={{fontSize:11,color:C.muted,marginBottom:6}}>
-                      State: <span style={{fontWeight:600,color:C.accentText}}>{src.state}</span>
-                    </div>}
-                    {src.affected?.length>0&&(
-                      <div>
-                        <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:4,textTransform:"uppercase"}}>Affected</div>
-                        {src.affected.slice(0,4).map((a,i)=>(
-                          <div key={i} style={{fontSize:11,color:C.text,marginBottom:2}}>{a}</div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {src.status==="ok"&&src.source==="OSV"&&(
-                  <div>
-                    <div style={{fontSize:12,color:C.muted,marginBottom:8}}>
-                      {src.count} related {src.count===1?"advisory":"advisories"}
+          {explainResult&&(
+            <div>
+              {/* Summary card */}
+              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+                padding:"18px 20px",marginBottom:14,boxShadow:C.shadow}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+                  gap:12,flexWrap:"wrap",marginBottom:12}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:15,fontWeight:700,color:C.white||C.textHi,marginBottom:6,lineHeight:1.4}}>
+                      {explainResult.summary}
                     </div>
-                    {src.vulns?.slice(0,2).map((v,i)=>(
-                      <div key={i} style={{marginBottom:8,padding:"8px 10px",
-                        background:C.surfaceHi,borderRadius:6}}>
-                        <div style={{fontSize:11,fontWeight:700,color:C.accentText,marginBottom:4}}>
-                          {v.id}
-                        </div>
-                        {v.packages?.slice(0,3).map((p,j)=>(
-                          <div key={j} style={{fontSize:10,color:C.muted}}>
-                            {p.ecosystem}: <span style={{color:C.text}}>{p.name}</span>
-                            {p.fix&&<span style={{color:C.green}}> → fix: {p.fix}</span>}
-                          </div>
-                        ))}
+                    <div style={{fontSize:13,color:C.text,lineHeight:1.7}}>
+                      {explainResult.threat_description}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,flexShrink:0,flexWrap:"wrap"}}>
+                    {explainResult.severity&&(
+                      <span style={{fontSize:12,padding:"4px 12px",borderRadius:6,fontWeight:700,
+                        background:(SEV_COLORS[explainResult.severity]||C.muted)+"20",
+                        color:SEV_COLORS[explainResult.severity]||C.muted}}>
+                        {explainResult.severity}
+                      </span>
+                    )}
+                    {explainResult.mitre?.technique&&(
+                      <a href={explainResult.mitre?.url||"#"} target="_blank" rel="noreferrer"
+                        style={{fontSize:11,padding:"4px 10px",borderRadius:6,fontWeight:600,
+                          background:C.purple+"20",color:C.purple,border:`1px solid ${C.purple}30`,
+                          textDecoration:"none"}}>
+                        {explainResult.mitre.technique}
+                      </a>
+                    )}
+                  </div>
+                </div>
+                {explainResult.estimated_fidelity&&(
+                  <div style={{fontSize:11,color:C.muted,padding:"6px 10px",background:C.surfaceHi,
+                    borderRadius:6,display:"inline-block"}}>
+                    Estimated fidelity: {explainResult.estimated_fidelity}
+                  </div>
+                )}
+              </div>
+
+              {/* Line-by-line */}
+              {explainResult.line_by_line?.length>0&&(
+                <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+                  overflow:"hidden",marginBottom:14,boxShadow:C.shadow}}>
+                  <div style={{padding:"12px 16px",background:C.surfaceHi,
+                    borderBottom:`1px solid ${C.border}`,fontSize:11,fontWeight:600,
+                    color:C.muted,textTransform:"uppercase",letterSpacing:"0.05em"}}>
+                    Line-by-Line Breakdown
+                  </div>
+                  {explainResult.line_by_line.map((line,i)=>(
+                    <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 1fr",
+                      borderBottom:i<explainResult.line_by_line.length-1?`1px solid ${C.border}20`:"none"}}>
+                      <div style={{padding:"10px 16px",background:C.surfaceHi+"60",
+                        borderRight:`1px solid ${C.border}`}}>
+                        <code style={{fontSize:11,color:C.accentText,fontFamily:"monospace",
+                          lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
+                          {line.code}
+                        </code>
                       </div>
+                      <div style={{padding:"10px 16px",fontSize:12,color:C.text,lineHeight:1.6}}>
+                        {line.explanation}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* 3-column detail grid */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:12,marginBottom:14}}>
+                {explainResult.what_it_catches?.length>0&&(
+                  <div style={{background:C.surface,border:`1px solid ${C.green}30`,borderRadius:10,padding:"14px 16px"}}>
+                    <div style={{fontSize:10,color:C.green,fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>✓ What It Catches</div>
+                    {explainResult.what_it_catches.map((w,i)=>(
+                      <div key={i} style={{fontSize:11,color:C.text,marginBottom:4,lineHeight:1.5}}>• {w}</div>
                     ))}
                   </div>
                 )}
-
-                {src.status==="ok"&&src.source==="CVE Trends"&&(
-                  <div>
-                    <div style={{fontSize:13,fontWeight:600,color:src.trending?C.accentText:C.muted,marginBottom:6}}>
-                      {src.trending?"📈 Currently trending":"Not trending"}
-                    </div>
-                    {src.count_24h>0&&(
-                      <div style={{fontSize:12,color:C.muted}}>{src.count_24h} mentions in last 24h</div>
-                    )}
+                {explainResult.what_it_misses?.length>0&&(
+                  <div style={{background:C.surface,border:`1px solid ${C.amber}30`,borderRadius:10,padding:"14px 16px"}}>
+                    <div style={{fontSize:10,color:C.amber,fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>✗ What It Misses</div>
+                    {explainResult.what_it_misses.map((w,i)=>(
+                      <div key={i} style={{fontSize:11,color:C.text,marginBottom:4,lineHeight:1.5}}>• {w}</div>
+                    ))}
                   </div>
                 )}
-
-                {src.status==="error"&&(
-                  <div style={{fontSize:11,color:C.red}}>{src.error||"Failed to fetch"}</div>
-                )}
-                {src.status==="not_found"&&(
-                  <div style={{fontSize:11,color:C.muted}}>This CVE is not in the {src.source} database</div>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* All References unified */}
-          {result.all_refs?.length>0&&(
-            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-              padding:"18px 20px",boxShadow:C.shadow}}>
-              <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:14,
-                textTransform:"uppercase",letterSpacing:"0.06em"}}>
-                All References ({result.all_refs.length})
-              </div>
-              <div style={{display:"grid",gap:8}}>
-                {result.all_refs.map((ref,i)=>(
-                  <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,
-                    padding:"8px 10px",background:C.surfaceHi,borderRadius:6}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <a href={ref.url} target="_blank" rel="noreferrer"
-                        style={{fontSize:12,color:C.accentText,wordBreak:"break-all",
-                          textDecoration:"none",display:"flex",alignItems:"center",gap:4}}>
-                        <NavIcon name="externalLink" size={11} color={C.accentText}/>
-                        {ref.url}
-                      </a>
-                    </div>
-                    <div style={{display:"flex",gap:4,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
-                      {ref.source&&(
-                        <span style={{fontSize:9,padding:"1px 5px",borderRadius:3,
-                          background:C.accentDim,color:C.accentText,fontWeight:700}}>
-                          {ref.source}
-                        </span>
-                      )}
-                      {ref.tags?.slice(0,2).map(t=>(
-                        <span key={t} style={{fontSize:9,padding:"1px 5px",borderRadius:3,
-                          background:C.surfaceHi,color:C.muted,border:`1px solid ${C.border}`}}>
-                          {t}
-                        </span>
-                      ))}
-                    </div>
+                {explainResult.false_positives?.length>0&&(
+                  <div style={{background:C.surface,border:`1px solid ${C.red}20`,borderRadius:10,padding:"14px 16px"}}>
+                    <div style={{fontSize:10,color:C.red,fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>⚠ False Positives</div>
+                    {explainResult.false_positives.map((fp,i)=>(
+                      <div key={i} style={{fontSize:11,color:C.text,marginBottom:4,lineHeight:1.5}}>• {fp}</div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
+
+              {/* Improvements */}
+              {explainResult.improvements?.length>0&&(
+                <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px 18px"}}>
+                  <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:12,
+                    textTransform:"uppercase",letterSpacing:"0.05em"}}>
+                    🛠 Improvement Suggestions
+                  </div>
+                  {explainResult.improvements.map((imp,i)=>(
+                    <div key={i} style={{marginBottom:12,padding:"10px 14px",background:C.surfaceHi,borderRadius:8}}>
+                      <div style={{fontSize:12,fontWeight:700,color:C.amber,marginBottom:4}}>
+                        Issue: {imp.issue}
+                      </div>
+                      <div style={{fontSize:12,color:C.text,lineHeight:1.6}}>
+                        <span style={{color:C.green,fontWeight:600}}>Fix: </span>{imp.fix}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
