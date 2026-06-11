@@ -349,11 +349,216 @@ function NotificationBell({token,C,isAdmin}){
 }
 
 // ── CVE DETAIL MODAL ──────────────────────────────────────────────────────────
+// ── CVE REPORT MODAL ─────────────────────────────────────────────────────────
+function CVEReportModal({cveId,token,C,onClose}){
+  const [format,setFormat]=useState("email");
+  const [result,setResult]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+  const [copied,setCopied]=useState(false);
+
+  async function generate(){
+    setLoading(true);setErr("");setResult(null);
+    try{
+      const r=await api(`/cve/report?id=${encodeURIComponent(cveId)}&format=${format}`,{},token);
+      if(r.ok) setResult(await r.json());
+      else {const e=await r.json();setErr(e.detail||"Generation failed.");}
+    }catch{setErr("Cannot reach server.");}
+    setLoading(false);
+  }
+
+  function copy(){
+    const text=result?.subject?`Subject: ${result.subject}\n\n${result.content}`:result?.content||"";
+    navigator.clipboard.writeText(text);setCopied(true);setTimeout(()=>setCopied(false),2000);
+  }
+
+  function openEmail(){
+    const subject=encodeURIComponent(result?.subject||`Security Advisory: ${cveId}`);
+    const body=encodeURIComponent(result?.content||"");
+    window.open(`mailto:?subject=${subject}&body=${body}`);
+  }
+
+  const SEV_COLORS={CRITICAL:C.red,HIGH:C.amber,MEDIUM:C.purple,LOW:C.green,
+                    Critical:C.red,High:C.amber,Medium:C.purple,Low:C.green};
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"#00000095",zIndex:900,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{width:"100%",maxWidth:760,maxHeight:"90vh",display:"flex",flexDirection:"column",
+          background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,
+          boxShadow:C.shadow}}>
+
+        {/* Header */}
+        <div style={{padding:"18px 24px",borderBottom:`1px solid ${C.border}`,
+          display:"flex",justifyContent:"space-between",alignItems:"center",
+          flexShrink:0}}>
+          <div>
+            <div style={{fontSize:15,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
+              Generate CVE Report
+            </div>
+            <div style={{fontSize:12,color:C.muted,fontFamily:"monospace"}}>{cveId}</div>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,
+            fontSize:20,cursor:"pointer",padding:0}}>×</button>
+        </div>
+
+        {/* Format picker + Generate */}
+        <div style={{padding:"16px 24px",borderBottom:`1px solid ${C.border}`,
+          display:"flex",gap:12,alignItems:"center",flexShrink:0}}>
+          <div style={{display:"flex",background:C.surfaceHi,borderRadius:8,padding:3,gap:2}}>
+            {[["email","📧 Email Draft"],["summary","📋 Summary Brief"]].map(([val,label])=>(
+              <button key={val} onClick={()=>{setFormat(val);setResult(null);setErr("");}}
+                style={{padding:"7px 16px",borderRadius:6,border:"none",cursor:"pointer",
+                  fontSize:12,fontFamily:"inherit",fontWeight:600,
+                  background:format===val?C.accent:"transparent",
+                  color:format===val?"#fff":C.muted}}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <Btn onClick={generate} disabled={loading} C={C}>
+            {loading?"Generating...":"⚡ Generate"}
+          </Btn>
+          {result&&(
+            <>
+              <button onClick={copy}
+                style={{padding:"7px 14px",background:copied?C.green+"20":C.accentDim,
+                  border:`1px solid ${copied?C.green:C.accent}40`,color:copied?C.green:C.accentText,
+                  borderRadius:7,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600}}>
+                {copied?"✓ Copied":"Copy"}
+              </button>
+              {format==="email"&&(
+                <button onClick={openEmail}
+                  style={{padding:"7px 14px",background:C.surfaceHi,
+                    border:`1px solid ${C.border}`,color:C.text,
+                    borderRadius:7,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600}}>
+                  Open in Mail ↗
+                </button>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Body */}
+        <div style={{flex:1,overflowY:"auto",padding:"16px 24px"}}>
+          {err&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,
+            borderRadius:8,color:C.red,fontSize:13,marginBottom:12}}>{err}</div>}
+
+          {loading&&(
+            <div style={{textAlign:"center",padding:48,color:C.muted}}>
+              <div style={{fontSize:14,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>
+                Checking for PoC exploits &amp; building report...
+              </div>
+              <div style={{fontSize:12}}>
+                Querying GitHub PoC database, ExploitDB, and NVD references
+              </div>
+            </div>
+          )}
+
+          {!loading&&!result&&!err&&(
+            <div style={{textAlign:"center",padding:40,color:C.muted}}>
+              <div style={{fontSize:32,marginBottom:12}}>
+                {format==="email"?"📧":"📋"}
+              </div>
+              <div style={{fontSize:13,marginBottom:6,color:C.white||C.textHi,fontWeight:600}}>
+                {format==="email"?"Professional Security Advisory Email":"Structured CVE Summary Brief"}
+              </div>
+              <div style={{fontSize:12,lineHeight:1.7,maxWidth:400,margin:"0 auto"}}>
+                {format==="email"
+                  ?"Includes vulnerability overview, affected products, exploit conditions, PoC status, mitigation steps, and references. Ready to forward to IT/management."
+                  :"Structured markdown report with CVSS breakdown table, exploit conditions, PoC links (if any), and full reference list."}
+              </div>
+            </div>
+          )}
+
+          {result&&(
+            <div>
+              {/* PoC status banner */}
+              <div style={{marginBottom:12,padding:"10px 14px",borderRadius:8,
+                background:result.poc?.available?C.red+"08":C.green+"08",
+                border:`1px solid ${result.poc?.available?C.red:C.green}30`,
+                display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:16}}>
+                  {result.poc?.available?"🚨":"✅"}
+                </span>
+                <div style={{flex:1}}>
+                  <span style={{fontSize:13,fontWeight:700,
+                    color:result.poc?.available?C.red:C.green}}>
+                    PoC Exploits: {result.poc?.available?"PUBLICLY AVAILABLE":"None Found"}
+                  </span>
+                  {result.poc?.available&&result.poc?.links?.length>0&&(
+                    <div style={{fontSize:11,color:C.muted,marginTop:2}}>
+                      {result.poc.links.length} source{result.poc.links.length!==1?"s":""}: {" "}
+                      {result.poc.github?.[0]&&(
+                        <a href={result.poc.github[0].url} target="_blank" rel="noreferrer"
+                          style={{color:C.accentText,fontWeight:600}}>
+                          ⭐ {result.poc.github[0].stars} — {result.poc.github[0].url?.split("/").slice(-2).join("/")}
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                  <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
+                    background:(SEV_COLORS[result.severity]||C.muted)+"20",
+                    color:SEV_COLORS[result.severity]||C.muted}}>
+                    {result.severity} {result.score}
+                  </span>
+                </div>
+              </div>
+
+              {/* Email subject */}
+              {format==="email"&&result.subject&&(
+                <div style={{marginBottom:12,padding:"10px 14px",background:C.surfaceHi,
+                  border:`1px solid ${C.border}`,borderRadius:8}}>
+                  <span style={{fontSize:10,color:C.muted,fontWeight:700,
+                    textTransform:"uppercase",letterSpacing:"0.05em"}}>Subject: </span>
+                  <span style={{fontSize:13,color:C.white||C.textHi,fontWeight:600}}>
+                    {result.subject}
+                  </span>
+                </div>
+              )}
+
+              {/* Content */}
+              <div style={{background:C.surfaceHi,border:`1px solid ${C.border}`,
+                borderRadius:10,padding:"16px 18px"}}>
+                <pre style={{margin:0,fontFamily:"inherit",fontSize:12,color:C.text,
+                  lineHeight:1.8,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
+                  {result.content}
+                </pre>
+              </div>
+
+              {/* PoC links */}
+              {result.poc?.available&&result.poc?.links?.length>0&&(
+                <div style={{marginTop:12,padding:"12px 14px",background:C.red+"08",
+                  border:`1px solid ${C.red}20`,borderRadius:8}}>
+                  <div style={{fontSize:10,color:C.red,fontWeight:700,marginBottom:8,
+                    textTransform:"uppercase"}}>🔓 PoC / Exploit References</div>
+                  {result.poc.links.map((link,i)=>(
+                    <a key={i} href={link} target="_blank" rel="noreferrer"
+                      style={{display:"flex",alignItems:"center",gap:6,fontSize:12,
+                        color:C.accentText,marginBottom:4,wordBreak:"break-all"}}>
+                      <NavIcon name="externalLink" size={10} color={C.accentText}/>{link}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── CVE DETAIL — OpenCVE-parity full-panel view ──────────────────────────────
 function CVEDetail({cve,token,onClose,C}){
   const [enriched,setEnriched]=useState(null);
   const [loading,setLoading]=useState(true);
   const [tab,setTab]=useState("overview");
+  const [showReport,setShowReport]=useState(false);
 
   useEffect(()=>{
     setLoading(true);setEnriched(null);setTab("overview");
@@ -473,7 +678,7 @@ function CVEDetail({cve,token,onClose,C}){
             </div>
 
             {/* Big score */}
-            <div style={{display:"flex",gap:12,alignItems:"center",flexShrink:0}}>
+            <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
               {score&&(
                 <div style={{textAlign:"center"}}>
                   <div style={{fontSize:32,fontWeight:800,color:scoreColor,lineHeight:1}}>{score}</div>
@@ -490,9 +695,16 @@ function CVEDetail({cve,token,onClose,C}){
                   <div style={{fontSize:10,color:C.muted,fontWeight:600}}>EPSS</div>
                 </div>
               )}
+              <button onClick={()=>setShowReport(true)}
+                style={{padding:"7px 14px",background:C.accent,border:"none",color:"#fff",
+                  borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700}}>
+                ⚡ Report
+              </button>
               <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,
                 fontSize:22,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
             </div>
+          </div>
+        {showReport&&<CVEReportModal cveId={d.cve_id} token={token} C={C} onClose={()=>setShowReport(false)}/>}
           </div>
 
           {/* Score bar */}
@@ -1853,6 +2065,7 @@ function CVELookup({token,C,initialId=""}){
   const [result,setResult]=useState(null);
   const [loading,setLoading]=useState(false);
   const [err,setErr]=useState("");
+  const [showReport,setShowReport]=useState(false);
   const CVE_RE=/^CVE-\d{4}-\d{4,}$/i;
 
   useEffect(()=>{ if(initialId&&CVE_RE.test(initialId)) doLookup(initialId); },[initialId]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -1946,8 +2159,15 @@ function CVELookup({token,C,initialId=""}){
                     {link.name} <NavIcon name="externalLink" size={10} color={C.accentText}/>
                   </a>
                 ))}
+              <button onClick={()=>setShowReport(true)}
+                  style={{padding:"8px 16px",background:C.accent,border:"none",color:"#fff",
+                    borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700,
+                    alignSelf:"flex-start"}}>
+                  ⚡ Generate Report
+                </button>
               </div>
             </div>
+            {showReport&&<CVEReportModal cveId={result.cve_id} token={token} C={C} onClose={()=>setShowReport(false)}/>}
             {/* Description from NVD */}
             {result.sources?.find(s=>s.source==="NVD"&&s.description)?.description&&(
               <div style={{fontSize:13,color:C.text,lineHeight:1.7,padding:"12px 14px",

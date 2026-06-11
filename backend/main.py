@@ -2742,6 +2742,295 @@ async def cve_multi_lookup(id: str, user=Depends(get_current_user)):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 
+@app.get("/cve/report")
+async def cve_report(id: str, format: str = "email", user=Depends(get_current_user)):
+    """
+    Generate a professional CVE advisory report or email.
+    Fetches CVE data, checks for PoC exploits, and uses Groq to structure output.
+    format: "email" | "summary"
+    """
+    cve_id = id.upper().strip()
+    if not CVE_ID_RE.match(cve_id):
+        raise HTTPException(status_code=400, detail=f"Invalid CVE ID: {id}")
+
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured.")
+
+    year = cve_id.split("-")[1]
+    nvd_headers = {"User-Agent":"ThreatFeed-CTI/1.0"}
+    if NVD_API_KEY: nvd_headers["apiKey"] = NVD_API_KEY
+
+    # ── Fetch data in parallel ───────────────────────────────────────────────
+    async def get_nvd():
+        try:
+            async with httpx.AsyncClient(timeout=12) as c:
+                r = await c.get(f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}",
+                                headers=nvd_headers)
+            if r.status_code == 200:
+                vulns = r.json().get("vulnerabilities",[])
+                if vulns: return vulns[0].get("cve",{})
+        except Exception: pass
+        return {}
+
+    async def check_poc_github():
+        """Check nomi-sec/PoC-in-GitHub database — free, comprehensive."""
+        pocs = []
+        try:
+            url = f"https://raw.githubusercontent.com/nomi-sec/PoC-in-GitHub/master/{year}/{cve_id}.json"
+            async with httpx.AsyncClient(timeout=8,
+                headers={"User-Agent":"ThreatFeed-CTI/1.0"}) as c:
+                r = await c.get(url)
+            if r.status_code == 200:
+                entries = r.json()
+                for entry in entries[:5]:
+                    pocs.append({
+                        "url":         entry.get("html_url",""),
+                        "author":      entry.get("owner",{}).get("login",""),
+                        "stars":       entry.get("stargazers_count",0),
+                        "description": entry.get("description",""),
+                        "created_at":  entry.get("created_at","")[:10],
+                    })
+        except Exception: pass
+        return pocs
+
+    async def check_poc_refs(nvd_data):
+        """Check NVD references for Exploit/PoC tags."""
+        refs = nvd_data.get("references",[])
+        poc_refs = []
+        for ref in refs:
+            tags = ref.get("tags",[])
+            url  = ref.get("url","")
+            if any(t in tags for t in ["Exploit","Proof of Concept","PoC"]):
+                poc_refs.append(url)
+            elif any(kw in url.lower() for kw in ["exploit","poc","proof","metasploit",
+                                                    "packetstorm","exploit-db"]):
+                poc_refs.append(url)
+        return poc_refs
+
+    async def check_exploitdb():
+        """Check ExploitDB for this CVE."""
+        try:
+            cve_num = cve_id.replace("CVE-","")
+            async with httpx.AsyncClient(timeout=8,
+                headers={"User-Agent":"Mozilla/5.0 ThreatFeed-CTI/1.0"}) as c:
+                r = await c.get(f"https://www.exploit-db.com/search?cve={cve_num}",
+                               headers={"Accept":"application/json, text/javascript"})
+            if r.status_code == 200:
+                try:
+                    data = r.json()
+                    results = data.get("data",[])
+                    if results:
+                        return [f"https://www.exploit-db.com/exploits/{e.get('id','')}"
+                                for e in results[:3] if e.get("id")]
+                except Exception: pass
+        except Exception: pass
+        return []
+
+    # Run all lookups in parallel
+    nvd_data, poc_github, edb_pocs = await asyncio.gather(
+        get_nvd(), check_poc_github(), check_exploitdb(),
+        return_exceptions=True
+    )
+    if isinstance(nvd_data, Exception):   nvd_data   = {}
+    if isinstance(poc_github, Exception): poc_github = []
+    if isinstance(edb_pocs,   Exception): edb_pocs   = []
+
+    poc_ref_urls = await check_poc_refs(nvd_data if nvd_data else {})
+
+    # ── Compile PoC status ───────────────────────────────────────────────────
+    has_poc       = bool(poc_github or poc_ref_urls or edb_pocs)
+    poc_links     = ([p["url"] for p in poc_github if p.get("url")] +
+                     poc_ref_urls + edb_pocs)[:5]
+    top_poc       = poc_github[0] if poc_github else None
+
+    # ── Extract structured CVE data ──────────────────────────────────────────
+    desc = next((d["value"] for d in nvd_data.get("descriptions",[])
+                 if d.get("lang")=="en"), "")
+    metrics  = nvd_data.get("metrics",{})
+    cvss_v31 = (metrics.get("cvssMetricV31") or metrics.get("cvssMetricV30") or [])[0:1]
+    cvss_v2  = (metrics.get("cvssMetricV2") or [])[0:1]
+    cvss_data = (cvss_v31 or cvss_v2 or [{}])[0].get("cvssData",{})
+    score     = cvss_data.get("baseScore","N/A")
+    severity  = cvss_data.get("baseSeverity","N/A")
+    vector    = cvss_data.get("vectorString","")
+    cwe_list  = [d["description"][0]["value"] for d in nvd_data.get("weaknesses",[])
+                 if d.get("description")]
+    cwe       = cwe_list[0] if cwe_list else "N/A"
+
+    # Affected CPEs → products
+    affected_cpes = []
+    for cfg in nvd_data.get("configurations",[]):
+        for node in cfg.get("nodes",[]):
+            for m in node.get("cpeMatch",[]):
+                if m.get("vulnerable") and m.get("criteria"):
+                    affected_cpes.append(m["criteria"])
+
+    # References: separate into patches vs general
+    all_refs = nvd_data.get("references",[])
+    patch_refs = [r["url"] for r in all_refs
+                  if any(t in r.get("tags",[]) for t in ["Patch","Vendor Advisory"])]
+    other_refs = [r["url"] for r in all_refs
+                  if r["url"] not in patch_refs][:5]
+
+    # Published / modified dates
+    published = nvd_data.get("published","")[:10]
+    modified  = nvd_data.get("lastModified","")[:10]
+
+    # KEV
+    kev_catalog = await fetch_kev_catalog()
+    in_kev    = cve_id in kev_catalog
+    kev_date  = kev_catalog.get(cve_id,"")
+
+    # EPSS
+    epss_data = await fetch_epss([cve_id])
+    epss      = epss_data.get(cve_id,{})
+    epss_pct  = f"{float(epss.get('epss',0))*100:.2f}%" if epss else "N/A"
+
+    # ── Build prompt context ─────────────────────────────────────────────────
+    poc_section = ""
+    if has_poc:
+        poc_section = f"YES — PoC exploits are publicly available.\n"
+        if top_poc:
+            poc_section += f"Most notable: {top_poc.get('url','')} (⭐ {top_poc.get('stars',0)} stars)\n"
+        if poc_links:
+            poc_section += "Links:\n" + "\n".join(f"- {u}" for u in poc_links[:4])
+    else:
+        poc_section = "No public PoC identified in GitHub, ExploitDB, or NVD references at time of scan."
+
+    context = f"""CVE ID: {cve_id}
+Severity: {severity} (CVSS {score})
+CVSS Vector: {vector}
+CWE: {cwe}
+Published: {published} | Modified: {modified}
+EPSS (exploitation probability): {epss_pct}
+CISA KEV: {"YES — Known Exploited" if in_kev else "No"}
+{f"KEV Date Added: {kev_date}" if in_kev else ""}
+
+DESCRIPTION:
+{desc}
+
+AFFECTED PRODUCTS (CPE):
+{chr(10).join(affected_cpes[:10]) if affected_cpes else "See vendor advisory"}
+
+PROOF OF CONCEPT:
+{poc_section}
+
+PATCH / VENDOR ADVISORY LINKS:
+{chr(10).join(patch_refs[:5]) if patch_refs else "No official patch links found in NVD — check vendor website."}
+
+OTHER REFERENCES:
+{chr(10).join(other_refs[:5])}
+
+NVD LINK: https://nvd.nist.gov/vuln/detail/{cve_id}
+CVE.ORG LINK: https://www.cve.org/CVERecord?id={cve_id}
+"""
+
+    # ── LLM prompt based on format ───────────────────────────────────────────
+    if format == "email":
+        system = """You are a security operations engineer writing a professional vulnerability advisory email to IT and management stakeholders.
+Write a clear, concise security advisory email based on the CVE data provided.
+
+The email must contain exactly these sections with these headings:
+Subject: (on first line, format: "Security Advisory: [CVE-ID] – [Short Vulnerability Title] – [Severity]")
+
+Then the body starting with "Dear Team,"
+
+Sections (use bold headings like **SECTION NAME**):
+1. **Vulnerability Overview** — CVE ID, severity, CVSS score, EPSS probability, KEV status, one-sentence description
+2. **Affected Products & Versions** — specific product names and version ranges from the CPE data
+3. **Exploit Conditions** — what is required for a successful attack (network access, authentication, user interaction etc.) — derive from CVSS vector
+4. **Proof of Concept (PoC) Availability** — Yes/No with links if available, or state none found
+5. **Mitigation & Patch** — specific patch links if available; if no patch, workarounds
+6. **References** — bulleted links: NVD, CVE.org, vendor advisories, PoC if present
+
+Close with: "Please assess your environment for exposure and apply patches according to your organization's risk acceptance policy."
+
+Be factual, professional, and direct. No fluff. Do not invent information not present in the data."""
+
+        user_msg = f"Write a security advisory email for this CVE:\n\n{context}"
+
+    else:  # summary
+        system = """You are a threat intelligence analyst writing a structured CVE summary brief.
+Format as a clean markdown report with these exact sections:
+
+# [CVE-ID] — [Short Vulnerability Title]
+**Severity:** [Critical/High/Medium/Low] (CVSS [score]) | **EPSS:** [%] | **KEV:** [Yes/No]
+
+## Vulnerability Description
+[Clear 2-3 sentence description of what the vulnerability is, its root cause, and impact]
+
+## Affected Products & Versions
+[Table or bullet list of affected products with specific version ranges]
+
+## Exploit Conditions
+| Metric | Value |
+|--------|-------|
+| Attack Vector | ... |
+| Attack Complexity | ... |
+| Privileges Required | ... |
+| User Interaction | ... |
+[Derive from CVSS vector, explain in plain English below the table]
+
+## Proof of Concept (PoC)
+**Available:** Yes/No
+[If yes: links and brief description. If no: state no public PoC identified.]
+
+## Mitigation
+[Specific patch version to upgrade to, patch links, or workarounds if no patch]
+
+## References
+- [NVD link]
+- [CVE.org link]
+- [Vendor advisories]
+- [PoC links if available]
+
+Be factual. Use the provided data only. Do not invent version numbers or links."""
+
+        user_msg = f"Write a CVE summary brief for:\n\n{context}"
+
+    try:
+        raw = await call_groq(system, user_msg, max_tokens=1800)
+        # call_groq uses json_object mode — but for reports we want plain text
+        # Re-call without json mode
+        async with httpx.AsyncClient(timeout=45) as c:
+            r = await c.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [{"role":"system","content":system},
+                                 {"role":"user",  "content":user_msg}],
+                    "temperature": 0.15,
+                    "max_tokens": 1800,
+                }
+            )
+        content = r.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+
+    # Extract subject line for emails
+    subject = ""
+    body    = content
+    if format == "email" and content.startswith("Subject:"):
+        lines     = content.split("\n", 2)
+        subject   = lines[0].replace("Subject:","").strip()
+        body      = "\n".join(lines[1:]).strip()
+
+    return {
+        "cve_id":     cve_id,
+        "format":     format,
+        "subject":    subject,
+        "content":    body,
+        "poc": {
+            "available": has_poc,
+            "links":     poc_links,
+            "github":    poc_github[:3],
+        },
+        "severity":   severity,
+        "score":      score,
+    }
+
 @app.get("/mitre/actor")
 async def mitre_actor_lookup(name: str, user=Depends(get_current_user)):
     try:
