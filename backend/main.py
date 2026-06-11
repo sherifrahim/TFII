@@ -2989,9 +2989,6 @@ Be factual. Use the provided data only. Do not invent version numbers or links."
         user_msg = f"Write a CVE summary brief for:\n\n{context}"
 
     try:
-        raw = await call_groq(system, user_msg, max_tokens=1800)
-        # call_groq uses json_object mode — but for reports we want plain text
-        # Re-call without json mode
         async with httpx.AsyncClient(timeout=45) as c:
             r = await c.post(
                 "https://api.groq.com/openai/v1/chat/completions",
