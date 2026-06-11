@@ -704,8 +704,8 @@ function CVEDetail({cve,token,onClose,C}){
                 fontSize:22,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
             </div>
           </div>
-        {showReport&&<CVEReportModal cveId={d.cve_id} token={token} C={C} onClose={()=>setShowReport(false)}/>}
-          </div>
+          {showReport&&<CVEReportModal cveId={d.cve_id} token={token} C={C} onClose={()=>setShowReport(false)}/>}
+
 
           {/* Score bar */}
           {score&&(
