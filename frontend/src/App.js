@@ -350,6 +350,82 @@ function NotificationBell({token,C,isAdmin}){
 
 // ── CVE DETAIL MODAL ──────────────────────────────────────────────────────────
 // ── CVE REPORT MODAL ─────────────────────────────────────────────────────────
+// Simple inline markdown renderer — no library needed
+function renderMarkdown(text, C){
+  if(!text) return null;
+  const lines = text.split('\n');
+  return lines.map((line, i) => {
+    // Render inline **bold** within a line
+    function inlineBold(str){
+      const parts = str.split(/\*\*(.*?)\*\*/g);
+      return parts.map((p, j) => j % 2 === 1
+        ? <strong key={j} style={{fontWeight:700, color:C.white||C.textHi}}>{p}</strong>
+        : p
+      );
+    }
+
+    // H1
+    if(/^# /.test(line))
+      return <div key={i} style={{fontSize:16,fontWeight:800,color:C.white||C.textHi,
+        marginTop:16,marginBottom:8,lineHeight:1.4}}>{line.replace(/^# /,'')}</div>;
+    // H2
+    if(/^## /.test(line))
+      return <div key={i} style={{fontSize:14,fontWeight:700,color:C.white||C.textHi,
+        marginTop:14,marginBottom:6,borderBottom:`1px solid ${C.border}`,
+        paddingBottom:4,lineHeight:1.4}}>{line.replace(/^## /,'')}</div>;
+    // H3
+    if(/^### /.test(line))
+      return <div key={i} style={{fontSize:13,fontWeight:700,color:C.accentText,
+        marginTop:10,marginBottom:4}}>{line.replace(/^### /,'')}</div>;
+    // Table row (markdown table |col|col|)
+    if(/^\|/.test(line)&&line.trim().endsWith('|')){
+      const cells=line.split('|').filter((_,j)=>j>0&&j<line.split('|').length-1);
+      const isSep=cells.every(c=>/^[-: ]+$/.test(c));
+      if(isSep) return null;
+      return(
+        <div key={i} style={{display:'flex',gap:0,marginBottom:2}}>
+          {cells.map((cell,j)=>(
+            <div key={j} style={{flex:1,padding:'5px 10px',fontSize:12,
+              background:j===0?C.surfaceHi:"transparent",
+              border:`1px solid ${C.border}20`,
+              color:j===0?C.muted:C.text,fontWeight:j===0?600:400}}>
+              {inlineBold(cell.trim())}
+            </div>
+          ))}
+        </div>
+      );
+    }
+    // Bullet
+    if(/^[-*•] /.test(line))
+      return <div key={i} style={{display:'flex',gap:8,marginBottom:3,
+        paddingLeft:8,fontSize:12,color:C.text,lineHeight:1.6}}>
+        <span style={{color:C.accentText,flexShrink:0}}>•</span>
+        <span>{inlineBold(line.replace(/^[-*•] /,''))}</span>
+      </div>;
+    // Numbered list
+    if(/^\d+\. /.test(line))
+      return <div key={i} style={{display:'flex',gap:8,marginBottom:3,
+        paddingLeft:8,fontSize:12,color:C.text,lineHeight:1.6}}>
+        <span style={{color:C.accentText,fontWeight:600,flexShrink:0,minWidth:18}}>
+          {line.match(/^\d+/)[0]}.
+        </span>
+        <span>{inlineBold(line.replace(/^\d+\. /,''))}</span>
+      </div>;
+    // URL line
+    if(/^https?:\/\//.test(line.trim()))
+      return <a key={i} href={line.trim()} target="_blank" rel="noreferrer"
+        style={{display:'block',fontSize:11,color:C.accentText,marginBottom:3,
+          wordBreak:'break-all',paddingLeft:8}}>{line.trim()}</a>;
+    // Empty line
+    if(!line.trim())
+      return <div key={i} style={{height:6}}/>;
+    // Default paragraph
+    return <div key={i} style={{fontSize:12,color:C.text,lineHeight:1.7,marginBottom:2}}>
+      {inlineBold(line)}
+    </div>;
+  }).filter(Boolean);
+}
+
 function CVEReportModal({cveId,token,C,onClose}){
   const [format,setFormat]=useState("email");
   const [result,setResult]=useState(null);
@@ -524,10 +600,7 @@ function CVEReportModal({cveId,token,C,onClose}){
               {/* Content */}
               <div style={{background:C.surfaceHi,border:`1px solid ${C.border}`,
                 borderRadius:10,padding:"16px 18px"}}>
-                <pre style={{margin:0,fontFamily:"inherit",fontSize:12,color:C.text,
-                  lineHeight:1.8,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
-                  {result.content}
-                </pre>
+                {renderMarkdown(result.content, C)}
               </div>
 
               {/* PoC links */}
