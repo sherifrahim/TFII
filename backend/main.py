@@ -2772,76 +2772,248 @@ async def cve_report(id: str, format: str = "email", user=Depends(get_current_us
         except Exception: pass
         return {}
 
-    async def check_poc_github():
-        """Check nomi-sec/PoC-in-GitHub database — free, comprehensive."""
-        pocs = []
+    # ── Comprehensive PoC Search ─────────────────────────────────────────────
+    # Quality tiers: verified > high > medium > low
+    # verified = ExploitDB / Metasploit / Vulhub (battle-tested, curated)
+    # high     = nomi-sec indexed with stars, NVD Exploit-tagged refs
+    # medium   = GitHub search results with description + some stars
+    # low      = GitHub repos with 0 stars / no description
+
+    GH_HEADERS = {"User-Agent":"ThreatFeed-CTI/1.0",
+                  "Accept":"application/vnd.github+json"}
+
+    async def search_nomi_sec():
+        """nomi-sec/PoC-in-GitHub — curated, auto-updated daily index."""
         try:
             url = f"https://raw.githubusercontent.com/nomi-sec/PoC-in-GitHub/master/{year}/{cve_id}.json"
-            async with httpx.AsyncClient(timeout=8,
-                headers={"User-Agent":"ThreatFeed-CTI/1.0"}) as c:
+            async with httpx.AsyncClient(timeout=8, headers=GH_HEADERS) as c:
                 r = await c.get(url)
-            if r.status_code == 200:
-                entries = r.json()
-                for entry in entries[:5]:
-                    pocs.append({
-                        "url":         entry.get("html_url",""),
-                        "author":      entry.get("owner",{}).get("login",""),
-                        "stars":       entry.get("stargazers_count",0),
-                        "description": entry.get("description",""),
-                        "created_at":  entry.get("created_at","")[:10],
+            if r.status_code != 200: return []
+            results = []
+            for e in r.json():
+                stars = e.get("stargazers_count",0)
+                results.append({
+                    "url":         e.get("html_url",""),
+                    "source":      "GitHub (nomi-sec index)",
+                    "quality":     "high" if stars >= 5 else "medium",
+                    "stars":       stars,
+                    "description": (e.get("description") or "")[:120],
+                    "author":      e.get("owner",{}).get("login",""),
+                    "pushed_at":   e.get("pushed_at","")[:10],
+                    "language":    e.get("language",""),
+                })
+            return sorted(results, key=lambda x: -x["stars"])
+        except Exception: return []
+
+    async def search_github_api():
+        """
+        GitHub Search API — search for repos mentioning this CVE.
+        Quality-filtered: prefer repos with stars, recent activity, good description.
+        Searches 3 query variants to maximize coverage.
+        """
+        queries = [
+            f"{cve_id} poc exploit",
+            f"{cve_id} proof-of-concept",
+            f"{cve_id} vulnerability exploit",
+        ]
+        seen_urls = set()
+        results   = []
+        for q in queries:
+            try:
+                async with httpx.AsyncClient(timeout=10, headers=GH_HEADERS) as c:
+                    r = await c.get("https://api.github.com/search/repositories",
+                        params={"q": q, "sort":"stars","order":"desc","per_page":10})
+                if r.status_code != 200: continue
+                items = r.json().get("items",[])
+                for repo in items:
+                    url = repo.get("html_url","")
+                    if not url or url in seen_urls: continue
+                    # Quality filter: skip empty/clearly irrelevant repos
+                    desc   = (repo.get("description") or "").lower()
+                    name   = (repo.get("name") or "").lower()
+                    stars  = repo.get("stargazers_count",0)
+                    pushed = repo.get("pushed_at","")[:10]
+                    cve_lc = cve_id.lower()
+                    # Must mention the CVE in name, description, or topics
+                    topics = [t.lower() for t in repo.get("topics",[])]
+                    mentions_cve = (cve_lc in name or cve_lc in desc or
+                                   any(cve_lc in t for t in topics))
+                    if not mentions_cve: continue
+                    # Skip archived repos with 0 stars
+                    if repo.get("archived") and stars == 0: continue
+                    qual = ("high"   if stars >= 10 else
+                            "medium" if stars >= 2 or any(
+                                kw in desc or kw in name
+                                for kw in ["poc","exploit","proof","demo","rce","lpe"]) else
+                            "low")
+                    seen_urls.add(url)
+                    results.append({
+                        "url":         url,
+                        "source":      "GitHub Search",
+                        "quality":     qual,
+                        "stars":       stars,
+                        "description": (repo.get("description") or "")[:120],
+                        "author":      repo.get("owner",{}).get("login",""),
+                        "pushed_at":   pushed,
+                        "language":    repo.get("language",""),
                     })
-        except Exception: pass
-        return pocs
+            except Exception: pass
+        return sorted(results, key=lambda x: -x["stars"])
 
-    async def check_poc_refs(nvd_data):
-        """Check NVD references for Exploit/PoC tags."""
-        refs = nvd_data.get("references",[])
-        poc_refs = []
-        for ref in refs:
-            tags = ref.get("tags",[])
-            url  = ref.get("url","")
-            if any(t in tags for t in ["Exploit","Proof of Concept","PoC"]):
-                poc_refs.append(url)
-            elif any(kw in url.lower() for kw in ["exploit","poc","proof","metasploit",
-                                                    "packetstorm","exploit-db"]):
-                poc_refs.append(url)
-        return poc_refs
+    async def search_metasploit():
+        """Search Rapid7 Metasploit Framework for modules using this CVE."""
+        try:
+            async with httpx.AsyncClient(timeout=10, headers=GH_HEADERS) as c:
+                r = await c.get("https://api.github.com/search/code",
+                    params={"q": f"{cve_id} repo:rapid7/metasploit-framework",
+                            "per_page": 5})
+            if r.status_code != 200: return []
+            items = r.json().get("items",[])
+            results = []
+            for item in items:
+                path = item.get("path","")
+                if path.endswith((".rb",".py")):
+                    results.append({
+                        "url":         item.get("html_url",""),
+                        "source":      "Metasploit Framework",
+                        "quality":     "verified",
+                        "stars":       0,
+                        "description": f"Metasploit module: {path.split('/')[-1]}",
+                        "author":      "rapid7",
+                        "pushed_at":   "",
+                        "language":    "Ruby",
+                    })
+            return results
+        except Exception: return []
 
-    async def check_exploitdb():
-        """Check ExploitDB for this CVE."""
+    async def search_vulhub():
+        """Vulhub — Docker-based PoC environments, highly reliable."""
+        try:
+            async with httpx.AsyncClient(timeout=10, headers=GH_HEADERS) as c:
+                r = await c.get("https://api.github.com/search/code",
+                    params={"q": f"{cve_id} repo:vulhub/vulhub",
+                            "per_page": 3})
+            if r.status_code != 200: return []
+            items = r.json().get("items",[])
+            results = []
+            seen = set()
+            for item in items:
+                path = item.get("path","")
+                folder = "/".join(path.split("/")[:2])
+                if folder in seen: continue
+                seen.add(folder)
+                results.append({
+                    "url":         f"https://github.com/vulhub/vulhub/tree/master/{folder}",
+                    "source":      "Vulhub (Docker PoC)",
+                    "quality":     "verified",
+                    "stars":       0,
+                    "description": f"Docker-based PoC environment: {folder}",
+                    "author":      "vulhub",
+                    "pushed_at":   "",
+                    "language":    "Dockerfile",
+                })
+            return results
+        except Exception: return []
+
+    async def search_exploitdb():
+        """ExploitDB — verified, manually curated exploit database."""
         try:
             cve_num = cve_id.replace("CVE-","")
             async with httpx.AsyncClient(timeout=8,
-                headers={"User-Agent":"Mozilla/5.0 ThreatFeed-CTI/1.0"}) as c:
-                r = await c.get(f"https://www.exploit-db.com/search?cve={cve_num}",
-                               headers={"Accept":"application/json, text/javascript"})
+                headers={"User-Agent":"Mozilla/5.0 ThreatFeed-CTI/1.0",
+                         "Accept":"application/json"}) as c:
+                r = await c.get(f"https://www.exploit-db.com/search?cve={cve_num}")
             if r.status_code == 200:
-                try:
-                    data = r.json()
-                    results = data.get("data",[])
-                    if results:
-                        return [f"https://www.exploit-db.com/exploits/{e.get('id','')}"
-                                for e in results[:3] if e.get("id")]
-                except Exception: pass
+                data = r.json()
+                results = []
+                for e in data.get("data",[])[:4]:
+                    if e.get("id"):
+                        results.append({
+                            "url":         f"https://www.exploit-db.com/exploits/{e['id']}",
+                            "source":      "ExploitDB",
+                            "quality":     "verified",
+                            "stars":       0,
+                            "description": e.get("description","")[:120],
+                            "author":      e.get("author",""),
+                            "pushed_at":   e.get("date_published","")[:10],
+                            "language":    e.get("platform",""),
+                        })
+                return results
         except Exception: pass
         return []
 
-    # Run all lookups in parallel
-    nvd_data, poc_github, edb_pocs = await asyncio.gather(
-        get_nvd(), check_poc_github(), check_exploitdb(),
+    async def search_nvd_refs_for_poc(nvd_data):
+        """Deep scan NVD references for exploit/PoC URLs from known sources."""
+        poc_domains = ["exploit-db.com","packetstormsecurity.com","github.com",
+                       "metasploit.com","seebug.org","seclists.org","0day.today",
+                       "vulhub.org","poc-in-github","offensive-security.com"]
+        poc_tag_kw  = ["exploit","proof of concept","poc"]
+        results = []
+        for ref in nvd_data.get("references",[]):
+            url  = ref.get("url","")
+            tags = [t.lower() for t in ref.get("tags",[])]
+            if not url: continue
+            url_lc = url.lower()
+            tag_match = any(kw in t for kw in poc_tag_kw for t in tags)
+            dom_match = any(d in url_lc for d in poc_domains)
+            kw_match  = any(kw in url_lc for kw in ["exploit","poc","proof","0day"])
+            if tag_match or dom_match or kw_match:
+                quality = ("verified" if "exploit-db.com" in url_lc or
+                                         "packetstormsecurity.com" in url_lc else
+                           "high"     if tag_match else "medium")
+                results.append({
+                    "url":         url,
+                    "source":      "NVD Reference",
+                    "quality":     quality,
+                    "stars":       0,
+                    "description": f"NVD-tagged: {', '.join(ref.get('tags',[]))}" if ref.get("tags") else "PoC/Exploit URL in NVD references",
+                    "author":      "",
+                    "pushed_at":   "",
+                    "language":    "",
+                })
+        return results
+
+    # Run all PoC sources in parallel
+    nvd_data, nomi_pocs, gh_pocs, msf_pocs, vh_pocs, edb_pocs = await asyncio.gather(
+        get_nvd(),
+        search_nomi_sec(),
+        search_github_api(),
+        search_metasploit(),
+        search_vulhub(),
+        search_exploitdb(),
         return_exceptions=True
     )
-    if isinstance(nvd_data, Exception):   nvd_data   = {}
-    if isinstance(poc_github, Exception): poc_github = []
+    if isinstance(nvd_data,   Exception): nvd_data   = {}
+    if isinstance(nomi_pocs,  Exception): nomi_pocs  = []
+    if isinstance(gh_pocs,    Exception): gh_pocs    = []
+    if isinstance(msf_pocs,   Exception): msf_pocs   = []
+    if isinstance(vh_pocs,    Exception): vh_pocs    = []
     if isinstance(edb_pocs,   Exception): edb_pocs   = []
 
-    poc_ref_urls = await check_poc_refs(nvd_data if nvd_data else {})
+    nvd_ref_pocs = await search_nvd_refs_for_poc(nvd_data if nvd_data else {})
 
-    # ── Compile PoC status ───────────────────────────────────────────────────
-    has_poc       = bool(poc_github or poc_ref_urls or edb_pocs)
-    poc_links     = ([p["url"] for p in poc_github if p.get("url")] +
-                     poc_ref_urls + edb_pocs)[:5]
-    top_poc       = poc_github[0] if poc_github else None
+    # ── Merge, deduplicate, and rank all PoC results ─────────────────────────
+    QUALITY_ORDER = {"verified": 0, "high": 1, "medium": 2, "low": 3}
+    all_poc_raw = edb_pocs + msf_pocs + vh_pocs + nomi_pocs + gh_pocs + nvd_ref_pocs
+    seen_urls   = set()
+    all_pocs    = []
+    for poc in all_poc_raw:
+        url = poc.get("url","")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            all_pocs.append(poc)
+    # Sort: quality tier first, then by stars desc
+    all_pocs.sort(key=lambda x: (QUALITY_ORDER.get(x.get("quality","low"),3),
+                                  -x.get("stars",0)))
+    # Drop low-quality zero-star results if we already have better ones
+    has_good = any(p["quality"] in ("verified","high") for p in all_pocs)
+    if has_good:
+        all_pocs = [p for p in all_pocs if p["quality"] != "low" or p.get("stars",0) > 0]
+
+    has_poc  = len(all_pocs) > 0
+    top_poc  = all_pocs[0] if all_pocs else None
+    poc_links = [p["url"] for p in all_pocs[:6]]
+
 
     # ── Extract structured CVE data ──────────────────────────────────────────
     desc = next((d["value"] for d in nvd_data.get("descriptions",[])
@@ -2889,13 +3061,25 @@ async def cve_report(id: str, format: str = "email", user=Depends(get_current_us
     # ── Build prompt context ─────────────────────────────────────────────────
     poc_section = ""
     if has_poc:
-        poc_section = f"YES — PoC exploits are publicly available.\n"
-        if top_poc:
-            poc_section += f"Most notable: {top_poc.get('url','')} (⭐ {top_poc.get('stars',0)} stars)\n"
-        if poc_links:
-            poc_section += "Links:\n" + "\n".join(f"- {u}" for u in poc_links[:4])
+        by_quality = {}
+        for p in all_pocs[:6]:
+            q = p.get("quality","medium")
+            by_quality.setdefault(q,[]).append(p)
+        poc_section = f"YES — {len(all_pocs)} PoC/exploit source(s) found across multiple platforms.\n\n"
+        if by_quality.get("verified"):
+            poc_section += "VERIFIED EXPLOITS (ExploitDB / Metasploit / Vulhub):\n"
+            for p in by_quality["verified"]:
+                poc_section += f"  • [{p['source']}] {p['url']} — {p.get('description','')}\n"
+        if by_quality.get("high"):
+            poc_section += "\nHIGH-QUALITY PoC (well-starred GitHub repos):\n"
+            for p in by_quality["high"]:
+                poc_section += f"  • ⭐{p.get('stars',0)} {p['url']} — {p.get('description','')}\n"
+        if by_quality.get("medium"):
+            poc_section += "\nADDITIONAL PoC REFERENCES:\n"
+            for p in by_quality["medium"][:3]:
+                poc_section += f"  • {p['url']} ({p['source']})\n"
     else:
-        poc_section = "No public PoC identified in GitHub, ExploitDB, or NVD references at time of scan."
+        poc_section = "No public PoC identified across GitHub, ExploitDB, Metasploit, Vulhub, or NVD references at time of scan."
 
     context = f"""CVE ID: {cve_id}
 Severity: {severity} (CVSS {score})
@@ -3021,8 +3205,10 @@ Be factual. Use the provided data only. Do not invent version numbers or links."
         "content":    body,
         "poc": {
             "available": has_poc,
+            "count":     len(all_pocs),
+            "results":   all_pocs[:6],      # full rich objects
             "links":     poc_links,
-            "github":    poc_github[:3],
+            "top":       top_poc,
         },
         "severity":   severity,
         "score":      score,

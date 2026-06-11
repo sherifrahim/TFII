@@ -562,17 +562,17 @@ function CVEReportModal({cveId,token,C,onClose}){
                 <div style={{flex:1}}>
                   <span style={{fontSize:13,fontWeight:700,
                     color:result.poc?.available?C.red:C.green}}>
-                    PoC Exploits: {result.poc?.available?"PUBLICLY AVAILABLE":"None Found"}
+                    PoC Exploits: {result.poc?.available
+                      ?`${result.poc.count} source${result.poc.count!==1?"s":""} found`
+                      :"None Found"}
                   </span>
-                  {result.poc?.available&&result.poc?.links?.length>0&&(
+                  {result.poc?.available&&result.poc?.top&&(
                     <div style={{fontSize:11,color:C.muted,marginTop:2}}>
-                      {result.poc.links.length} source{result.poc.links.length!==1?"s":""}: {" "}
-                      {result.poc.github?.[0]&&(
-                        <a href={result.poc.github[0].url} target="_blank" rel="noreferrer"
-                          style={{color:C.accentText,fontWeight:600}}>
-                          ⭐ {result.poc.github[0].stars} — {result.poc.github[0].url?.split("/").slice(-2).join("/")}
-                        </a>
-                      )}
+                      Top: <span style={{color:C.accentText,fontWeight:600}}>
+                        {result.poc.top.source}
+                      </span>
+                      {result.poc.top.stars>0&&` · ⭐ ${result.poc.top.stars}`}
+                      {result.poc.top.description&&` · ${result.poc.top.description.slice(0,60)}...`}
                     </div>
                   )}
                 </div>
@@ -604,18 +604,51 @@ function CVEReportModal({cveId,token,C,onClose}){
               </div>
 
               {/* PoC links */}
-              {result.poc?.available&&result.poc?.links?.length>0&&(
-                <div style={{marginTop:12,padding:"12px 14px",background:C.red+"08",
-                  border:`1px solid ${C.red}20`,borderRadius:8}}>
-                  <div style={{fontSize:10,color:C.red,fontWeight:700,marginBottom:8,
-                    textTransform:"uppercase"}}>🔓 PoC / Exploit References</div>
-                  {result.poc.links.map((link,i)=>(
-                    <a key={i} href={link} target="_blank" rel="noreferrer"
-                      style={{display:"flex",alignItems:"center",gap:6,fontSize:12,
-                        color:C.accentText,marginBottom:4,wordBreak:"break-all"}}>
-                      <NavIcon name="externalLink" size={10} color={C.accentText}/>{link}
-                    </a>
-                  ))}
+              {result.poc?.available&&result.poc?.results?.length>0&&(
+                <div style={{marginTop:12,padding:"14px 16px",background:C.red+"08",
+                  border:`1px solid ${C.red}20`,borderRadius:10}}>
+                  <div style={{fontSize:11,color:C.red,fontWeight:700,marginBottom:10,
+                    textTransform:"uppercase",letterSpacing:"0.05em"}}>
+                    🔓 PoC / Exploit References ({result.poc.count} found)
+                  </div>
+                  {result.poc.results.map((poc,i)=>{
+                    const QUAL_COLOR={"verified":C.red,"high":C.amber,"medium":C.purple,"low":C.muted};
+                    const QUAL_LABEL={"verified":"✓ Verified","high":"★ High","medium":"◎ Medium","low":"○ Low"};
+                    return(
+                      <div key={i} style={{marginBottom:8,padding:"8px 12px",
+                        background:C.surfaceHi,borderRadius:7,
+                        border:`1px solid ${(QUAL_COLOR[poc.quality]||C.muted)}30`}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                          <span style={{fontSize:10,padding:"1px 7px",borderRadius:4,fontWeight:700,
+                            background:(QUAL_COLOR[poc.quality]||C.muted)+"20",
+                            color:QUAL_COLOR[poc.quality]||C.muted,flexShrink:0}}>
+                            {QUAL_LABEL[poc.quality]||poc.quality}
+                          </span>
+                          <span style={{fontSize:11,color:C.accentText,fontWeight:600,flexShrink:0}}>
+                            {poc.source}
+                          </span>
+                          {poc.stars>0&&(
+                            <span style={{fontSize:10,color:C.amber}}>⭐ {poc.stars}</span>
+                          )}
+                          {poc.language&&(
+                            <span style={{fontSize:10,color:C.muted,marginLeft:"auto"}}>
+                              {poc.language}
+                            </span>
+                          )}
+                        </div>
+                        <a href={poc.url} target="_blank" rel="noreferrer"
+                          style={{fontSize:11,color:C.accentText,wordBreak:"break-all",
+                            display:"flex",alignItems:"center",gap:4,marginBottom:poc.description?4:0}}>
+                          <NavIcon name="externalLink" size={10} color={C.accentText}/>{poc.url}
+                        </a>
+                        {poc.description&&(
+                          <div style={{fontSize:11,color:C.muted,lineHeight:1.5,paddingLeft:14}}>
+                            {poc.description}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
