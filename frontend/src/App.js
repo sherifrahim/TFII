@@ -4111,6 +4111,42 @@ function ApiKeysSection({token,C}){
 
 const DAILY_FREE_QUOTA = 10;
 
+function PasswordChangeCard({token,C}){
+  const [cur,setCur]=useState(""); const [nw,setNw]=useState(""); const [conf,setConf]=useState("");
+  const [msg,setMsg]=useState(""); const [err,setErr]=useState(""); const [saving,setSaving]=useState(false);
+  async function submit(){
+    if(!cur||!nw||!conf){setErr("All fields required.");return;}
+    if(nw!==conf){setErr("New passwords do not match.");return;}
+    if(nw.length<8){setErr("Password must be at least 8 characters.");return;}
+    setSaving(true);setErr("");setMsg("");
+    const r=await api("/auth/change-password",{method:"POST",
+      body:JSON.stringify({current_password:cur,new_password:nw})},token);
+    if(r.ok){setMsg("✓ Password changed successfully.");setCur("");setNw("");setConf("");}
+    else{const e=await r.json();setErr(e.detail||"Failed to change password.");}
+    setSaving(false);
+  }
+  return(
+    <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+      padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:14}}>Change Password</div>
+      <div style={{display:"grid",gap:10,maxWidth:360}}>
+        {[["Current Password",cur,setCur],["New Password",nw,setNw],["Confirm New Password",conf,setConf]].map(([label,val,set])=>(
+          <div key={label}>
+            <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>{label}</div>
+            <input type="password" value={val} onChange={e=>set(e.target.value)}
+              style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:13,
+                outline:"none",fontFamily:"monospace",boxSizing:"border-box"}}/>
+          </div>
+        ))}
+        {err&&<div style={{fontSize:12,color:C.red}}>{err}</div>}
+        {msg&&<div style={{fontSize:12,color:C.green}}>{msg}</div>}
+        <Btn onClick={submit} disabled={saving} C={C}>{saving?"Saving...":"Change Password"}</Btn>
+      </div>
+    </div>
+  );
+}
+
 function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}){
   const isAdmin = me?.role==="admin";
   const [notifSettings,setNotifSettings]=useState(null);
@@ -4220,7 +4256,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
       </div>
 
       {/* Change Password */}
-      <ChangePasswordSection token={token} C={C}/>
+      <PasswordChangeCard token={token} C={C}/>
 
       {/* ── ADMIN: Notification Center ── */}
       {isAdmin&&notifSettings&&(
