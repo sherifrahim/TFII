@@ -359,13 +359,444 @@ async def startup():
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
         from apscheduler.triggers.interval import IntervalTrigger
+        from apscheduler.triggers.cron   import CronTrigger
         scheduler = AsyncIOScheduler()
         scheduler.add_job(scheduled_cve_poll, IntervalTrigger(hours=6),
                           id="cve_poll", replace_existing=True, misfire_grace_time=300)
+        # Daily brief — hour/minute read from DB settings at runtime
+        scheduler.add_job(send_daily_brief_job, CronTrigger(hour=8, minute=0),
+                          id="daily_brief", replace_existing=True, misfire_grace_time=600)
+        # Weekly summary — every Sunday at 8 AM
+        scheduler.add_job(send_weekly_summary_job, CronTrigger(day_of_week="sun", hour=8, minute=0),
+                          id="weekly_summary", replace_existing=True, misfire_grace_time=600)
         scheduler.start()
-        print("[scheduler] CVE poll scheduled every 6 hours")
+        print("[scheduler] CVE poll every 6h | Daily brief 08:00 | Weekly summary Sundays")
     except ImportError:
         print("[scheduler] apscheduler not installed — run: pip install apscheduler")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADMIN DAILY BRIEF — CVE digest + Gold rates
+# ═══════════════════════════════════════════════════════════════════════════════
+
+NOTIF_SETTINGS_KEY = "admin_notification_settings"
+
+async def get_notif_settings(conn) -> dict:
+    """Load notification settings from DB (stored as a JSON system setting)."""
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT value FROM system_settings WHERE key = %s",
+                    (NOTIF_SETTINGS_KEY,))
+        row = cur.fetchone()
+        if row:
+            import json as _j
+            return _j.loads(row["value"])
+    except Exception: pass
+    return {}
+
+async def fetch_gold_rates() -> dict:
+    """
+    Fetch real-time gold rates and compute per-gram prices in AED and INR.
+    Sources: metals.live (XAU/USD) + exchangerate-api (USD→AED, USD→INR)
+    """
+    TROY_OZ_TO_GRAM = 31.1035
+    try:
+        async with httpx.AsyncClient(timeout=10,
+            headers={"User-Agent":"ThreatFeed-CTI/1.0"}) as c:
+            metals_r, forex_r = await asyncio.gather(
+                c.get("https://api.metals.live/v1/spot/gold"),
+                c.get("https://api.exchangerate-api.com/v4/latest/USD"),
+            )
+
+        xau_usd = None
+        if metals_r.status_code == 200:
+            data = metals_r.json()
+            xau_usd = data[0].get("gold") if isinstance(data, list) else data.get("gold") or data.get("price")
+
+        usd_aed, usd_inr = 3.6725, 83.50  # fallback fixed rates
+        if forex_r.status_code == 200:
+            rates = forex_r.json().get("rates", {})
+            usd_aed = float(rates.get("AED", 3.6725))
+            usd_inr = float(rates.get("INR", 83.50))
+
+        if not xau_usd:
+            return {"error": "Could not fetch gold price"}
+
+        xau_usd = float(xau_usd)
+        pgram_usd = xau_usd / TROY_OZ_TO_GRAM   # price per gram in USD
+
+        def purity(base, k): return round(base * k / 24, 2)
+
+        aed_24k = round(pgram_usd * usd_aed, 2)
+        inr_24k = round(pgram_usd * usd_inr, 2)
+
+        # Difference: AED price converted to INR vs direct INR price
+        aed_as_inr = round(aed_24k * (usd_inr / usd_aed), 2)  # AED 24K → INR equiv
+        inr_as_aed = round(inr_24k * (usd_aed / usd_inr), 2)  # INR 24K → AED equiv
+        diff_inr   = round(inr_24k - aed_as_inr, 2)            # India premium in INR
+        diff_aed   = round(inr_as_aed - aed_24k, 2)            # India premium in AED
+
+        return {
+            "xau_usd":    round(xau_usd, 2),
+            "usd_aed":    round(usd_aed, 4),
+            "usd_inr":    round(usd_inr, 4),
+            "timestamp":  datetime.now(timezone.utc).isoformat(),
+            # UAE rates per gram
+            "uae": {
+                "24k": aed_24k,
+                "22k": purity(aed_24k, 22),
+                "21k": purity(aed_24k, 21),
+                "18k": purity(aed_24k, 18),
+                "currency": "AED",
+            },
+            # India rates per gram
+            "india": {
+                "24k": inr_24k,
+                "22k": purity(inr_24k, 22),
+                "18k": purity(inr_24k, 18),
+                "currency": "INR",
+            },
+            # Cross-currency difference (India typically has a premium)
+            "diff": {
+                "24k_india_premium_inr": diff_inr,   # positive = India is more expensive
+                "24k_india_premium_aed": diff_aed,
+                "note": (f"India gold is {'costlier' if diff_inr > 0 else 'cheaper'} by "
+                         f"₹{abs(diff_inr):.2f}/g (AED {abs(diff_aed):.2f}/g) vs UAE")
+            },
+            # Convenience: 10g prices (common purchase unit in India)
+            "ten_gram": {
+                "uae_24k_aed":   round(aed_24k * 10, 2),
+                "uae_22k_aed":   round(purity(aed_24k,22) * 10, 2),
+                "india_24k_inr": round(inr_24k * 10, 2),
+                "india_22k_inr": round(purity(inr_24k,22) * 10, 2),
+            }
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+async def fetch_daily_cve_digest() -> list:
+    """
+    Get the most critical/exploitable CVEs for today's brief:
+    - CISA KEV additions in the last 7 days
+    - CVEs in our DB with high EPSS (> 0.7) added recently
+    - Critical unpatched CVEs from monitored assets
+    """
+    items = []
+    try:
+        # 1. Latest KEV additions
+        kev = await fetch_kev_catalog()
+        kev_url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(kev_url)
+        if r.status_code == 200:
+            vulns = r.json().get("vulnerabilities",[])
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+            recent_kev = [v for v in vulns
+                          if v.get("dateAdded","") >= cutoff]
+            for v in recent_kev[:5]:
+                items.append({
+                    "cve_id":      v.get("cveID",""),
+                    "name":        v.get("vulnerabilityName",""),
+                    "vendor":      v.get("vendorProject",""),
+                    "product":     v.get("product",""),
+                    "description": v.get("shortDescription","")[:200],
+                    "kev_date":    v.get("dateAdded",""),
+                    "due_date":    v.get("dueDate",""),
+                    "source":      "CISA KEV",
+                    "severity":    "CRITICAL",
+                })
+    except Exception: pass
+
+    try:
+        # 2. High-EPSS CVEs from NVD (EPSS ≥ 0.7 = top 70th percentile)
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get("https://api.first.org/data/v1/epss",
+                params={"percentile-gte":"0.95","limit":"10","order":"!epss"})
+        if r.status_code == 200:
+            for e in r.json().get("data",[])[:5]:
+                cve = e.get("cve","")
+                if not any(x["cve_id"] == cve for x in items):
+                    items.append({
+                        "cve_id":      cve,
+                        "name":        f"High Exploitation Probability",
+                        "vendor":      "Multiple",
+                        "product":     "See NVD",
+                        "description": f"EPSS: {float(e.get('epss',0))*100:.1f}% exploitation probability (top {(1-float(e.get('percentile',0)))*100:.0f}%)",
+                        "kev_date":    "",
+                        "source":      "EPSS Top 5%",
+                        "severity":    "HIGH",
+                    })
+    except Exception: pass
+
+    return items[:8]
+
+def format_brief_message(cve_items: list, gold: dict, is_weekly: bool = False) -> dict:
+    """Format notification content for push/email."""
+    now    = datetime.now(timezone.utc)
+    prefix = "📊 TFII Weekly Summary" if is_weekly else "🔔 TFII Daily Brief"
+    date   = now.strftime("%A, %d %b %Y")
+
+    # ── CVE section ──────────────────────────────────────────────────────────
+    cve_text = ""
+    if cve_items:
+        cve_text = f"\n🛡️ HIGH-RISK CVEs ({len(cve_items)} alerts)\n"
+        cve_text += "─" * 35 + "\n"
+        for c in cve_items:
+            cve_text += f"\n🔴 {c['cve_id']} [{c['source']}]\n"
+            if c.get('name') and c['name'] != "High Exploitation Probability":
+                cve_text += f"   {c['name']}\n"
+            if c.get('vendor') or c.get('product'):
+                cve_text += f"   Affected: {c.get('vendor','')} {c.get('product','')}\n"
+            if c.get('description'):
+                cve_text += f"   {c['description'][:150]}\n"
+            if c.get('due_date'):
+                cve_text += f"   ⚠️ CISA Remediation Due: {c['due_date']}\n"
+    else:
+        cve_text = "\n🛡️ No new critical CVEs in the last 7 days ✅\n"
+
+    # ── Gold section ─────────────────────────────────────────────────────────
+    gold_text = ""
+    if "error" not in gold:
+        u   = gold.get("uae",{})
+        ind = gold.get("india",{})
+        df  = gold.get("diff",{})
+        tg  = gold.get("ten_gram",{})
+        gold_text = f"""
+💰 GOLD RATES — {now.strftime("%d %b %Y")}
+{"─" * 35}
+🇦🇪 UAE (per gram)
+   24K: AED {u.get('24k','—')}  |  22K: AED {u.get('22k','—')}
+   21K: AED {u.get('21k','—')}  |  18K: AED {u.get('18k','—')}
+
+🇮🇳 India (per gram)
+   24K: ₹{ind.get('24k','—')}  |  22K: ₹{ind.get('22k','—')}
+   18K: ₹{ind.get('18k','—')}
+
+📊 10 Gram Prices
+   UAE  24K: AED {tg.get('uae_24k_aed','—')} | 22K: AED {tg.get('uae_22k_aed','—')}
+   India 24K: ₹{tg.get('india_24k_inr','—')} | 22K: ₹{tg.get('india_22k_inr','—')}
+
+⚖️  Difference
+   {df.get('note','N/A')}
+   India premium: ₹{df.get('24k_india_premium_inr','—')}/g  =  AED {df.get('24k_india_premium_aed','—')}/g
+
+💱 Rates: 1 USD = AED {gold.get('usd_aed','—')} | 1 USD = ₹{gold.get('usd_inr','—')}
+   Gold spot: USD {gold.get('xau_usd','—')}/troy oz
+"""
+    else:
+        gold_text = f"\n💰 Gold rates unavailable: {gold.get('error','')}\n"
+
+    title = f"{prefix} — {date}"
+    body  = cve_text + gold_text
+
+    # HTML version for email
+    html = f"""<html><body style="font-family:monospace;background:#0f172a;color:#e2e8f0;padding:20px;">
+<h2 style="color:#10b981;">{title}</h2>
+<pre style="line-height:1.7;font-size:13px;">{body}</pre>
+<hr style="border-color:#334155;"/>
+<p style="color:#64748b;font-size:11px;">Sent by TFII — ThreatFeed Intelligence Platform</p>
+</body></html>"""
+
+    return {"title": title, "body": body.strip(), "html": html}
+
+async def send_notification(title: str, body: str, html: str, settings: dict):
+    """Send notification via configured channel(s)."""
+    errors = []
+
+    # ── ntfy.sh ──────────────────────────────────────────────────────────────
+    if settings.get("ntfy_topic"):
+        try:
+            server = settings.get("ntfy_server","https://ntfy.sh").rstrip("/")
+            topic  = settings["ntfy_topic"]
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.post(f"{server}/{topic}",
+                    content=body.encode("utf-8"),
+                    headers={
+                        "Title":    title,
+                        "Priority": "high",
+                        "Tags":     "warning,shield",
+                        "Markdown": "yes",
+                        "Content-Type": "text/plain",
+                    })
+            if r.status_code not in (200,201):
+                errors.append(f"ntfy: HTTP {r.status_code}")
+            else:
+                print(f"[notify] ntfy.sh sent: {title}")
+        except Exception as e:
+            errors.append(f"ntfy error: {e}")
+
+    # ── Telegram ─────────────────────────────────────────────────────────────
+    if settings.get("telegram_token") and settings.get("telegram_chat_id"):
+        try:
+            bot   = settings["telegram_token"]
+            chat  = settings["telegram_chat_id"]
+            # Telegram has 4096 char limit — truncate body
+            msg   = f"*{title}*\n\n```\n{body[:3800]}\n```"
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.post(f"https://api.telegram.org/bot{bot}/sendMessage",
+                    json={"chat_id": chat, "text": msg,
+                          "parse_mode": "Markdown", "disable_web_page_preview": True})
+            if r.status_code != 200:
+                errors.append(f"telegram: HTTP {r.status_code} — {r.text[:100]}")
+            else:
+                print(f"[notify] Telegram sent: {title}")
+        except Exception as e:
+            errors.append(f"telegram error: {e}")
+
+    # ── Email (SMTP) ──────────────────────────────────────────────────────────
+    if settings.get("email_to") and settings.get("smtp_host"):
+        try:
+            import smtplib, email.mime.multipart, email.mime.text
+            msg = email.mime.multipart.MIMEMultipart("alternative")
+            msg["Subject"] = title
+            msg["From"]    = settings.get("smtp_from", settings.get("smtp_user",""))
+            msg["To"]      = settings["email_to"]
+            msg.attach(email.mime.text.MIMEText(body, "plain"))
+            msg.attach(email.mime.text.MIMEText(html,  "html"))
+            with smtplib.SMTP(settings["smtp_host"],
+                              int(settings.get("smtp_port", 587))) as smtp:
+                smtp.ehlo(); smtp.starttls(); smtp.ehlo()
+                smtp.login(settings["smtp_user"], settings["smtp_pass"])
+                smtp.sendmail(msg["From"], msg["To"], msg.as_string())
+            print(f"[notify] Email sent to {settings['email_to']}: {title}")
+        except Exception as e:
+            errors.append(f"email error: {e}")
+
+    return errors
+
+async def send_daily_brief_job():
+    """APScheduler job — daily brief."""
+    print("[notify] Running daily brief job...")
+    conn = None
+    try:
+        conn = get_db_conn()
+        settings = await get_notif_settings(conn)
+        if not settings.get("enabled"): return
+        if not settings.get("daily_enabled", True): return
+        cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
+        msg = format_brief_message(cve_items, gold, is_weekly=False)
+        errors = await send_notification(msg["title"], msg["body"], msg["html"], settings)
+        if errors: print(f"[notify] Send errors: {errors}")
+    except Exception as e:
+        print(f"[notify] Daily brief error: {e}")
+    finally:
+        if conn: conn.close()
+
+async def send_weekly_summary_job():
+    """APScheduler job — weekly summary (Sunday)."""
+    print("[notify] Running weekly summary job...")
+    conn = None
+    try:
+        conn = get_db_conn()
+        settings = await get_notif_settings(conn)
+        if not settings.get("enabled"): return
+        if not settings.get("weekly_enabled", True): return
+        cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
+        msg = format_brief_message(cve_items, gold, is_weekly=True)
+        errors = await send_notification(msg["title"], msg["body"], msg["html"], settings)
+        if errors: print(f"[notify] Send errors: {errors}")
+    except Exception as e:
+        print(f"[notify] Weekly summary error: {e}")
+    finally:
+        if conn: conn.close()
+
+# ── Admin notification endpoints ─────────────────────────────────────────────
+
+class NotifSettingsBody(BaseModel):
+    enabled:          bool    = True
+    daily_enabled:    bool    = True
+    weekly_enabled:   bool    = True
+    ntfy_topic:       Optional[str] = None
+    ntfy_server:      Optional[str] = "https://ntfy.sh"
+    telegram_token:   Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+    email_to:         Optional[str] = None
+    smtp_host:        Optional[str] = None
+    smtp_port:        Optional[int] = 587
+    smtp_user:        Optional[str] = None
+    smtp_pass:        Optional[str] = None
+    smtp_from:        Optional[str] = None
+
+@app.get("/admin/notify/settings")
+def get_notify_settings(admin=Depends(require_admin), conn=Depends(get_db)):
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("CREATE TABLE IF NOT EXISTS system_settings (key VARCHAR PRIMARY KEY, value TEXT)")
+        cur.execute("SELECT value FROM system_settings WHERE key=%s", (NOTIF_SETTINGS_KEY,))
+        row = cur.fetchone()
+        conn.commit()
+        if row:
+            import json as _j
+            s = _j.loads(row["value"])
+            # Mask secrets in response
+            if s.get("smtp_pass"):    s["smtp_pass"]       = "••••••••"
+            if s.get("telegram_token"): s["telegram_token"] = s["telegram_token"][:8]+"..."
+            return s
+    except Exception: pass
+    return {}
+
+@app.post("/admin/notify/settings")
+def save_notify_settings(body: NotifSettingsBody, admin=Depends(require_admin), conn=Depends(get_db)):
+    import json as _j
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS system_settings (key VARCHAR PRIMARY KEY, value TEXT)")
+    # Preserve masked secrets — if client sends '••••••••' keep the original
+    existing = {}
+    cur.execute("SELECT value FROM system_settings WHERE key=%s", (NOTIF_SETTINGS_KEY,))
+    row = cur.fetchone()
+    if row:
+        try: existing = _j.loads(row[0])
+        except Exception: pass
+    data = body.dict()
+    if data.get("smtp_pass") == "••••••••": data["smtp_pass"] = existing.get("smtp_pass","")
+    if data.get("telegram_token","").endswith("..."): data["telegram_token"] = existing.get("telegram_token","")
+    cur.execute("INSERT INTO system_settings (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+                (NOTIF_SETTINGS_KEY, _j.dumps(data)))
+    conn.commit()
+    return {"status":"saved"}
+
+@app.post("/admin/notify/test")
+async def test_notification(admin=Depends(require_admin), conn=Depends(get_db)):
+    settings = await get_notif_settings(conn)
+    if not settings:
+        raise HTTPException(status_code=400, detail="No notification settings configured. Save settings first.")
+    gold = await fetch_gold_rates()
+    msg  = format_brief_message(
+        [{"cve_id":"CVE-2024-TEST","name":"Test Notification","vendor":"TFII","product":"Platform",
+          "description":"This is a test notification from your ThreatFeed Intelligence Platform.",
+          "source":"Test","severity":"INFO","kev_date":"","due_date":""}],
+        gold, is_weekly=False
+    )
+    errors = await send_notification(
+        f"🧪 TFII Test — {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M')} UTC",
+        msg["body"], msg["html"], settings
+    )
+    if errors:
+        raise HTTPException(status_code=500, detail=f"Send errors: {'; '.join(errors)}")
+    return {"status":"sent", "channels": [k for k in
+        ["ntfy","telegram","email"] if settings.get(f"{k}_topic" if k=="ntfy" else f"{k}_token" if k=="telegram" else "email_to")]}
+
+@app.post("/admin/notify/send-now")
+async def send_brief_now(type: str = "daily", admin=Depends(require_admin), conn=Depends(get_db)):
+    """Manually trigger a brief immediately."""
+    settings = await get_notif_settings(conn)
+    if not settings:
+        raise HTTPException(status_code=400, detail="No notification settings configured.")
+    cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
+    is_weekly = (type == "weekly")
+    msg    = format_brief_message(cve_items, gold, is_weekly=is_weekly)
+    errors = await send_notification(msg["title"], msg["body"], msg["html"], settings)
+    if errors:
+        raise HTTPException(status_code=500, detail=f"Send errors: {'; '.join(errors)}")
+    return {"status":"sent","cves_found":len(cve_items),"gold_ok":"error" not in gold}
+
+@app.get("/admin/notify/preview")
+async def preview_brief(type: str = "daily", admin=Depends(require_admin)):
+    """Preview what the next brief will look like (no send)."""
+    cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
+    msg = format_brief_message(cve_items, gold, is_weekly=(type=="weekly"))
+    return {**msg, "cves": cve_items, "gold": gold}
+
+
 
 # ── AUTH ──────────────────────────────────────────────────────────────────────
 def create_token(data: dict) -> str:

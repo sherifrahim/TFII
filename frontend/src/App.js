@@ -4112,94 +4112,248 @@ function ApiKeysSection({token,C}){
 const DAILY_FREE_QUOTA = 10;
 
 function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}){
-  const [showPw,setShowPw]=useState(false); const [cur,setCur]=useState(""); const [next,setNext]=useState("");
-  const [pwMsg,setPwMsg]=useState(""); const [pwErr,setPwErr]=useState("");
-  const [auditLog,setAuditLog]=useState([]); const [auditLoaded,setAuditLoaded]=useState(false);
-  async function changePw(){const r=await api("/auth/change-password",{method:"POST",body:JSON.stringify({current_password:cur,new_password:next})},token);if(r.ok){setPwMsg("Password changed.");setCur("");setNext("");}else{const e=await r.json();setPwErr(e.detail||"Failed.");}}
+  const isAdmin = me?.role==="admin";
+  const [notifSettings,setNotifSettings]=useState(null);
+  const [notifLoading,setNotifLoading]=useState(false);
+  const [notifSaving,setNotifSaving]=useState(false);
+  const [notifMsg,setNotifMsg]=useState("");
+  const [preview,setPreview]=useState(null);
+  const [previewLoading,setPreviewLoading]=useState(false);
+  const [sending,setSending]=useState(false);
+
+  const THEMES=[{id:"light",label:"Light"},{id:"dark",label:"Dark"},{id:"operator",label:"Operator"}];
+
+  useEffect(()=>{
+    if(!isAdmin) return;
+    api("/admin/notify/settings",{},token).then(r=>r.ok?r.json():null).then(d=>{
+      if(d) setNotifSettings({
+        enabled:true, daily_enabled:true, weekly_enabled:true,
+        ntfy_topic:"", ntfy_server:"https://ntfy.sh",
+        telegram_token:"", telegram_chat_id:"",
+        email_to:"", smtp_host:"", smtp_port:587,
+        smtp_user:"", smtp_pass:"", smtp_from:"",
+        ...d
+      });
+    });
+  },[token,isAdmin]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  async function saveNotif(){
+    setNotifSaving(true);setNotifMsg("");
+    const r=await api("/admin/notify/settings",{method:"POST",
+      body:JSON.stringify(notifSettings)},token);
+    setNotifMsg(r.ok?"✓ Settings saved":"Failed to save settings");
+    setTimeout(()=>setNotifMsg(""),3000);
+    setNotifSaving(false);
+  }
+
+  async function testNotif(){
+    setNotifLoading(true);setNotifMsg("");
+    const r=await api("/admin/notify/test",{method:"POST"},token);
+    if(r.ok) setNotifMsg("✓ Test notification sent — check your device");
+    else {const e=await r.json(); setNotifMsg(`✗ ${e.detail||"Failed"}`);}
+    setTimeout(()=>setNotifMsg(""),6000);
+    setNotifLoading(false);
+  }
+
+  async function sendNow(type){
+    setSending(type);setNotifMsg("");
+    const r=await api(`/admin/notify/send-now?type=${type}`,{method:"POST"},token);
+    if(r.ok){const d=await r.json();setNotifMsg(`✓ ${type} brief sent (${d.cves_found} CVEs)`);
+    }else{const e=await r.json();setNotifMsg(`✗ ${e.detail||"Failed"}`);}
+    setTimeout(()=>setNotifMsg(""),6000);
+    setSending(null);
+  }
+
+  async function loadPreview(type){
+    setPreviewLoading(true);setPreview(null);
+    const r=await api(`/admin/notify/preview?type=${type}`,{},token);
+    if(r.ok) setPreview(await r.json());
+    setPreviewLoading(false);
+  }
+
+  function NF({label,field,type="text",placeholder=""}){
+    return(
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>{label}</div>
+        <input value={notifSettings?.[field]||""} type={type}
+          onChange={e=>setNotifSettings(p=>({...p,[field]:e.target.value}))}
+          placeholder={placeholder}
+          style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+            color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:13,
+            outline:"none",fontFamily:type==="password"?"monospace":"inherit",
+            boxSizing:"border-box"}}/>
+      </div>
+    );
+  }
+
   return(
     <div style={{maxWidth:700}}>
-      <div style={{marginBottom:28}}>
-        <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",marginBottom:14}}>Theme</div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
-          {Object.entries(THEMES).map(([key,theme])=>(
-            <button key={key} onClick={()=>{setThemeName(key);localStorage.setItem("tf_theme",key);}}
-              style={{padding:"16px 14px",borderRadius:12,cursor:"pointer",textAlign:"center",
-                transition:"all .2s",background:theme.bg,
-                border:`2px solid ${themeName===key?theme.accent:theme.border}`}}>
-              {/* Color dots */}
-              <div style={{display:"flex",gap:5,justifyContent:"center",marginBottom:10}}>
-                {[theme.accent,theme.green,theme.red,theme.purple].map((col,i)=>(
-                  <div key={i} style={{width:10,height:10,borderRadius:"50%",background:col}}/>
-                ))}
-              </div>
-              <div style={{fontSize:12,fontWeight:700,
-                color:theme.white||theme.textHi||"#f1f5f9"}}>{theme.name}</div>
-              <div style={{fontSize:10,color:theme.muted,marginTop:2}}>
-                {key==="light"?"Professional light":key==="dark"?"Professional dark":"Terminal"}
-              </div>
-              {themeName===key&&(
-                <div style={{fontSize:10,color:theme.accent,marginTop:4,fontWeight:700}}>
-                  ✓ ACTIVE
-                </div>
-              )}
+      {/* Theme */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+        padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:14}}>
+          UI Theme
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          {THEMES.map(t=>(
+            <button key={t.id} onClick={()=>setThemeName(t.id)}
+              style={{padding:"8px 20px",borderRadius:8,cursor:"pointer",fontFamily:"inherit",
+                border:`2px solid ${themeName===t.id?C.accent:C.border}`,
+                background:themeName===t.id?C.accentDim:"transparent",
+                color:themeName===t.id?C.accentText:C.text,fontWeight:600,fontSize:13}}>
+              {t.label}
             </button>
           ))}
         </div>
       </div>
-      <div style={{marginBottom:28}}>
-        <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",marginBottom:14}}>Account</div>
-        <Card C={C}>
-          <div style={{marginBottom:14}}><div style={{fontSize:12,color:C.muted,fontWeight:600}}>Signed in as</div><div style={{fontSize:15,color:C.white,fontWeight:700}}>{me?.username} <span style={{fontSize:12,color:C.muted,fontWeight:400}}>({me?.role})</span></div></div>
-          <div style={{display:"flex",gap:8,marginBottom:showPw?16:0,flexWrap:"wrap"}}>
-            <Btn onClick={()=>setShowPw(p=>!p)} variant="dim" C={C}>{showPw?"Cancel":"Change Password"}</Btn>
-            <Btn onClick={onOpenApiKeys} variant="dim" C={C}>🔑 API Keys Setup</Btn>
-            <Btn onClick={onLogout} variant="danger" C={C}>Sign Out</Btn>
+
+      {/* API Keys */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+        padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:8}}>
+          API Keys
+        </div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:12}}>
+          Add personal keys for VirusTotal, AbuseIPDB, Shodan, HIBP, Groq, and NVD.
+        </div>
+        <Btn onClick={onOpenApiKeys} C={C}>Manage API Keys</Btn>
+      </div>
+
+      {/* Change Password */}
+      <ChangePasswordSection token={token} C={C}/>
+
+      {/* ── ADMIN: Notification Center ── */}
+      {isAdmin&&notifSettings&&(
+        <div style={{background:C.surface,border:`1px solid ${C.accent}30`,borderRadius:12,
+          padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
+                🔔 Admin Notifications
+              </div>
+              <div style={{fontSize:11,color:C.muted}}>
+                Daily CVE digest + Gold rates (AED/INR) → your phone/email
+              </div>
+            </div>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+              <span style={{fontSize:12,color:C.muted}}>Enabled</span>
+              <input type="checkbox" checked={notifSettings.enabled||false}
+                onChange={e=>setNotifSettings(p=>({...p,enabled:e.target.checked}))}
+                style={{accentColor:C.accent,width:16,height:16}}/>
+            </label>
           </div>
-          {showPw&&(
-            <div style={{borderTop:`1px solid ${C.border}`,paddingTop:16,marginTop:4}}>
-              <Field label="Current Password" C={C}><Inp value={cur} onChange={setCur} type="password" C={C}/></Field>
-              <Field label="New Password" C={C}><Inp value={next} onChange={setNext} type="password" C={C}/></Field>
-              {pwErr&&<div style={{color:C.red,fontSize:12,marginBottom:10}}>{pwErr}</div>}
-              {pwMsg&&<div style={{color:C.green,fontSize:12,marginBottom:10}}>{pwMsg}</div>}
-              <Btn onClick={changePw} disabled={!cur||!next} C={C}>Save Password</Btn>
+
+          {/* Schedule toggles */}
+          <div style={{display:"flex",gap:10,marginBottom:18}}>
+            {[["daily_enabled","📅 Daily Brief (8 AM)"],["weekly_enabled","📊 Weekly Summary (Sunday)"]].map(([k,label])=>(
+              <label key={k} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",
+                padding:"7px 14px",background:notifSettings[k]?C.accentDim:C.surfaceHi,
+                border:`1px solid ${notifSettings[k]?C.accent:C.border}`,
+                borderRadius:8,fontSize:12,fontWeight:600,
+                color:notifSettings[k]?C.accentText:C.muted}}>
+                <input type="checkbox" checked={notifSettings[k]||false}
+                  onChange={e=>setNotifSettings(p=>({...p,[k]:e.target.checked}))}
+                  style={{accentColor:C.accent}}/>
+                {label}
+              </label>
+            ))}
+          </div>
+
+          {/* Channel sections */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:16,marginBottom:16}}>
+
+            {/* ntfy.sh */}
+            <div style={{padding:"14px 16px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
+                📱 ntfy.sh (Recommended)
+              </div>
+              <div style={{fontSize:10,color:C.muted,marginBottom:10,lineHeight:1.5}}>
+                Free push notifications. Install ntfy app → subscribe to your topic.
+                <a href="https://ntfy.sh" target="_blank" rel="noreferrer"
+                  style={{color:C.accentText,marginLeft:4}}>ntfy.sh →</a>
+              </div>
+              <NF label="Topic (secret name)" field="ntfy_topic" placeholder="my-secret-tfii-topic"/>
+              <NF label="Server (default: ntfy.sh)" field="ntfy_server" placeholder="https://ntfy.sh"/>
+            </div>
+
+            {/* Telegram */}
+            <div style={{padding:"14px 16px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
+                ✈️ Telegram Bot
+              </div>
+              <div style={{fontSize:10,color:C.muted,marginBottom:10,lineHeight:1.5}}>
+                Create a bot via @BotFather → get token. Message the bot to get your Chat ID.
+              </div>
+              <NF label="Bot Token" field="telegram_token" type="password" placeholder="1234567890:ABCdef..."/>
+              <NF label="Chat ID" field="telegram_chat_id" placeholder="Your Telegram chat ID"/>
+            </div>
+          </div>
+
+          {/* Email */}
+          <details style={{marginBottom:16}}>
+            <summary style={{fontSize:12,fontWeight:600,color:C.muted,cursor:"pointer",marginBottom:8}}>
+              📧 Email (SMTP) — expand to configure
+            </summary>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:10}}>
+              <NF label="Recipient Email" field="email_to" placeholder="you@email.com"/>
+              <NF label="SMTP Host" field="smtp_host" placeholder="smtp.gmail.com"/>
+              <NF label="SMTP Port" field="smtp_port" placeholder="587"/>
+              <NF label="SMTP User" field="smtp_user" placeholder="your@gmail.com"/>
+              <NF label="SMTP Password" field="smtp_pass" type="password" placeholder="App password"/>
+              <NF label="From Address" field="smtp_from" placeholder="TFII Alerts <you@email.com>"/>
+            </div>
+          </details>
+
+          {/* Actions */}
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+            <Btn onClick={saveNotif} disabled={notifSaving} C={C}>
+              {notifSaving?"Saving...":"💾 Save Settings"}
+            </Btn>
+            <Btn onClick={testNotif} disabled={notifLoading} variant="dim" C={C}>
+              {notifLoading?"Sending...":"🧪 Send Test"}
+            </Btn>
+            <Btn onClick={()=>sendNow("daily")} disabled={!!sending} variant="dim" C={C}>
+              {sending==="daily"?"Sending...":"📅 Send Daily Now"}
+            </Btn>
+            <Btn onClick={()=>sendNow("weekly")} disabled={!!sending} variant="dim" C={C}>
+              {sending==="weekly"?"Sending...":"📊 Send Weekly Now"}
+            </Btn>
+            <Btn onClick={()=>loadPreview("daily")} disabled={previewLoading} variant="dim" C={C}>
+              {previewLoading?"Loading...":"👁 Preview Brief"}
+            </Btn>
+          </div>
+          {notifMsg&&(
+            <div style={{marginTop:10,fontSize:12,fontWeight:600,
+              color:notifMsg.startsWith("✓")?C.green:C.red}}>
+              {notifMsg}
             </div>
           )}
-        </Card>
-      </div>
-      <ApiKeysSection token={token} C={C}/>
-      <div style={{marginBottom:28}}>
-        <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",marginBottom:14}}>Platform</div>
-        <Card C={C}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,fontSize:13}}>{[["API","YOUR_DOMAIN"],["Enrichment Cache","24 hours"],["Token Expiry","8 hours"],["STIX","2.1"],["CVE Poll","Every 6 hours"]].map(([k,v])=><div key={k}><span style={{color:C.muted,fontWeight:600}}>{k}: </span><span style={{color:C.text}}>{v}</span></div>)}</div></Card>
-      </div>
-      {me?.role==="admin"&&(
-        <div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-            <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase"}}>Audit Log</div>
-            <Btn onClick={()=>{api("/audit",{},token).then(r=>r.ok?r.json():[]).then(d=>{setAuditLog(d);setAuditLoaded(true);});}} variant="ghost" C={C} sm>Load</Btn>
-          </div>
-          {auditLoaded&&(
-            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",boxShadow:C.shadow}}>
-              <div style={{overflowX:"auto",maxHeight:400,overflowY:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                  <thead style={{position:"sticky",top:0}}><tr style={{background:C.surfaceHi,borderBottom:`1px solid ${C.border}`}}>{["Time","User","Action","Type","Indicator"].map(h=><th key={h} style={{padding:"10px 14px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
-                  <tbody>
-                    {auditLog.length===0&&<tr><td colSpan={5} style={{padding:32,textAlign:"center",color:C.muted}}>No audit entries yet</td></tr>}
-                    {auditLog.map((entry,idx)=>(
-                      <tr key={entry.id} style={{borderBottom:`1px solid ${C.border}20`,background:idx%2===0?"transparent":C.surfaceHi+"40"}}>
-                        <td style={{padding:"8px 14px",fontSize:11,color:C.muted,whiteSpace:"nowrap"}}>{new Date(entry.created_at).toLocaleString()}</td>
-                        <td style={{padding:"8px 14px",color:C.accentText,fontWeight:600}}>{entry.username}</td>
-                        <td style={{padding:"8px 14px"}}><span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,background:entry.action==="ADD"?C.green+"20":C.red+"20",color:entry.action==="ADD"?C.green:C.red}}>{entry.action}</span></td>
-                        <td style={{padding:"8px 14px"}}><span style={{fontSize:11,padding:"2px 6px",borderRadius:3,background:C.badge,color:C.accentText}}>{entry.ioc_type}</span></td>
-                        <td style={{padding:"8px 14px",fontSize:12,color:C.text,maxWidth:240,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{entry.ioc_value}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+
+          {/* Preview panel */}
+          {preview&&(
+            <div style={{marginTop:16,padding:"14px 16px",background:C.surfaceHi,
+              border:`1px solid ${C.border}`,borderRadius:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                <div style={{fontSize:11,fontWeight:700,color:C.accentText,textTransform:"uppercase"}}>
+                  Brief Preview
+                </div>
+                <button onClick={()=>setPreview(null)}
+                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16}}>×</button>
               </div>
+              <pre style={{margin:0,fontSize:11,color:C.text,lineHeight:1.7,
+                whiteSpace:"pre-wrap",fontFamily:"monospace",maxHeight:400,overflowY:"auto"}}>
+                {preview.body}
+              </pre>
             </div>
           )}
         </div>
       )}
+
+      {/* Logout */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+        padding:"18px 20px",boxShadow:C.shadow}}>
+        <Btn onClick={onLogout} variant="danger" C={C}>Sign Out</Btn>
+      </div>
     </div>
   );
 }
