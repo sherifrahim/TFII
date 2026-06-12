@@ -1,0 +1,15 @@
+{$DOMAIN} {
+    # Auto HTTPS via Let's Encrypt — no config needed
+
+    # React frontend
+    handle /ui/* {
+        reverse_proxy frontend:80
+    }
+
+    # All API routes → backend via frontend nginx
+    handle {
+        reverse_proxy frontend:80
+    }
+}
+
+# Redirect HTTP → HTTPS (Caddy handles this automatically)

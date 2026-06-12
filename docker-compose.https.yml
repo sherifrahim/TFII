@@ -1,0 +1,34 @@
+# HTTPS override — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+#
+# Caddy automatically provisions and renews Let's Encrypt certificates.
+# Requires DOMAIN to be set in .env and pointing to this server.
+
+services:
+
+  # Override frontend to not expose port 80 directly
+  frontend:
+    ports: []              # Remove direct port binding — Caddy handles it
+
+  # ── Caddy reverse proxy with auto HTTPS ──────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"    # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN}
+    depends_on:
+      - frontend
+    networks:
+      - internal
+
+volumes:
+  caddy_data:
+  caddy_config:

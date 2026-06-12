@@ -2529,7 +2529,12 @@ def dashboard(user=Depends(get_current_user), conn=Depends(get_db)):
             "by_industry":by_industry,"by_tlp":by_tlp,"by_confidence":by_conf,
             "top_contributors":top_contributors,"top_campaigns":top_campaigns,"api_usage":api_usage}
 
-@app.get("/stats/geo")
+@app.get("/health")
+def health():
+    """Docker healthcheck endpoint."""
+    return {"status": "ok", "service": "TFII"}
+
+
 def geo_stats(user=Depends(get_current_user), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT enrichment FROM iocs WHERE type IN ('IPv4','IPv6') AND enrichment IS NOT NULL")
