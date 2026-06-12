@@ -668,7 +668,7 @@ async def send_daily_brief_job():
     print("[notify] Running daily brief job...")
     conn = None
     try:
-        conn = get_db_conn()
+        conn = get_db_direct()
         settings = await get_notif_settings(conn)
         if not settings.get("enabled"): return
         if not settings.get("daily_enabled", True): return
@@ -686,7 +686,7 @@ async def send_weekly_summary_job():
     print("[notify] Running weekly summary job...")
     conn = None
     try:
-        conn = get_db_conn()
+        conn = get_db_direct()
         settings = await get_notif_settings(conn)
         if not settings.get("enabled"): return
         if not settings.get("weekly_enabled", True): return
