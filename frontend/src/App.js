@@ -4164,7 +4164,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
     api("/admin/notify/settings",{},token).then(r=>r.ok?r.json():null).then(d=>{
       if(d) setNotifSettings({
         enabled:true, daily_enabled:true, weekly_enabled:true,
-        ntfy_topic:"", ntfy_server:"https://ntfy.sh",
+        ntfy_topic:"", ntfy_server:"https://ntfy.sh", ntfy_priority:"urgent",
         telegram_token:"", telegram_chat_id:"",
         email_to:"", smtp_host:"", smtp_port:587,
         smtp_user:"", smtp_pass:"", smtp_from:"",
@@ -4301,15 +4301,74 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
             {/* ntfy.sh */}
             <div style={{padding:"14px 16px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
               <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
-                📱 ntfy.sh (Recommended)
+                📱 ntfy (Push Notifications)
               </div>
-              <div style={{fontSize:10,color:C.muted,marginBottom:10,lineHeight:1.5}}>
-                Free push notifications. Install ntfy app → subscribe to your topic.
-                <a href="https://ntfy.sh" target="_blank" rel="noreferrer"
-                  style={{color:C.accentText,marginLeft:4}}>ntfy.sh →</a>
+              <div style={{fontSize:10,color:C.muted,marginBottom:10,lineHeight:1.6}}>
+                Free push to Android/iOS. Works with ntfy.sh or your own server.{" "}
+                <a href="https://ntfy.sh" target="_blank" rel="noreferrer" style={{color:C.accentText}}>ntfy.sh →</a>
               </div>
-              <NF label="Topic (secret name)" field="ntfy_topic" placeholder="my-secret-tfii-topic"/>
-              <NF label="Server (default: ntfy.sh)" field="ntfy_server" placeholder="https://ntfy.sh"/>
+
+              <NF label="Topic name (keep this secret)" field="ntfy_topic" placeholder="my-secret-tfii-alerts"/>
+
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>Server</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:6}}>
+                  {[["https://ntfy.sh","ntfy.sh (public)"],["custom","Self-hosted"]].map(([val,label])=>(
+                    <button key={val} onClick={()=>setNotifSettings(p=>({...p,
+                      ntfy_server:val==="custom"?(p.ntfy_server==="https://ntfy.sh"?"https://your-ntfy-server.com":p.ntfy_server):val}))}
+                      style={{padding:"4px 10px",borderRadius:6,border:`1px solid ${
+                        (notifSettings.ntfy_server||"https://ntfy.sh")===(val==="custom"?"https://ntfy.sh":val)?C.border:C.accent}`,
+                        background:(notifSettings.ntfy_server||"https://ntfy.sh")===(val==="custom"?"https://ntfy.sh":val)?C.surfaceHi:C.accentDim,
+                        color:(notifSettings.ntfy_server||"https://ntfy.sh")===(val==="custom"?"https://ntfy.sh":val)?C.muted:C.accentText,
+                        fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <input value={notifSettings?.ntfy_server||"https://ntfy.sh"}
+                  onChange={e=>setNotifSettings(p=>({...p,ntfy_server:e.target.value}))}
+                  placeholder="https://ntfy.sh"
+                  style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                    color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:12,
+                    outline:"none",fontFamily:"monospace",boxSizing:"border-box"}}/>
+              </div>
+
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>
+                  Priority
+                  <span style={{marginLeft:6,fontWeight:400,color:C.muted,fontSize:10}}>
+                    — urgent bypasses Android Doze via FCM
+                  </span>
+                </div>
+                <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                  {[["min","Min"],["low","Low"],["default","Default"],["high","High"],["urgent","Urgent ⚡"]].map(([val,label])=>(
+                    <button key={val}
+                      onClick={()=>setNotifSettings(p=>({...p,ntfy_priority:val}))}
+                      style={{padding:"4px 10px",borderRadius:6,border:`1px solid ${
+                        (notifSettings.ntfy_priority||"urgent")===val?C.accent:C.border}`,
+                        background:(notifSettings.ntfy_priority||"urgent")===val?C.accentDim:C.surfaceHi,
+                        color:(notifSettings.ntfy_priority||"urgent")===val?C.accentText:C.muted,
+                        fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Doze mode instructions */}
+              <div style={{padding:"10px 12px",background:C.accentDim,border:`1px solid ${C.accent}30`,
+                borderRadius:8,fontSize:10,color:C.accentText,lineHeight:1.8}}>
+                <div style={{fontWeight:700,marginBottom:4}}>📲 Android Doze Mode Setup</div>
+                <div style={{color:C.text}}>
+                  <b>Option 1 — ntfy.sh or self-hosted with FCM:</b><br/>
+                  Set priority to <b>Urgent</b> above → notifications delivered via FCM,
+                  bypasses Doze automatically. No extra app config needed.<br/><br/>
+                  <b>Option 2 — Self-hosted without FCM:</b><br/>
+                  In the ntfy Android app → <b>Settings → General → Enable "Instant delivery"</b>.
+                  This keeps a persistent WebSocket connection.
+                  Then in Android → Battery → find ntfy → set to <b>"Unrestricted"</b>.
+                </div>
+              </div>
             </div>
 
             {/* Telegram */}

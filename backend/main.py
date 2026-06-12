@@ -605,14 +605,15 @@ async def send_notification(title: str, body: str, html: str, settings: dict):
     # ── ntfy.sh ──────────────────────────────────────────────────────────────
     if settings.get("ntfy_topic"):
         try:
-            server = settings.get("ntfy_server","https://ntfy.sh").rstrip("/")
-            topic  = settings["ntfy_topic"]
+            server   = settings.get("ntfy_server","https://ntfy.sh").rstrip("/")
+            topic    = settings["ntfy_topic"]
+            priority = settings.get("ntfy_priority","urgent")  # urgent bypasses Android Doze via FCM
             async with httpx.AsyncClient(timeout=10) as c:
                 r = await c.post(f"{server}/{topic}",
                     content=body.encode("utf-8"),
                     headers={
                         "Title":    title,
-                        "Priority": "high",
+                        "Priority": priority,
                         "Tags":     "warning,shield",
                         "Markdown": "yes",
                         "Content-Type": "text/plain",
@@ -620,7 +621,7 @@ async def send_notification(title: str, body: str, html: str, settings: dict):
             if r.status_code not in (200,201):
                 errors.append(f"ntfy: HTTP {r.status_code}")
             else:
-                print(f"[notify] ntfy.sh sent: {title}")
+                print(f"[notify] ntfy.sh sent ({priority}): {title}")
         except Exception as e:
             errors.append(f"ntfy error: {e}")
 
@@ -707,6 +708,7 @@ class NotifSettingsBody(BaseModel):
     weekly_enabled:   bool    = True
     ntfy_topic:       Optional[str] = None
     ntfy_server:      Optional[str] = "https://ntfy.sh"
+    ntfy_priority:    Optional[str] = "urgent"
     telegram_token:   Optional[str] = None
     telegram_chat_id: Optional[str] = None
     email_to:         Optional[str] = None
