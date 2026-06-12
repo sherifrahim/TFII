@@ -716,87 +716,6 @@ class NotifSettingsBody(BaseModel):
     smtp_pass:        Optional[str] = None
     smtp_from:        Optional[str] = None
 
-@app.get("/admin/notify/settings")
-def get_notify_settings(admin=Depends(require_admin), conn=Depends(get_db)):
-    try:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("CREATE TABLE IF NOT EXISTS system_settings (key VARCHAR PRIMARY KEY, value TEXT)")
-        cur.execute("SELECT value FROM system_settings WHERE key=%s", (NOTIF_SETTINGS_KEY,))
-        row = cur.fetchone()
-        conn.commit()
-        if row:
-            import json as _j
-            s = _j.loads(row["value"])
-            # Mask secrets in response
-            if s.get("smtp_pass"):    s["smtp_pass"]       = "••••••••"
-            if s.get("telegram_token"): s["telegram_token"] = s["telegram_token"][:8]+"..."
-            return s
-    except Exception: pass
-    return {}
-
-@app.post("/admin/notify/settings")
-def save_notify_settings(body: NotifSettingsBody, admin=Depends(require_admin), conn=Depends(get_db)):
-    import json as _j
-    cur = conn.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS system_settings (key VARCHAR PRIMARY KEY, value TEXT)")
-    # Preserve masked secrets — if client sends '••••••••' keep the original
-    existing = {}
-    cur.execute("SELECT value FROM system_settings WHERE key=%s", (NOTIF_SETTINGS_KEY,))
-    row = cur.fetchone()
-    if row:
-        try: existing = _j.loads(row[0])
-        except Exception: pass
-    data = body.dict()
-    if data.get("smtp_pass") == "••••••••": data["smtp_pass"] = existing.get("smtp_pass","")
-    if data.get("telegram_token","").endswith("..."): data["telegram_token"] = existing.get("telegram_token","")
-    cur.execute("INSERT INTO system_settings (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
-                (NOTIF_SETTINGS_KEY, _j.dumps(data)))
-    conn.commit()
-    return {"status":"saved"}
-
-@app.post("/admin/notify/test")
-async def test_notification(admin=Depends(require_admin), conn=Depends(get_db)):
-    settings = await get_notif_settings(conn)
-    if not settings:
-        raise HTTPException(status_code=400, detail="No notification settings configured. Save settings first.")
-    gold = await fetch_gold_rates()
-    msg  = format_brief_message(
-        [{"cve_id":"CVE-2024-TEST","name":"Test Notification","vendor":"TFII","product":"Platform",
-          "description":"This is a test notification from your ThreatFeed Intelligence Platform.",
-          "source":"Test","severity":"INFO","kev_date":"","due_date":""}],
-        gold, is_weekly=False
-    )
-    errors = await send_notification(
-        f"🧪 TFII Test — {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M')} UTC",
-        msg["body"], msg["html"], settings
-    )
-    if errors:
-        raise HTTPException(status_code=500, detail=f"Send errors: {'; '.join(errors)}")
-    return {"status":"sent", "channels": [k for k in
-        ["ntfy","telegram","email"] if settings.get(f"{k}_topic" if k=="ntfy" else f"{k}_token" if k=="telegram" else "email_to")]}
-
-@app.post("/admin/notify/send-now")
-async def send_brief_now(type: str = "daily", admin=Depends(require_admin), conn=Depends(get_db)):
-    """Manually trigger a brief immediately."""
-    settings = await get_notif_settings(conn)
-    if not settings:
-        raise HTTPException(status_code=400, detail="No notification settings configured.")
-    cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
-    is_weekly = (type == "weekly")
-    msg    = format_brief_message(cve_items, gold, is_weekly=is_weekly)
-    errors = await send_notification(msg["title"], msg["body"], msg["html"], settings)
-    if errors:
-        raise HTTPException(status_code=500, detail=f"Send errors: {'; '.join(errors)}")
-    return {"status":"sent","cves_found":len(cve_items),"gold_ok":"error" not in gold}
-
-@app.get("/admin/notify/preview")
-async def preview_brief(type: str = "daily", admin=Depends(require_admin)):
-    """Preview what the next brief will look like (no send)."""
-    cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
-    msg = format_brief_message(cve_items, gold, is_weekly=(type=="weekly"))
-    return {**msg, "cves": cve_items, "gold": gold}
-
-
 
 # ── AUTH ──────────────────────────────────────────────────────────────────────
 def create_token(data: dict) -> str:
@@ -884,6 +803,88 @@ class IntelNewsRequest(BaseModel):
     category: str = "all"
 
 # ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
+
+@app.get("/admin/notify/settings")
+def get_notify_settings(admin=Depends(require_admin), conn=Depends(get_db)):
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("CREATE TABLE IF NOT EXISTS system_settings (key VARCHAR PRIMARY KEY, value TEXT)")
+        cur.execute("SELECT value FROM system_settings WHERE key=%s", (NOTIF_SETTINGS_KEY,))
+        row = cur.fetchone()
+        conn.commit()
+        if row:
+            import json as _j
+            s = _j.loads(row["value"])
+            # Mask secrets in response
+            if s.get("smtp_pass"):    s["smtp_pass"]       = "••••••••"
+            if s.get("telegram_token"): s["telegram_token"] = s["telegram_token"][:8]+"..."
+            return s
+    except Exception: pass
+    return {}
+
+@app.post("/admin/notify/settings")
+def save_notify_settings(body: NotifSettingsBody, admin=Depends(require_admin), conn=Depends(get_db)):
+    import json as _j
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS system_settings (key VARCHAR PRIMARY KEY, value TEXT)")
+    # Preserve masked secrets — if client sends '••••••••' keep the original
+    existing = {}
+    cur.execute("SELECT value FROM system_settings WHERE key=%s", (NOTIF_SETTINGS_KEY,))
+    row = cur.fetchone()
+    if row:
+        try: existing = _j.loads(row[0])
+        except Exception: pass
+    data = body.dict()
+    if data.get("smtp_pass") == "••••••••": data["smtp_pass"] = existing.get("smtp_pass","")
+    if data.get("telegram_token","").endswith("..."): data["telegram_token"] = existing.get("telegram_token","")
+    cur.execute("INSERT INTO system_settings (key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+                (NOTIF_SETTINGS_KEY, _j.dumps(data)))
+    conn.commit()
+    return {"status":"saved"}
+
+@app.post("/admin/notify/test")
+async def test_notification(admin=Depends(require_admin), conn=Depends(get_db)):
+    settings = await get_notif_settings(conn)
+    if not settings:
+        raise HTTPException(status_code=400, detail="No notification settings configured. Save settings first.")
+    gold = await fetch_gold_rates()
+    msg  = format_brief_message(
+        [{"cve_id":"CVE-2024-TEST","name":"Test Notification","vendor":"TFII","product":"Platform",
+          "description":"This is a test notification from your ThreatFeed Intelligence Platform.",
+          "source":"Test","severity":"INFO","kev_date":"","due_date":""}],
+        gold, is_weekly=False
+    )
+    errors = await send_notification(
+        f"🧪 TFII Test — {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M')} UTC",
+        msg["body"], msg["html"], settings
+    )
+    if errors:
+        raise HTTPException(status_code=500, detail=f"Send errors: {'; '.join(errors)}")
+    return {"status":"sent", "channels": [k for k in
+        ["ntfy","telegram","email"] if settings.get(f"{k}_topic" if k=="ntfy" else f"{k}_token" if k=="telegram" else "email_to")]}
+
+@app.post("/admin/notify/send-now")
+async def send_brief_now(type: str = "daily", admin=Depends(require_admin), conn=Depends(get_db)):
+    """Manually trigger a brief immediately."""
+    settings = await get_notif_settings(conn)
+    if not settings:
+        raise HTTPException(status_code=400, detail="No notification settings configured.")
+    cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
+    is_weekly = (type == "weekly")
+    msg    = format_brief_message(cve_items, gold, is_weekly=is_weekly)
+    errors = await send_notification(msg["title"], msg["body"], msg["html"], settings)
+    if errors:
+        raise HTTPException(status_code=500, detail=f"Send errors: {'; '.join(errors)}")
+    return {"status":"sent","cves_found":len(cve_items),"gold_ok":"error" not in gold}
+
+@app.get("/admin/notify/preview")
+async def preview_brief(type: str = "daily", admin=Depends(require_admin)):
+    """Preview what the next brief will look like (no send)."""
+    cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
+    msg = format_brief_message(cve_items, gold, is_weekly=(type=="weekly"))
+    return {**msg, "cves": cve_items, "gold": gold}
+
+
 def create_notification(conn, type_: str, title: str, body: str,
                          severity: str = "info", metadata: dict = None):
     try:
