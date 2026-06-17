@@ -1446,6 +1446,7 @@ function EnrichmentPanel({ioc,token,onClose,C,me}){
 }
 
 // ── BULK IOC LOOKUP / VALIDATOR ───────────────────────────────────────────────
+// ── BULK IOC LOOKUP / VALIDATOR ───────────────────────────────────────────────
 function BulkLookup({token,C}){
   const [input,setInput]=useState("");
   const [results,setResults]=useState(null);
@@ -1455,6 +1456,11 @@ function BulkLookup({token,C}){
   const [filter,setFilter]=useState("all");
   const [addingId,setAddingId]=useState(null);
   const [addedIds,setAddedIds]=useState({});
+  const [selected,setSelected]=useState({});
+  const [bulkAdding,setBulkAdding]=useState(false);
+  const [bulkMsg,setBulkMsg]=useState("");
+  const [uploading,setUploading]=useState(false);
+  const fileInputRef=useRef(null);
 
   const VERDICT_META={
     malicious:    {color:C.red,    bg:C.red+"15",    icon:"🔴", label:"Malicious"},
@@ -1474,13 +1480,29 @@ invoice.pdf.exe`;
 
   async function runLookup(){
     if(!input.trim()){setErr("Paste at least one indicator.");return;}
-    setLoading(true);setErr("");setResults(null);setSummary(null);setAddedIds({});
+    setLoading(true);setErr("");setResults(null);setSummary(null);setAddedIds({});setSelected({});setBulkMsg("");
     try{
       const r=await api("/iocs/bulk-lookup",{method:"POST",body:JSON.stringify({input})},token);
       if(r.ok){const d=await r.json();setResults(d.results);setSummary(d.summary);}
       else{const e=await r.json();setErr(e.detail||"Lookup failed.");}
     }catch{setErr("Cannot reach server.");}
     setLoading(false);
+  }
+
+  async function handleFileUpload(e){
+    const file=e.target.files[0];
+    if(!file)return;
+    setUploading(true);setErr("");setResults(null);setSummary(null);setAddedIds({});setSelected({});setBulkMsg("");
+    try{
+      const fd=new FormData();fd.append("file",file);
+      const r=await fetch(`${API_BASE}/iocs/bulk-lookup/file`,{method:"POST",
+        headers:{Authorization:`Bearer ${token}`},body:fd});
+      if(r.ok){const d=await r.json();setResults(d.results);setSummary(d.summary);
+        setInput(`(loaded from file: ${file.name})`);}
+      else{const e2=await r.json();setErr(e2.detail||"File upload failed.");}
+    }catch{setErr("Cannot reach server.");}
+    setUploading(false);
+    if(fileInputRef.current) fileInputRef.current.value="";
   }
 
   async function addToFeed(item, idx){
@@ -1497,7 +1519,73 @@ invoice.pdf.exe`;
     setAddingId(null);
   }
 
+  function toggleSelect(idx){
+    setSelected(p=>({...p,[idx]:!p[idx]}));
+  }
+  function selectAll(items){
+    const next={};items.forEach((_,i)=>{next[filteredIndices[i]]=true;});setSelected(next);
+  }
+  function selectNone(){setSelected({});}
+  function selectMaliciousSuspicious(){
+    const next={};results.forEach((r,i)=>{
+      if((r.verdict==="malicious"||r.verdict==="suspicious")&&canAddType(r.type)) next[i]=true;
+    });setSelected(next);
+  }
+  function canAddType(t){
+    return ["IPv4","IPv6","Domain","URL","MD5","SHA1","SHA256","Email"].includes(t);
+  }
+
+  async function addSelectedToFeed(){
+    const idxs=Object.keys(selected).filter(k=>selected[k]);
+    if(idxs.length===0)return;
+    setBulkAdding(true);setBulkMsg("");
+    const items=idxs.map(i=>{
+      const r=results[i];
+      return {type:r.type, value:r.refanged, confidence:r.score||50,
+        description:`Added from Bulk Lookup — ${r.reason||""}`.slice(0,500),
+        tags:[r.verdict,"bulk-lookup"], enrichment:r.enrichment};
+    });
+    try{
+      const r=await api("/iocs/bulk-create",{method:"POST",body:JSON.stringify({items})},token);
+      if(r.ok){
+        const d=await r.json();
+        const newAdded={};
+        let createdIdx=0;
+        idxs.forEach(i=>{
+          if(createdIdx<d.created.length){newAdded[i]=d.created[createdIdx].id;createdIdx++;}
+        });
+        setAddedIds(p=>({...p,...newAdded}));
+        setBulkMsg(`✓ Added ${d.created_count} to feed${d.skipped_count?`, ${d.skipped_count} skipped (already exist)`:""}`);
+        setSelected({});
+      }else{const e=await r.json();setBulkMsg(`✗ ${e.detail||"Failed"}`);}
+    }catch{setBulkMsg("✗ Cannot reach server.");}
+    setBulkAdding(false);
+    setTimeout(()=>setBulkMsg(""),6000);
+  }
+
+  function downloadCSV(){
+    if(!results||results.length===0)return;
+    const headers=["input","refanged","type","verdict","score","reason","country","org","cloud_provider","already_tracked"];
+    const rows=results.map(r=>[
+      r.input, r.refanged, r.type, r.verdict, r.score||"", (r.reason||"").replace(/"/g,'""'),
+      r.geo?.country||"", (r.geo?.org||"").replace(/"/g,'""'), r.geo?.cloud_provider||"",
+      r.already_tracked?"yes":"no"
+    ]);
+    const csv=[headers,...rows].map(row=>row.map(cell=>{
+      const s=String(cell);
+      return /[",\n]/.test(s) ? `"${s}"` : s;
+    }).join(",")).join("\n");
+    const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url; a.download=`tfii-bulk-lookup-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   const filtered = results ? results.filter(r=>filter==="all"||r.verdict===filter) : [];
+  const filteredIndices = results ? results.map((r,i)=>i).filter(i=>filter==="all"||results[i].verdict===filter) : [];
+  const selectedCount = Object.values(selected).filter(Boolean).length;
 
   function SummaryPill({label,count,color,active,onClick}){
     return(
@@ -1517,20 +1605,30 @@ invoice.pdf.exe`;
       {/* Input box */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
         padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
           <div>
             <div style={{fontSize:14,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
               Bulk IOC Validator
             </div>
             <div style={{fontSize:12,color:C.muted}}>
-              Paste IPs, domains, URLs, hashes, emails, or filenames — fanged or defanged. One or many per line.
+              Paste or upload IPs, domains, URLs, hashes, emails, or filenames — fanged or defanged.
             </div>
           </div>
-          <button onClick={()=>setInput(EXAMPLE)}
-            style={{fontSize:11,padding:"5px 12px",borderRadius:6,background:C.surfaceHi,
-              border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>
-            Load Example
-          </button>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>setInput(EXAMPLE)}
+              style={{fontSize:11,padding:"5px 12px",borderRadius:6,background:C.surfaceHi,
+                border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>
+              Load Example
+            </button>
+            <input ref={fileInputRef} type="file" accept=".txt,.csv,.log" onChange={handleFileUpload}
+              style={{display:"none"}}/>
+            <button onClick={()=>fileInputRef.current?.click()} disabled={uploading}
+              style={{fontSize:11,padding:"5px 12px",borderRadius:6,background:C.accentDim,
+                border:`1px solid ${C.accent}40`,color:C.accentText,cursor:"pointer",fontFamily:"inherit",
+                fontWeight:600}}>
+              {uploading?"Uploading...":"📁 Upload File"}
+            </button>
+          </div>
         </div>
         <textarea value={input} onChange={e=>setInput(e.target.value)}
           placeholder={`8.8.8.8\nevil[.]com\nhxxp://bad-site[.]com/payload\ntest@phish[.]net\nd41d8cd98f00b204e9800998ecf8427e`}
@@ -1539,11 +1637,12 @@ invoice.pdf.exe`;
             color:C.inputText,padding:"12px",borderRadius:8,fontSize:12,outline:"none",
             fontFamily:"'JetBrains Mono','Fira Code',monospace",resize:"vertical",
             lineHeight:1.6,boxSizing:"border-box"}}/>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10,flexWrap:"wrap",gap:8}}>
           <span style={{fontSize:11,color:C.muted}}>
             Max 60 indicators per lookup. Defanged formats (evil[.]com, hxxp://, user[at]domain) auto-detected.
+            Files: .txt, .csv, .log (max 2MB).
           </span>
-          <Btn onClick={runLookup} disabled={loading||!input.trim()} C={C}>
+          <Btn onClick={runLookup} disabled={loading||uploading||!input.trim()} C={C}>
             {loading?"Checking...":"🔍 Run Bulk Lookup"}
           </Btn>
         </div>
@@ -1552,17 +1651,17 @@ invoice.pdf.exe`;
       {err&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,
         borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
 
-      {loading&&(
+      {(loading||uploading)&&(
         <div style={{textAlign:"center",padding:48,color:C.muted}}>
           <div style={{fontSize:14,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>
-            Checking indicators against VirusTotal, AbuseIPDB, and URLhaus...
+            {uploading?"Reading file and checking indicators...":"Checking indicators against VirusTotal, AbuseIPDB, and URLhaus..."}
           </div>
-          <div style={{fontSize:12}}>This may take a moment for larger batches</div>
+          <div style={{fontSize:12}}>Resolving owner/org/country and this may take a moment for larger batches</div>
         </div>
       )}
 
       {summary&&(
-        <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+        <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
           <SummaryPill label="All" count={summary.total} color={C.accentText}
             active={filter==="all"} onClick={()=>setFilter("all")}/>
           <SummaryPill label="Malicious" count={summary.malicious} color={C.red}
@@ -1573,7 +1672,51 @@ invoice.pdf.exe`;
             active={filter==="clean"} onClick={()=>setFilter("clean")}/>
           <SummaryPill label="Unknown" count={summary.unknown} color={C.muted}
             active={filter==="unknown"} onClick={()=>setFilter("unknown")}/>
+          <button onClick={downloadCSV}
+            style={{marginLeft:"auto",fontSize:12,padding:"8px 16px",borderRadius:10,cursor:"pointer",
+              background:C.surfaceHi,border:`1px solid ${C.border}`,color:C.text,fontWeight:600,
+              fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
+            ⬇ Download CSV
+          </button>
         </div>
+      )}
+
+      {results&&results.length>0&&(
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+          marginBottom:10,flexWrap:"wrap",gap:8,padding:"10px 14px",background:C.surfaceHi,
+          borderRadius:10,border:`1px solid ${C.border}`}}>
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <span style={{fontSize:11,color:C.muted,fontWeight:600}}>
+              {selectedCount>0?`${selectedCount} selected`:"Select indicators to bulk-add"}
+            </span>
+            <button onClick={()=>selectAll(filtered)}
+              style={{fontSize:11,padding:"4px 10px",borderRadius:6,background:C.surface,
+                border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>
+              Select Filtered
+            </button>
+            <button onClick={selectMaliciousSuspicious}
+              style={{fontSize:11,padding:"4px 10px",borderRadius:6,background:C.surface,
+                border:`1px solid ${C.amber}40`,color:C.amber,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+              Select Malicious + Suspicious
+            </button>
+            {selectedCount>0&&(
+              <button onClick={selectNone}
+                style={{fontSize:11,padding:"4px 10px",borderRadius:6,background:"transparent",
+                  border:"none",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>
+                Clear
+              </button>
+            )}
+          </div>
+          {selectedCount>0&&(
+            <Btn onClick={addSelectedToFeed} disabled={bulkAdding} C={C}>
+              {bulkAdding?"Adding...":`+ Add ${selectedCount} to Feed`}
+            </Btn>
+          )}
+        </div>
+      )}
+      {bulkMsg&&(
+        <div style={{marginBottom:12,fontSize:12,fontWeight:600,
+          color:bulkMsg.startsWith("✓")?C.green:C.red}}>{bulkMsg}</div>
       )}
 
       {results&&(
@@ -1584,48 +1727,76 @@ invoice.pdf.exe`;
               No indicators match this filter.
             </div>
           )}
-          {filtered.map((item,idx)=>{
+          {results.map((item,idx)=>{
+            if(filter!=="all"&&item.verdict!==filter) return null;
             const meta = VERDICT_META[item.verdict] || VERDICT_META.unknown;
             const vt = item.enrichment?.virustotal;
             const ab = item.enrichment?.abuseipdb;
             const uh = item.enrichment?.urlhaus;
-            const canAdd = ["IPv4","IPv6","Domain","URL","MD5","SHA1","SHA256","Email"].includes(item.type);
+            const geo = item.geo;
+            const addable = canAddType(item.type);
             return(
-              <div key={idx} style={{background:C.surface,border:`1px solid ${meta.color}30`,
+              <div key={idx} style={{background:C.surface,border:`1px solid ${
+                selected[idx]?C.accent:meta.color+"30"}`,
                 borderRadius:12,padding:"14px 18px",boxShadow:C.shadow}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
                   flexWrap:"wrap",gap:10}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
-                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
-                        background:meta.bg,color:meta.color}}>
-                        {meta.icon} {meta.label}
-                      </span>
-                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:600,
-                        background:C.accentDim,color:C.accentText}}>
-                        {item.type}
-                      </span>
-                      {item.already_tracked&&(
-                        <span style={{fontSize:10,padding:"2px 7px",borderRadius:4,
-                          background:C.surfaceHi,color:C.muted,fontWeight:600}}>
-                          Already tracked
+                  <div style={{display:"flex",gap:10,flex:1,minWidth:0}}>
+                    {addable&&(
+                      <input type="checkbox" checked={!!selected[idx]} onChange={()=>toggleSelect(idx)}
+                        style={{marginTop:4,accentColor:C.accent,width:15,height:15,flexShrink:0,cursor:"pointer"}}/>
+                    )}
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+                        <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
+                          background:meta.bg,color:meta.color}}>
+                          {meta.icon} {meta.label}
                         </span>
+                        <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:600,
+                          background:C.accentDim,color:C.accentText}}>
+                          {item.type}
+                        </span>
+                        {geo?.country&&(
+                          <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:600,
+                            background:C.surfaceHi,color:C.text,border:`1px solid ${C.border}`}}>
+                            🌍 {geo.country}
+                          </span>
+                        )}
+                        {geo?.cloud_provider&&(
+                          <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
+                            background:C.purple+"15",color:C.purple}}>
+                            ☁️ {geo.cloud_provider}
+                          </span>
+                        )}
+                        {item.already_tracked&&(
+                          <span style={{fontSize:10,padding:"2px 7px",borderRadius:4,
+                            background:C.surfaceHi,color:C.muted,fontWeight:600}}>
+                            Already tracked
+                          </span>
+                        )}
+                      </div>
+                      <div style={{fontSize:13,fontFamily:"monospace",color:C.white||C.textHi,
+                        fontWeight:600,marginBottom:4,wordBreak:"break-all"}}>
+                        {item.defanged||item.refanged}
+                      </div>
+                      {item.input!==item.refanged&&(
+                        <div style={{fontSize:10,color:C.muted,marginBottom:4}}>
+                          Original input: <span style={{fontFamily:"monospace"}}>{item.input}</span>
+                        </div>
+                      )}
+                      {geo?.org&&(
+                        <div style={{fontSize:11,color:C.muted,marginBottom:4}}>
+                          Owner: <span style={{color:C.text,fontWeight:500}}>{geo.org}</span>
+                          {geo.asn&&<span style={{marginLeft:6,color:C.muted}}>({geo.asn})</span>}
+                          {geo.resolved_ip&&<span style={{marginLeft:6,color:C.muted}}>→ resolved to {geo.resolved_ip}</span>}
+                        </div>
+                      )}
+                      {item.reason&&(
+                        <div style={{fontSize:11,color:C.muted,lineHeight:1.5}}>{item.reason}</div>
                       )}
                     </div>
-                    <div style={{fontSize:13,fontFamily:"monospace",color:C.white||C.textHi,
-                      fontWeight:600,marginBottom:4,wordBreak:"break-all"}}>
-                      {item.defanged||item.refanged}
-                    </div>
-                    {item.input!==item.refanged&&(
-                      <div style={{fontSize:10,color:C.muted,marginBottom:4}}>
-                        Original input: <span style={{fontFamily:"monospace"}}>{item.input}</span>
-                      </div>
-                    )}
-                    {item.reason&&(
-                      <div style={{fontSize:11,color:C.muted,lineHeight:1.5}}>{item.reason}</div>
-                    )}
                   </div>
-                  {canAdd&&(
+                  {addable&&(
                     addedIds[idx] ? (
                       <span style={{fontSize:11,color:C.green,fontWeight:600,flexShrink:0,
                         padding:"5px 12px"}}>✓ Added to feed</span>
@@ -1642,7 +1813,7 @@ invoice.pdf.exe`;
 
                 {/* Source breakdown */}
                 {(vt||ab||uh)&&(
-                  <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
+                  <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap",marginLeft:addable?25:0}}>
                     {vt&&!vt.skipped&&!vt.error&&(
                       <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
                         background:C.surfaceHi,color:C.muted}}>
@@ -1675,6 +1846,7 @@ invoice.pdf.exe`;
     </div>
   );
 }
+
 
 // ── PUBLIC SEARCH ─────────────────────────────────────────────────────────────
 function PublicSearch({C}){

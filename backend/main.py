@@ -1,4 +1,4 @@
-import os, uuid, httpx, asyncio, base64, csv, io, re, json
+import os, uuid, httpx, asyncio, base64, csv, io, re, json, socket
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
@@ -1132,6 +1132,65 @@ async def urlhaus_host_lookup(domain, conn=None, user_id: str = None):
     if d.get("query_status") == "no_results": return {"source":"URLhaus","found":False}
     return {"source":"URLhaus","found":True,"urls_count":len(d.get("urls",[])),"link":d.get("urlhaus_reference","")}
 
+# ── Geo / ASN / Org lookup (owner identification) ────────────────────────────
+CLOUD_PROVIDER_KEYWORDS = [
+    ("Amazon",       "AWS"),
+    ("Microsoft",    "Azure"),
+    ("Google",       "Google Cloud"),
+    ("Cloudflare",   "Cloudflare"),
+    ("Oracle",       "Oracle Cloud"),
+    ("DigitalOcean", "DigitalOcean"),
+    ("Akamai",       "Akamai"),
+    ("Fastly",       "Fastly"),
+    ("Linode",       "Linode"),
+    ("OVH",          "OVH"),
+    ("Hetzner",      "Hetzner"),
+    ("Alibaba",      "Alibaba Cloud"),
+    ("Tencent",      "Tencent Cloud"),
+    ("IBM",          "IBM Cloud"),
+    ("Vultr",        "Vultr"),
+]
+
+def detect_cloud_provider(org: str) -> Optional[str]:
+    if not org: return None
+    org_lc = org.lower()
+    for keyword, label in CLOUD_PROVIDER_KEYWORDS:
+        if keyword.lower() in org_lc:
+            return label
+    return None
+
+async def geo_org_lookup_batch(ips: list) -> dict:
+    """
+    Batch IP geolocation + ASN/org lookup via ip-api.com (free, no API key).
+    Up to 100 IPs in a single request. Returns {ip: {country, org, isp, as, ...}}.
+    """
+    if not ips: return {}
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post("http://ip-api.com/batch",
+                json=[{"query": ip, "fields": "query,status,country,countryCode,org,isp,as"}
+                      for ip in ips[:100]])
+        if r.status_code != 200: return {}
+        return {item["query"]: item for item in r.json() if item.get("query")}
+    except Exception:
+        return {}
+
+async def resolve_to_ip(value: str, ioc_type: str) -> Optional[str]:
+    """Resolve a Domain or URL's hostname to an IP for geo lookup. Returns None on failure."""
+    host = value
+    if ioc_type == "URL":
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(value).hostname or value
+        except Exception:
+            return None
+    if ioc_type not in ("Domain","URL"):
+        return None
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(socket.gethostbyname, host), timeout=4)
+    except Exception:
+        return None
+
 def calc_confidence(results: dict, base: int) -> tuple:
     score = base; reasons = []
     vt = results.get("virustotal",{}); abuse = results.get("abuseipdb",{}); uh = results.get("urlhaus",{})
@@ -1984,6 +2043,58 @@ async def add_ioc(ioc: IOCIn, user=Depends(get_current_user), conn=Depends(get_d
     return {"id":ioc_id,"status":"created","confidence":final_confidence,
             "value_canonical":canonical,"value_defanged":defanged,"enrichment":enrichment}
 
+class BulkIOCItem(BaseModel):
+    type: str
+    value: str
+    confidence: Optional[int] = 50
+    description: Optional[str] = ""
+    tags: Optional[List[str]] = []
+    enrichment: Optional[dict] = None
+    industry: Optional[str] = "General"
+    tlp: Optional[str] = "AMBER"
+    valid_days: Optional[int] = 90
+
+class BulkIOCCreate(BaseModel):
+    items: List[BulkIOCItem]
+
+@app.post("/iocs/bulk-create", status_code=201)
+async def bulk_create_iocs(body: BulkIOCCreate, user=Depends(get_current_user), conn=Depends(get_db)):
+    """
+    Add multiple IOCs to the feed in one call — used by Bulk Lookup's
+    'Add Selected to Feed' action. Reuses enrichment data already computed
+    by the lookup instead of re-querying external APIs for each item.
+    """
+    if len(body.items) > MAX_BULK_INDICATORS:
+        raise HTTPException(status_code=400, detail=f"Max {MAX_BULK_INDICATORS} items per bulk add.")
+    created, skipped = [], []
+    cur = conn.cursor()
+    for item in body.items:
+        try:
+            canonical = refang(item.value.strip())
+            defanged  = defang(canonical, item.type)
+            cur.execute("SELECT id FROM iocs WHERE value = %s", (canonical,))
+            if cur.fetchone():
+                skipped.append({"value": canonical, "reason": "already exists"})
+                continue
+            enrichment = item.enrichment or {}
+            if "calculated_confidence" not in enrichment:
+                enrichment = await enrich(item.type, canonical, item.confidence, conn, user=user)
+            final_confidence = enrichment.get("calculated_confidence", item.confidence)
+            ioc_id = f"indicator--{uuid.uuid4()}"
+            valid_until = (datetime.now(timezone.utc) + timedelta(days=item.valid_days)
+                           if item.valid_days else None)
+            cur.execute("""INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,
+                description,tags,created_by,enrichment,valid_until) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (ioc_id,item.type,canonical,defanged,item.industry,item.tlp,final_confidence,
+                 item.description,item.tags,user["id"],psycopg2.extras.Json(enrichment),valid_until))
+            audit(conn,"ADD",ioc_id,canonical,item.type,user)
+            created.append({"id": ioc_id, "value": canonical})
+        except Exception as e:
+            skipped.append({"value": item.value, "reason": str(e)})
+    conn.commit()
+    return {"created": created, "skipped": skipped,
+            "created_count": len(created), "skipped_count": len(skipped)}
+
 @app.patch("/iocs/{ioc_id}/false-positive")
 def toggle_fp(ioc_id: str, body: FPUpdate, user=Depends(get_current_user), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -2026,37 +2137,70 @@ class BulkLookupRequest(BaseModel):
 
 MAX_BULK_INDICATORS = 60
 
-@app.post("/iocs/bulk-lookup")
-async def bulk_ioc_lookup(body: BulkLookupRequest, user=Depends(get_current_user), conn=Depends(get_db)):
+async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
     """
-    Bulk IOC validator. Paste any mix of IPs, domains, URLs, hashes, emails,
-    or filenames — fanged or defanged — one or many per line. Each indicator
-    is type-detected, refanged, and checked against threat intel sources.
+    Core bulk IOC validator logic — shared by the paste-text and
+    file-upload endpoints. Paste/file content of mixed IPs, domains,
+    URLs, hashes, emails, or filenames — fanged or defanged — one or
+    many per line. Resolves owner/org/country via batch geo lookup,
+    then checks each indicator against threat intel sources.
     """
-    tokens = parse_bulk_input(body.input)
+    tokens = parse_bulk_input(raw_text)
     if not tokens:
         raise HTTPException(status_code=400, detail="No indicators found in the input.")
     if len(tokens) > MAX_BULK_INDICATORS:
         raise HTTPException(status_code=400,
             detail=f"Too many indicators ({len(tokens)}). Max {MAX_BULK_INDICATORS} per lookup — split into smaller batches.")
 
+    # ── Phase 1: classify each token ─────────────────────────────────────────
+    parsed = []
+    for raw in tokens:
+        refanged = refang(raw)
+        ioc_type = detect_type(refanged)
+        parsed.append({"input": raw, "refanged": refanged, "type": ioc_type})
+
+    # ── Phase 2: resolve Domain/URL hostnames to IP for geo lookup ───────────
+    geo_ips = await asyncio.gather(*[resolve_to_ip(p["refanged"], p["type"]) for p in parsed])
+    for p, ip in zip(parsed, geo_ips):
+        p["geo_ip"] = ip if ip else (p["refanged"] if p["type"] in ("IPv4","IPv6") else None)
+
+    # ── Phase 3: one batched geo/ASN/org lookup for every unique IP ──────────
+    unique_ips = list({p["geo_ip"] for p in parsed if p["geo_ip"]})
+    geo_data   = await geo_org_lookup_batch(unique_ips) if unique_ips else {}
+
+    # ── Phase 4: threat-intel enrichment (concurrency-limited) ───────────────
     sem = asyncio.Semaphore(5)
 
-    async def process_one(raw: str) -> dict:
+    def build_geo(item):
+        raw_geo = geo_data.get(item["geo_ip"]) if item["geo_ip"] else None
+        if not raw_geo or raw_geo.get("status") == "fail":
+            return None
+        org = raw_geo.get("org") or raw_geo.get("isp") or ""
+        return {
+            "country":        raw_geo.get("country"),
+            "country_code":   raw_geo.get("countryCode"),
+            "org":             org,
+            "isp":            raw_geo.get("isp"),
+            "asn":            raw_geo.get("as"),
+            "cloud_provider": detect_cloud_provider(org),
+            "resolved_ip":    item["geo_ip"] if item["type"] in ("Domain","URL") else None,
+        }
+
+    async def process_one(item: dict) -> dict:
         async with sem:
-            refanged = refang(raw)
-            ioc_type = detect_type(refanged)
+            raw, refanged, ioc_type = item["input"], item["refanged"], item["type"]
+            geo = build_geo(item)
 
             if ioc_type == "Unknown":
                 return {"input": raw, "refanged": refanged, "defanged": refanged,
                         "type": "Unknown", "verdict": "unrecognized",
-                        "reason": "Could not determine indicator type", "enrichment": {}}
+                        "reason": "Could not determine indicator type", "enrichment": {}, "geo": geo}
 
             if ioc_type == "CVE":
                 return {"input": raw, "refanged": refanged, "defanged": refanged,
                         "type": "CVE", "verdict": "info",
                         "reason": "This is a CVE ID, not a threat indicator. Use the CVE Lookup page for vulnerability details.",
-                        "enrichment": {}}
+                        "enrichment": {}, "geo": None}
 
             if ioc_type == "Filename":
                 flags = check_filename_heuristics(refanged)
@@ -2064,7 +2208,7 @@ async def bulk_ioc_lookup(body: BulkLookupRequest, user=Depends(get_current_user
                         "type": "Filename",
                         "verdict": "suspicious" if flags else "unknown",
                         "reason": "; ".join(flags) if flags else "No red flags in filename — submit the file's MD5/SHA256 hash for a real reputation check",
-                        "enrichment": {"flags": flags}}
+                        "enrichment": {"flags": flags}, "geo": None}
 
             # Reuse a fresh cached enrichment from an existing IOC record if one exists
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -2083,22 +2227,65 @@ async def bulk_ioc_lookup(body: BulkLookupRequest, user=Depends(get_current_user
                 "score": verdict_info["score"],
                 "reason": verdict_info["reason"],
                 "enrichment": enrichment,
+                "geo": geo,
                 "already_tracked": bool(existing),
                 "existing_id": existing["id"] if existing else None,
             }
 
-    results = await asyncio.gather(*[process_one(t) for t in tokens])
+    results = await asyncio.gather(*[process_one(p) for p in parsed])
 
     summary = {
-        "total":        len(results),
-        "malicious":    sum(1 for r in results if r["verdict"] == "malicious"),
-        "suspicious":   sum(1 for r in results if r["verdict"] == "suspicious"),
-        "clean":        sum(1 for r in results if r["verdict"] == "clean"),
-        "unknown":      sum(1 for r in results if r["verdict"] in ("unknown","unrecognized")),
-        "info":         sum(1 for r in results if r["verdict"] == "info"),
+        "total":      len(results),
+        "malicious":  sum(1 for r in results if r["verdict"] == "malicious"),
+        "suspicious": sum(1 for r in results if r["verdict"] == "suspicious"),
+        "clean":      sum(1 for r in results if r["verdict"] == "clean"),
+        "unknown":    sum(1 for r in results if r["verdict"] in ("unknown","unrecognized")),
+        "info":       sum(1 for r in results if r["verdict"] == "info"),
     }
     return {"results": results, "summary": summary}
 
+@app.post("/iocs/bulk-lookup")
+async def bulk_ioc_lookup(body: BulkLookupRequest, user=Depends(get_current_user), conn=Depends(get_db)):
+    return await run_bulk_lookup(body.input, user, conn)
+
+@app.post("/iocs/bulk-lookup/file")
+async def bulk_ioc_lookup_file(file: UploadFile = File(...), user=Depends(get_current_user), conn=Depends(get_db)):
+    """
+    Same as /iocs/bulk-lookup but the indicators come from an uploaded
+    file (.txt, .csv, or any plain-text list) instead of a pasted blob.
+    """
+    if file.size and file.size > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large — max 2MB.")
+    raw_bytes = await file.read()
+    try:
+        text = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = raw_bytes.decode("latin-1")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not read file — please upload a plain text or CSV file.")
+
+    # If it's a CSV with a header row containing a recognizable column
+    # (value/ioc/indicator), extract just that column; otherwise treat
+    # the whole file as free text (one indicator per line/cell).
+    if file.filename and file.filename.lower().endswith(".csv"):
+        try:
+            reader = csv.reader(io.StringIO(text))
+            rows = list(reader)
+            if rows:
+                header = [h.strip().lower() for h in rows[0]]
+                col_idx = next((i for i,h in enumerate(header)
+                                if h in ("value","ioc","indicator","ip","domain","url","hash")), None)
+                if col_idx is not None:
+                    lines = [r[col_idx] for r in rows[1:] if len(r) > col_idx and r[col_idx].strip()]
+                else:
+                    # No recognizable header — flatten every cell in every row
+                    lines = [cell for row in rows for cell in row if cell.strip()]
+                text = "\n".join(lines)
+        except Exception:
+            pass  # fall through and treat as plain text
+
+    return await run_bulk_lookup(text, user, conn)
 
 
 @app.get("/iocs/{ioc_id}/score-history")
