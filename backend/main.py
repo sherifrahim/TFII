@@ -1235,22 +1235,35 @@ async def enrich(ioc_type: str, value: str, base: int, conn=None,
         if ioc_type in ("IPv4","IPv6"):
             vt_key, vt_quota  = get_key("virustotal")
             ab_key, ab_quota  = get_key("abuseipdb")
-            vt_r = await vt_ip(value, conn, vt_key, user_id) if vt_key else ({"skipped":True} if vt_quota is None else quota_error("VirusTotal"))
-            ab_r = await abuseipdb_lookup(value, conn, ab_key, user_id) if ab_key else ({"skipped":True} if ab_quota is None else quota_error("AbuseIPDB"))
+            vt_task = vt_ip(value, conn, vt_key, user_id) if vt_key else asyncio.sleep(0, result=({"skipped":True} if vt_quota is None else quota_error("VirusTotal")))
+            ab_task = abuseipdb_lookup(value, conn, ab_key, user_id) if ab_key else asyncio.sleep(0, result=({"skipped":True} if ab_quota is None else quota_error("AbuseIPDB")))
+            # URLhaus /v1/host/ accepts IP addresses too, not just hostnames — no key required
+            uh_task = urlhaus_host_lookup(value, conn, user_id)
+            vt_r, ab_r, uh_r = await asyncio.gather(vt_task, ab_task, uh_task, return_exceptions=True)
             if not isinstance(vt_r, Exception): results["virustotal"] = vt_r
+            else: results["virustotal"] = {"source":"VirusTotal","error":str(vt_r)}
             if not isinstance(ab_r, Exception): results["abuseipdb"] = ab_r
+            else: results["abuseipdb"] = {"source":"AbuseIPDB","error":str(ab_r)}
+            if not isinstance(uh_r, Exception): results["urlhaus"] = uh_r
+            else: results["urlhaus"] = {"source":"URLhaus","error":str(uh_r)}
         elif ioc_type == "Domain":
             vt_key, vt_quota = get_key("virustotal")
-            vt_r = await vt_domain(value, conn, vt_key, user_id) if vt_key else ({"skipped":True} if vt_quota is None else quota_error("VirusTotal"))
-            uh_r = await urlhaus_host_lookup(value, conn, user_id)
+            vt_task = vt_domain(value, conn, vt_key, user_id) if vt_key else asyncio.sleep(0, result=({"skipped":True} if vt_quota is None else quota_error("VirusTotal")))
+            uh_task = urlhaus_host_lookup(value, conn, user_id)
+            vt_r, uh_r = await asyncio.gather(vt_task, uh_task, return_exceptions=True)
             if not isinstance(vt_r, Exception): results["virustotal"] = vt_r
+            else: results["virustotal"] = {"source":"VirusTotal","error":str(vt_r)}
             if not isinstance(uh_r, Exception): results["urlhaus"] = uh_r
+            else: results["urlhaus"] = {"source":"URLhaus","error":str(uh_r)}
         elif ioc_type == "URL":
             vt_key, vt_quota = get_key("virustotal")
-            vt_r = await vt_url_lookup(value, conn, vt_key, user_id) if vt_key else ({"skipped":True} if vt_quota is None else quota_error("VirusTotal"))
-            uh_r = await urlhaus_url_lookup(value, conn, user_id)
+            vt_task = vt_url_lookup(value, conn, vt_key, user_id) if vt_key else asyncio.sleep(0, result=({"skipped":True} if vt_quota is None else quota_error("VirusTotal")))
+            uh_task = urlhaus_url_lookup(value, conn, user_id)
+            vt_r, uh_r = await asyncio.gather(vt_task, uh_task, return_exceptions=True)
             if not isinstance(vt_r, Exception): results["virustotal"] = vt_r
+            else: results["virustotal"] = {"source":"VirusTotal","error":str(vt_r)}
             if not isinstance(uh_r, Exception): results["urlhaus"] = uh_r
+            else: results["urlhaus"] = {"source":"URLhaus","error":str(uh_r)}
         elif ioc_type in ("MD5","SHA1","SHA256"):
             vt_key, vt_quota = get_key("virustotal")
             vt_r = await vt_hash(value, conn, vt_key, user_id) if vt_key else ({"skipped":True} if vt_quota is None else quota_error("VirusTotal"))

@@ -1814,23 +1814,54 @@ invoice.pdf.exe`;
                 {/* Source breakdown */}
                 {(vt||ab||uh)&&(
                   <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap",marginLeft:addable?25:0}}>
-                    {vt&&!vt.skipped&&!vt.error&&(
-                      <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
-                        background:C.surfaceHi,color:C.muted}}>
-                        VT: {vt.malicious!==undefined?`${vt.malicious}/${vt.total} flagged`:vt.found===false?"not found":"checked"}
-                      </span>
+                    {vt&&(
+                      vt.skipped ? (
+                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                          background:C.surfaceHi,color:C.muted,opacity:0.6}}>
+                          VT: no API key configured
+                        </span>
+                      ) : vt.error ? (
+                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                          background:C.red+"10",color:C.red}}>
+                          VT: {vt.error.includes("quota")?"daily quota reached":"error checking"}
+                        </span>
+                      ) : (
+                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                          background:C.surfaceHi,color:C.muted}}>
+                          VT: {vt.malicious!==undefined?`${vt.malicious}/${vt.total} flagged`:vt.found===false?"not found":"checked"}
+                        </span>
+                      )
                     )}
-                    {ab&&!ab.skipped&&!ab.error&&(
-                      <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
-                        background:C.surfaceHi,color:C.muted}}>
-                        AbuseIPDB: {ab.abuse_score}% confidence
-                      </span>
+                    {ab&&(
+                      ab.skipped ? (
+                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                          background:C.surfaceHi,color:C.muted,opacity:0.6}}>
+                          AbuseIPDB: no API key configured
+                        </span>
+                      ) : ab.error ? (
+                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                          background:C.red+"10",color:C.red}}>
+                          AbuseIPDB: {ab.error.includes("quota")?"daily quota reached":"error checking"}
+                        </span>
+                      ) : (
+                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                          background:C.surfaceHi,color:C.muted}}>
+                          AbuseIPDB: {ab.abuse_score}% confidence
+                        </span>
+                      )
                     )}
-                    {uh&&!uh.error&&(
-                      <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
-                        background:C.surfaceHi,color:C.muted}}>
-                        URLhaus: {uh.found?`listed (${uh.threat})`:"not listed"}
-                      </span>
+                    {uh&&(
+                      uh.error ? (
+                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                          background:C.red+"10",color:C.red}}>
+                          URLhaus: error checking
+                        </span>
+                      ) : (
+                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                          background:C.surfaceHi,color:C.muted}}>
+                          URLhaus: {uh.found?`listed (${uh.threat})`:"not listed"}
+                        </span>
+                      )
                     )}
                     {item.enrichment?.flags?.length>0&&item.enrichment.flags.map((f,i)=>(
                       <span key={i} style={{fontSize:10,padding:"3px 9px",borderRadius:5,
