@@ -82,6 +82,7 @@ const IOC_NAV=[
   {id:"dashboard",label:"Dashboard",     icon:"grid"},
   {id:"feed",     label:"IOC Feed",      icon:"list"},
   {id:"add",      label:"Add IOC",       icon:"plus"},
+  {id:"bulklookup",label:"Bulk Lookup",  icon:"search"},
   {id:"campaigns",label:"Campaigns",     icon:"folder"},
   {id:"map",      label:"Geo Map",       icon:"map"},
   {id:"public",   label:"Public Lookup", icon:"search"},
@@ -1440,6 +1441,237 @@ function EnrichmentPanel({ioc,token,onClose,C,me}){
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── BULK IOC LOOKUP / VALIDATOR ───────────────────────────────────────────────
+function BulkLookup({token,C}){
+  const [input,setInput]=useState("");
+  const [results,setResults]=useState(null);
+  const [summary,setSummary]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+  const [filter,setFilter]=useState("all");
+  const [addingId,setAddingId]=useState(null);
+  const [addedIds,setAddedIds]=useState({});
+
+  const VERDICT_META={
+    malicious:    {color:C.red,    bg:C.red+"15",    icon:"🔴", label:"Malicious"},
+    suspicious:   {color:C.amber,  bg:C.amber+"15",  icon:"🟠", label:"Suspicious"},
+    clean:        {color:C.green,  bg:C.green+"15",  icon:"🟢", label:"Clean"},
+    unknown:      {color:C.muted,  bg:C.surfaceHi,   icon:"⚪", label:"Unknown"},
+    unrecognized: {color:C.muted,  bg:C.surfaceHi,   icon:"❓", label:"Not Recognized"},
+    info:         {color:C.accentText, bg:C.accentDim,icon:"ℹ️", label:"Info"},
+  };
+
+  const EXAMPLE = `8.8.8.8
+evil[.]com
+hxxp://malicious-site[.]com/payload.php
+test@phish[.]net
+d41d8cd98f00b204e9800998ecf8427e
+invoice.pdf.exe`;
+
+  async function runLookup(){
+    if(!input.trim()){setErr("Paste at least one indicator.");return;}
+    setLoading(true);setErr("");setResults(null);setSummary(null);setAddedIds({});
+    try{
+      const r=await api("/iocs/bulk-lookup",{method:"POST",body:JSON.stringify({input})},token);
+      if(r.ok){const d=await r.json();setResults(d.results);setSummary(d.summary);}
+      else{const e=await r.json();setErr(e.detail||"Lookup failed.");}
+    }catch{setErr("Cannot reach server.");}
+    setLoading(false);
+  }
+
+  async function addToFeed(item, idx){
+    setAddingId(idx);
+    try{
+      const r=await api("/iocs",{method:"POST",body:JSON.stringify({
+        type:item.type, value:item.refanged, industry:"General", tlp:"AMBER",
+        confidence: item.score||50,
+        description:`Added from Bulk Lookup — ${item.reason||""}`.slice(0,500),
+        tags:[item.verdict,"bulk-lookup"],
+      })},token);
+      if(r.ok){const d=await r.json();setAddedIds(p=>({...p,[idx]:d.id}));}
+    }catch{}
+    setAddingId(null);
+  }
+
+  const filtered = results ? results.filter(r=>filter==="all"||r.verdict===filter) : [];
+
+  function SummaryPill({label,count,color,active,onClick}){
+    return(
+      <button onClick={onClick}
+        style={{padding:"8px 16px",borderRadius:10,cursor:"pointer",fontFamily:"inherit",
+          border:`1px solid ${active?color:C.border}`,
+          background:active?color+"15":C.surface,
+          display:"flex",alignItems:"center",gap:8,minWidth:90}}>
+        <span style={{fontSize:20,fontWeight:800,color:count>0?color:C.muted}}>{count}</span>
+        <span style={{fontSize:11,color:active?color:C.muted,fontWeight:600}}>{label}</span>
+      </button>
+    );
+  }
+
+  return(
+    <div style={{maxWidth:1000}}>
+      {/* Input box */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+        padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <div>
+            <div style={{fontSize:14,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
+              Bulk IOC Validator
+            </div>
+            <div style={{fontSize:12,color:C.muted}}>
+              Paste IPs, domains, URLs, hashes, emails, or filenames — fanged or defanged. One or many per line.
+            </div>
+          </div>
+          <button onClick={()=>setInput(EXAMPLE)}
+            style={{fontSize:11,padding:"5px 12px",borderRadius:6,background:C.surfaceHi,
+              border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>
+            Load Example
+          </button>
+        </div>
+        <textarea value={input} onChange={e=>setInput(e.target.value)}
+          placeholder={`8.8.8.8\nevil[.]com\nhxxp://bad-site[.]com/payload\ntest@phish[.]net\nd41d8cd98f00b204e9800998ecf8427e`}
+          rows={7}
+          style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+            color:C.inputText,padding:"12px",borderRadius:8,fontSize:12,outline:"none",
+            fontFamily:"'JetBrains Mono','Fira Code',monospace",resize:"vertical",
+            lineHeight:1.6,boxSizing:"border-box"}}/>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10}}>
+          <span style={{fontSize:11,color:C.muted}}>
+            Max 60 indicators per lookup. Defanged formats (evil[.]com, hxxp://, user[at]domain) auto-detected.
+          </span>
+          <Btn onClick={runLookup} disabled={loading||!input.trim()} C={C}>
+            {loading?"Checking...":"🔍 Run Bulk Lookup"}
+          </Btn>
+        </div>
+      </div>
+
+      {err&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,
+        borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
+
+      {loading&&(
+        <div style={{textAlign:"center",padding:48,color:C.muted}}>
+          <div style={{fontSize:14,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>
+            Checking indicators against VirusTotal, AbuseIPDB, and URLhaus...
+          </div>
+          <div style={{fontSize:12}}>This may take a moment for larger batches</div>
+        </div>
+      )}
+
+      {summary&&(
+        <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+          <SummaryPill label="All" count={summary.total} color={C.accentText}
+            active={filter==="all"} onClick={()=>setFilter("all")}/>
+          <SummaryPill label="Malicious" count={summary.malicious} color={C.red}
+            active={filter==="malicious"} onClick={()=>setFilter("malicious")}/>
+          <SummaryPill label="Suspicious" count={summary.suspicious} color={C.amber}
+            active={filter==="suspicious"} onClick={()=>setFilter("suspicious")}/>
+          <SummaryPill label="Clean" count={summary.clean} color={C.green}
+            active={filter==="clean"} onClick={()=>setFilter("clean")}/>
+          <SummaryPill label="Unknown" count={summary.unknown} color={C.muted}
+            active={filter==="unknown"} onClick={()=>setFilter("unknown")}/>
+        </div>
+      )}
+
+      {results&&(
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {filtered.length===0&&(
+            <div style={{textAlign:"center",padding:32,color:C.muted,background:C.surface,
+              border:`1px solid ${C.border}`,borderRadius:12}}>
+              No indicators match this filter.
+            </div>
+          )}
+          {filtered.map((item,idx)=>{
+            const meta = VERDICT_META[item.verdict] || VERDICT_META.unknown;
+            const vt = item.enrichment?.virustotal;
+            const ab = item.enrichment?.abuseipdb;
+            const uh = item.enrichment?.urlhaus;
+            const canAdd = ["IPv4","IPv6","Domain","URL","MD5","SHA1","SHA256","Email"].includes(item.type);
+            return(
+              <div key={idx} style={{background:C.surface,border:`1px solid ${meta.color}30`,
+                borderRadius:12,padding:"14px 18px",boxShadow:C.shadow}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+                  flexWrap:"wrap",gap:10}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
+                        background:meta.bg,color:meta.color}}>
+                        {meta.icon} {meta.label}
+                      </span>
+                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:600,
+                        background:C.accentDim,color:C.accentText}}>
+                        {item.type}
+                      </span>
+                      {item.already_tracked&&(
+                        <span style={{fontSize:10,padding:"2px 7px",borderRadius:4,
+                          background:C.surfaceHi,color:C.muted,fontWeight:600}}>
+                          Already tracked
+                        </span>
+                      )}
+                    </div>
+                    <div style={{fontSize:13,fontFamily:"monospace",color:C.white||C.textHi,
+                      fontWeight:600,marginBottom:4,wordBreak:"break-all"}}>
+                      {item.defanged||item.refanged}
+                    </div>
+                    {item.input!==item.refanged&&(
+                      <div style={{fontSize:10,color:C.muted,marginBottom:4}}>
+                        Original input: <span style={{fontFamily:"monospace"}}>{item.input}</span>
+                      </div>
+                    )}
+                    {item.reason&&(
+                      <div style={{fontSize:11,color:C.muted,lineHeight:1.5}}>{item.reason}</div>
+                    )}
+                  </div>
+                  {canAdd&&(
+                    addedIds[idx] ? (
+                      <span style={{fontSize:11,color:C.green,fontWeight:600,flexShrink:0,
+                        padding:"5px 12px"}}>✓ Added to feed</span>
+                    ) : (
+                      <button onClick={()=>addToFeed(item,idx)} disabled={addingId===idx}
+                        style={{fontSize:11,padding:"5px 12px",borderRadius:6,cursor:"pointer",
+                          background:C.accentDim,border:`1px solid ${C.accent}40`,
+                          color:C.accentText,fontWeight:600,fontFamily:"inherit",flexShrink:0}}>
+                        {addingId===idx?"Adding...":"+ Add to Feed"}
+                      </button>
+                    )
+                  )}
+                </div>
+
+                {/* Source breakdown */}
+                {(vt||ab||uh)&&(
+                  <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
+                    {vt&&!vt.skipped&&!vt.error&&(
+                      <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        background:C.surfaceHi,color:C.muted}}>
+                        VT: {vt.malicious!==undefined?`${vt.malicious}/${vt.total} flagged`:vt.found===false?"not found":"checked"}
+                      </span>
+                    )}
+                    {ab&&!ab.skipped&&!ab.error&&(
+                      <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        background:C.surfaceHi,color:C.muted}}>
+                        AbuseIPDB: {ab.abuse_score}% confidence
+                      </span>
+                    )}
+                    {uh&&!uh.error&&(
+                      <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        background:C.surfaceHi,color:C.muted}}>
+                        URLhaus: {uh.found?`listed (${uh.threat})`:"not listed"}
+                      </span>
+                    )}
+                    {item.enrichment?.flags?.length>0&&item.enrichment.flags.map((f,i)=>(
+                      <span key={i} style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        background:C.amber+"15",color:C.amber}}>{f}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -4748,6 +4980,7 @@ export default function App(){
           {view==="osint"&&<OSINTTool token={token} C={C}/>}
           {view==="querygen"&&<QueryGenerator token={token} C={C}/>}
           {view==="public"&&<PublicSearch C={C}/>}
+          {view==="bulklookup"&&<BulkLookup token={token} C={C}/>}
           {view==="settings"&&<SettingsPage themeName={themeName} setThemeName={setThemeName} token={token} onLogout={logout} C={C} me={me} onOpenApiKeys={()=>setShowApiKeyModal(true)}/>}
 
           {view==="feed"&&(

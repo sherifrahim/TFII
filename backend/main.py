@@ -215,16 +215,115 @@ def defang(value: str, ioc_type: str) -> str:
     elif ioc_type == "Email": v = v.replace('@','[@]')
     return v
 
+SUSPICIOUS_FILE_EXTS = ("exe","scr","bat","cmd","pif","vbs","js","jar",
+                         "ps1","hta","wsf","dll","msi","lnk","apk","jse","vbe",
+                         "wsh","msc","cpl","gadget")
+DOCUMENT_FILE_EXTS = ("pdf","doc","docx","xls","xlsx","ppt","pptx","zip","rar",
+                       "7z","iso","txt","csv","rtf")
+
 def detect_type(val: str) -> str:
+    val = val.strip()
     if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', val): return "IPv4"
+    if re.match(r'^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$', val) and val.count(':') >= 2:
+        return "IPv6"
     if re.match(r'^[0-9a-fA-F]{32}$', val): return "MD5"
     if re.match(r'^[0-9a-fA-F]{40}$', val): return "SHA1"
     if re.match(r'^[0-9a-fA-F]{64}$', val): return "SHA256"
     if re.match(r'^https?://', val, re.IGNORECASE): return "URL"
-    if re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', val): return "Domain"
+    if re.match(r'^CVE-\d{4}-\d{4,}$', val, re.IGNORECASE): return "CVE"
     if re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', val): return "Email"
-    if re.match(r'^CVE-\d{4}-\d+$', val, re.IGNORECASE): return "CVE"
+    # Filename: ends with a known executable/script/document extension
+    fn_match = re.match(r'^[\w \-.]+\.([A-Za-z0-9]{1,5})$', val)
+    if fn_match and fn_match.group(1).lower() in SUSPICIOUS_FILE_EXTS + DOCUMENT_FILE_EXTS:
+        return "Filename"
+    if re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', val): return "Domain"
     return "Unknown"
+
+def check_filename_heuristics(filename: str) -> list:
+    """Heuristic red flags for a filename — no internet lookup available for bare filenames."""
+    flags = []
+    fn = filename.lower()
+    double_ext = re.search(
+        r'\.(pdf|doc|docx|xls|xlsx|jpg|jpeg|png|txt|csv)\.(exe|scr|bat|cmd|com|pif|vbs|js|jar|ps1|hta|wsf)$', fn)
+    if double_ext:
+        flags.append(f"Double extension masking ('{double_ext.group()}') — classic malware disguise technique")
+    elif any(fn.endswith("."+ext) for ext in SUSPICIOUS_FILE_EXTS):
+        flags.append("Executable or script extension — exercise caution before running")
+    if re.search(r'[\u202e\u200f\u200e]', filename):
+        flags.append("Contains Unicode right-to-left override character — likely extension spoofing")
+    if len(filename) > 100:
+        flags.append("Unusually long filename")
+    if re.search(r'(invoice|receipt|statement|payment|urgent|resume|cv)[\w\-. ]*\.(exe|scr|js|vbs|bat)$', fn):
+        flags.append("Social-engineering filename pattern combined with executable extension")
+    return flags
+
+def compute_verdict(enrichment: dict) -> dict:
+    """Aggregate per-source enrichment results into a single verdict."""
+    vt = enrichment.get("virustotal", {}) or {}
+    ab = enrichment.get("abuseipdb", {}) or {}
+    uh = enrichment.get("urlhaus", {}) or {}
+
+    vt_mal   = vt.get("malicious", 0)
+    vt_total = vt.get("total", 0)
+    ab_score = ab.get("abuse_score", 0)
+    uh_found = uh.get("found", False)
+
+    reasons = []
+    if vt_mal > 0:
+        reasons.append(f"VirusTotal: {vt_mal}/{vt_total} engines flagged malicious")
+    if ab_score >= 25:
+        reasons.append(f"AbuseIPDB: {ab_score}% abuse confidence")
+    if uh_found:
+        reasons.append(f"URLhaus: listed for {uh.get('threat','malware')} distribution")
+
+    if vt_mal >= 3 or ab_score >= 75 or uh_found:
+        return {"verdict":"malicious", "score": max(vt_mal*10, ab_score, 90 if uh_found else 0),
+                "reason": " | ".join(reasons) or "Multiple sources flagged as malicious"}
+    if vt_mal >= 1 or ab_score >= 25:
+        return {"verdict":"suspicious", "score": max(vt_mal*10, ab_score),
+                "reason": " | ".join(reasons) or "Some indicators of suspicious activity"}
+
+    checked_sources = [v for v in (vt, ab, uh) if v and not v.get("skipped") and not v.get("error")]
+    if checked_sources:
+        return {"verdict":"clean", "score": 0, "reason": "No malicious activity found in any checked source"}
+
+    return {"verdict":"unknown", "score": 0,
+            "reason": "No API keys configured or daily quota exhausted — add a personal key in Settings"}
+
+def parse_bulk_input(text: str) -> list:
+    """
+    Parse a free-text blob of indicators (one or many per line, mixed
+    fanged/defanged). Handles list markers, comma/semicolon-separated
+    lines, and strips surrounding punctuation/quotes.
+    """
+    if not text or not text.strip():
+        return []
+    tokens = []
+    for raw_line in text.strip().split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Strip leading bullet/number markers: "- ", "* ", "1. ", "1) "
+        # Require whitespace after the marker so "8.8.8.8" is never mistaken for "8. "
+        line = re.sub(r'^[\-\*\u2022]\s+', '', line)
+        line = re.sub(r'^\d{1,3}[\.\)]\s+', '', line)
+        # Split multiple indicators on one line by comma/semicolon —
+        # but not if the line looks like a single URL (commas can appear in query strings)
+        if 'http' not in line.lower() and re.search(r'[,;]', line):
+            parts = re.split(r'[,;]\s*', line)
+        else:
+            parts = [line]
+        for p in parts:
+            p = p.strip().strip('"\'()[]<>')
+            if p:
+                tokens.append(p)
+    seen, deduped = set(), []
+    for t in tokens:
+        if t not in seen:
+            seen.add(t)
+            deduped.append(t)
+    return deduped
+
 
 # ── DB ────────────────────────────────────────────────────────────────────────
 def get_db():
@@ -1919,6 +2018,88 @@ async def re_enrich(ioc_id: str, user=Depends(get_current_user), conn=Depends(ge
         (psycopg2.extras.Json(enrichment), new_score, ioc_id))
     record_score(conn, ioc_id, old_score, new_score, reasons, user["username"])
     conn.commit(); return {"confidence":new_score,"enrichment":enrichment}
+
+# ── BULK IOC LOOKUP / VALIDATOR ──────────────────────────────────────────────
+
+class BulkLookupRequest(BaseModel):
+    input: str
+
+MAX_BULK_INDICATORS = 60
+
+@app.post("/iocs/bulk-lookup")
+async def bulk_ioc_lookup(body: BulkLookupRequest, user=Depends(get_current_user), conn=Depends(get_db)):
+    """
+    Bulk IOC validator. Paste any mix of IPs, domains, URLs, hashes, emails,
+    or filenames — fanged or defanged — one or many per line. Each indicator
+    is type-detected, refanged, and checked against threat intel sources.
+    """
+    tokens = parse_bulk_input(body.input)
+    if not tokens:
+        raise HTTPException(status_code=400, detail="No indicators found in the input.")
+    if len(tokens) > MAX_BULK_INDICATORS:
+        raise HTTPException(status_code=400,
+            detail=f"Too many indicators ({len(tokens)}). Max {MAX_BULK_INDICATORS} per lookup — split into smaller batches.")
+
+    sem = asyncio.Semaphore(5)
+
+    async def process_one(raw: str) -> dict:
+        async with sem:
+            refanged = refang(raw)
+            ioc_type = detect_type(refanged)
+
+            if ioc_type == "Unknown":
+                return {"input": raw, "refanged": refanged, "defanged": refanged,
+                        "type": "Unknown", "verdict": "unrecognized",
+                        "reason": "Could not determine indicator type", "enrichment": {}}
+
+            if ioc_type == "CVE":
+                return {"input": raw, "refanged": refanged, "defanged": refanged,
+                        "type": "CVE", "verdict": "info",
+                        "reason": "This is a CVE ID, not a threat indicator. Use the CVE Lookup page for vulnerability details.",
+                        "enrichment": {}}
+
+            if ioc_type == "Filename":
+                flags = check_filename_heuristics(refanged)
+                return {"input": raw, "refanged": refanged, "defanged": refanged,
+                        "type": "Filename",
+                        "verdict": "suspicious" if flags else "unknown",
+                        "reason": "; ".join(flags) if flags else "No red flags in filename — submit the file's MD5/SHA256 hash for a real reputation check",
+                        "enrichment": {"flags": flags}}
+
+            # Reuse a fresh cached enrichment from an existing IOC record if one exists
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("SELECT * FROM iocs WHERE value = %s", (refanged,))
+            existing = cur.fetchone()
+
+            enrichment = await enrich(ioc_type, refanged, 50, conn,
+                force=False, existing=existing.get("enrichment") if existing else None, user=user)
+            verdict_info = compute_verdict(enrichment)
+
+            return {
+                "input": raw, "refanged": refanged,
+                "defanged": defang(refanged, ioc_type),
+                "type": ioc_type,
+                "verdict": verdict_info["verdict"],
+                "score": verdict_info["score"],
+                "reason": verdict_info["reason"],
+                "enrichment": enrichment,
+                "already_tracked": bool(existing),
+                "existing_id": existing["id"] if existing else None,
+            }
+
+    results = await asyncio.gather(*[process_one(t) for t in tokens])
+
+    summary = {
+        "total":        len(results),
+        "malicious":    sum(1 for r in results if r["verdict"] == "malicious"),
+        "suspicious":   sum(1 for r in results if r["verdict"] == "suspicious"),
+        "clean":        sum(1 for r in results if r["verdict"] == "clean"),
+        "unknown":      sum(1 for r in results if r["verdict"] in ("unknown","unrecognized")),
+        "info":         sum(1 for r in results if r["verdict"] == "info"),
+    }
+    return {"results": results, "summary": summary}
+
+
 
 @app.get("/iocs/{ioc_id}/score-history")
 def score_history(ioc_id: str, user=Depends(get_current_user), conn=Depends(get_db)):
