@@ -38,6 +38,7 @@ HIBP_API_KEY       = os.getenv("HIBP_API_KEY", "")
 SHODAN_API_KEY     = os.getenv("SHODAN_API_KEY", "")
 NVD_API_KEY        = os.getenv("NVD_API_KEY", "")
 GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
+URLHAUS_AUTH_KEY   = os.getenv("URLHAUS_AUTH_KEY", "")  # required since abuse.ch mandated auth (30 Jun 2025) — free at https://auth.abuse.ch/
 ENCRYPTION_KEY     = os.getenv("ENCRYPTION_KEY", "")  # generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 DAILY_FREE_QUOTA   = 10   # free platform-key checks per user per day (no personal key)
 CACHE_HOURS        = 24
@@ -50,6 +51,7 @@ PLATFORM_KEYS = {
     "shodan":      SHODAN_API_KEY,
     "nvd":         NVD_API_KEY,
     "groq":        GROQ_API_KEY,
+    "urlhaus":     URLHAUS_AUTH_KEY,
 }
 
 # ── ENCRYPTION ────────────────────────────────────────────────────────────────
@@ -140,7 +142,7 @@ def resolve_api_key(conn, service: str, user: dict) -> tuple:
 
 def get_all_quota_status(conn, user_id: str, is_admin: bool) -> dict:
     """Returns quota info for all services for a user."""
-    services = ["virustotal","abuseipdb","shodan","hibp","groq","nvd"]
+    services = ["virustotal","abuseipdb","urlhaus","shodan","hibp","groq","nvd"]
     result = {}
     cur = conn.cursor()
     for svc in services:
@@ -1113,20 +1115,28 @@ async def abuseipdb_lookup(ip, conn=None, key: str = None, user_id: str = None):
             "total_reports":d.get("totalReports",0),"country":d.get("countryCode","?"),
             "isp":d.get("isp","?"),"link":f"https://www.abuseipdb.com/check/{ip}"}
 
-async def urlhaus_url_lookup(url_val, conn=None, user_id: str = None):
+async def urlhaus_url_lookup(url_val, conn=None, key: str = None, user_id: str = None):
+    k = key if key is not None else URLHAUS_AUTH_KEY
+    if not k: return {"source":"URLhaus","skipped":True}
     if conn: log_api_call(conn,"urlhaus",url_val,False,user_id)
     async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.post("https://urlhaus-api.abuse.ch/v1/url/", data={"url":url_val})
+        r = await c.post("https://urlhaus-api.abuse.ch/v1/url/",
+            data={"url":url_val}, headers={"Auth-Key":k})
+    if r.status_code == 401: return {"source":"URLhaus","error":"Invalid or expired Auth-Key — generate a new one at auth.abuse.ch"}
     if r.status_code != 200: return {"source":"URLhaus","error":f"HTTP {r.status_code}"}
     d = r.json()
     if d.get("query_status") == "no_results": return {"source":"URLhaus","found":False}
     return {"source":"URLhaus","found":True,"threat":d.get("threat","?"),
             "url_status":d.get("url_status","?"),"link":d.get("urlhaus_reference","")}
 
-async def urlhaus_host_lookup(domain, conn=None, user_id: str = None):
+async def urlhaus_host_lookup(domain, conn=None, key: str = None, user_id: str = None):
+    k = key if key is not None else URLHAUS_AUTH_KEY
+    if not k: return {"source":"URLhaus","skipped":True}
     if conn: log_api_call(conn,"urlhaus",domain,False,user_id)
     async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.post("https://urlhaus-api.abuse.ch/v1/host/", data={"host":domain})
+        r = await c.post("https://urlhaus-api.abuse.ch/v1/host/",
+            data={"host":domain}, headers={"Auth-Key":k})
+    if r.status_code == 401: return {"source":"URLhaus","error":"Invalid or expired Auth-Key — generate a new one at auth.abuse.ch"}
     if r.status_code != 200: return {"source":"URLhaus","error":f"HTTP {r.status_code}"}
     d = r.json()
     if d.get("query_status") == "no_results": return {"source":"URLhaus","found":False}
@@ -1235,10 +1245,11 @@ async def enrich(ioc_type: str, value: str, base: int, conn=None,
         if ioc_type in ("IPv4","IPv6"):
             vt_key, vt_quota  = get_key("virustotal")
             ab_key, ab_quota  = get_key("abuseipdb")
+            uh_key, uh_quota  = get_key("urlhaus")
             vt_task = vt_ip(value, conn, vt_key, user_id) if vt_key else asyncio.sleep(0, result=({"skipped":True} if vt_quota is None else quota_error("VirusTotal")))
             ab_task = abuseipdb_lookup(value, conn, ab_key, user_id) if ab_key else asyncio.sleep(0, result=({"skipped":True} if ab_quota is None else quota_error("AbuseIPDB")))
-            # URLhaus /v1/host/ accepts IP addresses too, not just hostnames — no key required
-            uh_task = urlhaus_host_lookup(value, conn, user_id)
+            # URLhaus /v1/host/ accepts IP addresses too, not just hostnames
+            uh_task = urlhaus_host_lookup(value, conn, uh_key, user_id) if uh_key else asyncio.sleep(0, result=({"skipped":True} if uh_quota is None else quota_error("URLhaus")))
             vt_r, ab_r, uh_r = await asyncio.gather(vt_task, ab_task, uh_task, return_exceptions=True)
             if not isinstance(vt_r, Exception): results["virustotal"] = vt_r
             else: results["virustotal"] = {"source":"VirusTotal","error":str(vt_r)}
@@ -1248,8 +1259,9 @@ async def enrich(ioc_type: str, value: str, base: int, conn=None,
             else: results["urlhaus"] = {"source":"URLhaus","error":str(uh_r)}
         elif ioc_type == "Domain":
             vt_key, vt_quota = get_key("virustotal")
+            uh_key, uh_quota = get_key("urlhaus")
             vt_task = vt_domain(value, conn, vt_key, user_id) if vt_key else asyncio.sleep(0, result=({"skipped":True} if vt_quota is None else quota_error("VirusTotal")))
-            uh_task = urlhaus_host_lookup(value, conn, user_id)
+            uh_task = urlhaus_host_lookup(value, conn, uh_key, user_id) if uh_key else asyncio.sleep(0, result=({"skipped":True} if uh_quota is None else quota_error("URLhaus")))
             vt_r, uh_r = await asyncio.gather(vt_task, uh_task, return_exceptions=True)
             if not isinstance(vt_r, Exception): results["virustotal"] = vt_r
             else: results["virustotal"] = {"source":"VirusTotal","error":str(vt_r)}
@@ -1257,8 +1269,9 @@ async def enrich(ioc_type: str, value: str, base: int, conn=None,
             else: results["urlhaus"] = {"source":"URLhaus","error":str(uh_r)}
         elif ioc_type == "URL":
             vt_key, vt_quota = get_key("virustotal")
+            uh_key, uh_quota = get_key("urlhaus")
             vt_task = vt_url_lookup(value, conn, vt_key, user_id) if vt_key else asyncio.sleep(0, result=({"skipped":True} if vt_quota is None else quota_error("VirusTotal")))
-            uh_task = urlhaus_url_lookup(value, conn, user_id)
+            uh_task = urlhaus_url_lookup(value, conn, uh_key, user_id) if uh_key else asyncio.sleep(0, result=({"skipped":True} if uh_quota is None else quota_error("URLhaus")))
             vt_r, uh_r = await asyncio.gather(vt_task, uh_task, return_exceptions=True)
             if not isinstance(vt_r, Exception): results["virustotal"] = vt_r
             else: results["virustotal"] = {"source":"VirusTotal","error":str(vt_r)}

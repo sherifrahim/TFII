@@ -1851,10 +1851,15 @@ invoice.pdf.exe`;
                       )
                     )}
                     {uh&&(
-                      uh.error ? (
+                      uh.skipped ? (
+                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                          background:C.surfaceHi,color:C.muted,opacity:0.6}}>
+                          URLhaus: no Auth-Key configured
+                        </span>
+                      ) : uh.error ? (
                         <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
                           background:C.red+"10",color:C.red}}>
-                          URLhaus: error checking
+                          URLhaus: {uh.error.includes("quota")?"daily quota reached":uh.error.includes("Auth-Key")?"invalid Auth-Key":"error checking"}
                         </span>
                       ) : (
                         <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
@@ -4253,6 +4258,7 @@ function ApiKeyModal({token, C, onClose}){
   const SERVICES=[
     {id:"virustotal", name:"VirusTotal",    url:"https://www.virustotal.com/gui/my-apikey",       desc:"Malware & IP reputation",     placeholder:"Enter your VT API key"},
     {id:"abuseipdb",  name:"AbuseIPDB",     url:"https://www.abuseipdb.com/account/api",          desc:"IP abuse confidence scoring",  placeholder:"Enter your AbuseIPDB key"},
+    {id:"urlhaus",    name:"URLhaus",       url:"https://auth.abuse.ch/",                          desc:"Malware URL/host database (free Auth-Key required since Jun 2025)", placeholder:"Enter your abuse.ch Auth-Key"},
     {id:"groq",       name:"Groq",          url:"https://console.groq.com/keys",                  desc:"SPL/KQL query generation",     placeholder:"gsk_xxxxxxxxxxxx"},
     {id:"shodan",     name:"Shodan",        url:"https://account.shodan.io/",                     desc:"Port scan & host lookup",      placeholder:"Enter your Shodan key"},
     {id:"hibp",       name:"HaveIBeenPwned",url:"https://haveibeenpwned.com/API/Key",              desc:"Email breach lookup",          placeholder:"Enter your HIBP key"},
@@ -4385,6 +4391,7 @@ function ApiKeyModal({token, C, onClose}){
 const STATIC_SERVICES=[
   {service:"virustotal", name:"VirusTotal",    url:"https://www.virustotal.com/gui/my-apikey",          placeholder:"Enter your VT API key",    desc:"IOC enrichment — malware & IP reputation"},
   {service:"abuseipdb",  name:"AbuseIPDB",     url:"https://www.abuseipdb.com/account/api",             placeholder:"Enter your AbuseIPDB key",  desc:"IP abuse confidence scoring"},
+  {service:"urlhaus",    name:"URLhaus",       url:"https://auth.abuse.ch/",                             placeholder:"Enter your abuse.ch Auth-Key", desc:"Malware URL/host database — free, required since Jun 2025"},
   {service:"groq",       name:"Groq",          url:"https://console.groq.com/keys",                     placeholder:"gsk_xxxxxxxxxxxx",           desc:"SPL/KQL query generation (free)"},
   {service:"shodan",     name:"Shodan",        url:"https://account.shodan.io/",                        placeholder:"Enter your Shodan key",     desc:"Port scan & OSINT host lookup"},
   {service:"hibp",       name:"HaveIBeenPwned",url:"https://haveibeenpwned.com/API/Key",                placeholder:"Enter your HIBP key",       desc:"Email breach lookup in OSINT"},
