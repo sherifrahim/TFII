@@ -176,14 +176,15 @@ sudo certbot --nginx -d your-domain.com
 
 **Signup is open** — anyone can sign up and explore the tool in demo/explorer mode (CVE Lookup, KQL/SPL builder, OSINT, CVE Wall, Bulk IOC Lookup). The personal IOC feed, CVE Monitor, and Campaigns are invite-only. Explorers can request full access from within the app; you'll get a push notification (if configured) and can approve or deny from Settings → Access Requests.
 
+This will be changed to a public facing IOC and CVE feed very soon enough.
+
 ---
 
 ## Security Notes
 
 - Signup is invite-only — admins generate codes, no open registration
-- CORS locked to `ALLOWED_ORIGINS` — no wildcard in production
 - Rate limiting: login 10/min, signup 5/hr
-- Per-user API keys encrypted at rest (Fernet)
+- Per-user API keys encrypted
 - Port 8000 (backend) not exposed externally — Nginx/Caddy proxies everything
 - Scrub your deployment of any secrets before sharing: `git-filter-repo --replace-text replacements.txt`
 
