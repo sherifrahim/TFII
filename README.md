@@ -1,6 +1,6 @@
 # TFII — ThreatFeed Intelligence Platform
 
-> Production-grade threat intelligence portal. Self-hosted, open source, $0/month infrastructure.
+> A small threat intelligence portal trying to mix and merge OpenCTI and OpenCVE but with a pinch of salt.
 
 **IOC management · CVE monitoring · Detection engineering · OSINT · CVE Wall · KQL/SPL builder**
 
@@ -27,21 +27,7 @@ See [Manual Deployment Guide](#manual-deployment) below.
 
 ## Screenshots
 
-![Bulk IOC Lookup](screenshots/bulk-lookup.png)
-*Bulk IOC Lookup — paste or upload a list, get verdicts, owner/org/country, and cloud-provider detection for each indicator*
-
-![CVE Intelligence](screenshots/cve-lookup.png)
-*CVE Lookup — multi-source intelligence with visual CVSS breakdown and PoC detection*
-
-![KQL/SPL Query Builder](screenshots/query-builder.png)
-*KQL/SPL Query Builder — three production-ready variants per use case with MITRE ATT&CK mapping*
-
-![CVE Monitor](screenshots/cve-monitor.png)
-*CVE Monitor — track your software stack against NVD, cross-referenced with CISA KEV and EPSS*
-
-![Intel Wall](screenshots/intel-wall.png)
-*Intel Wall — aggregated threat intelligence from CISA, SANS ISC, BleepingComputer, Krebs, and more*
-
+![TFII - Threat Feed Intelligence](TFII-screenshot-tour.gif)
 ---
 
 ## Features
