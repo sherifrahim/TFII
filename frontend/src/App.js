@@ -4888,7 +4888,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
                 🔔 Admin Notifications
               </div>
               <div style={{fontSize:11,color:C.muted}}>
-                Daily CVE digest + Gold rates (AED/INR) → your phone/email
+                Daily CVE digest → your phone/email
               </div>
             </div>
             <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>

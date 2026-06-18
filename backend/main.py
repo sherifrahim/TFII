@@ -503,85 +503,6 @@ async def get_notif_settings(conn) -> dict:
     except Exception: pass
     return {}
 
-async def fetch_gold_rates() -> dict:
-    """
-    Fetch real-time gold rates and compute per-gram prices in AED and INR.
-    Sources: metals.live (XAU/USD) + exchangerate-api (USD→AED, USD→INR)
-    """
-    TROY_OZ_TO_GRAM = 31.1035
-    try:
-        async with httpx.AsyncClient(timeout=10,
-            headers={"User-Agent":"ThreatFeed-CTI/1.0"}) as c:
-            metals_r, forex_r = await asyncio.gather(
-                c.get("https://api.metals.live/v1/spot/gold"),
-                c.get("https://api.exchangerate-api.com/v4/latest/USD"),
-            )
-
-        xau_usd = None
-        if metals_r.status_code == 200:
-            data = metals_r.json()
-            xau_usd = data[0].get("gold") if isinstance(data, list) else data.get("gold") or data.get("price")
-
-        usd_aed, usd_inr = 3.6725, 83.50  # fallback fixed rates
-        if forex_r.status_code == 200:
-            rates = forex_r.json().get("rates", {})
-            usd_aed = float(rates.get("AED", 3.6725))
-            usd_inr = float(rates.get("INR", 83.50))
-
-        if not xau_usd:
-            return {"error": "Could not fetch gold price"}
-
-        xau_usd = float(xau_usd)
-        pgram_usd = xau_usd / TROY_OZ_TO_GRAM   # price per gram in USD
-
-        def purity(base, k): return round(base * k / 24, 2)
-
-        aed_24k = round(pgram_usd * usd_aed, 2)
-        inr_24k = round(pgram_usd * usd_inr, 2)
-
-        # Difference: AED price converted to INR vs direct INR price
-        aed_as_inr = round(aed_24k * (usd_inr / usd_aed), 2)  # AED 24K → INR equiv
-        inr_as_aed = round(inr_24k * (usd_aed / usd_inr), 2)  # INR 24K → AED equiv
-        diff_inr   = round(inr_24k - aed_as_inr, 2)            # India premium in INR
-        diff_aed   = round(inr_as_aed - aed_24k, 2)            # India premium in AED
-
-        return {
-            "xau_usd":    round(xau_usd, 2),
-            "usd_aed":    round(usd_aed, 4),
-            "usd_inr":    round(usd_inr, 4),
-            "timestamp":  datetime.now(timezone.utc).isoformat(),
-            # UAE rates per gram
-            "uae": {
-                "24k": aed_24k,
-                "22k": purity(aed_24k, 22),
-                "21k": purity(aed_24k, 21),
-                "18k": purity(aed_24k, 18),
-                "currency": "AED",
-            },
-            # India rates per gram
-            "india": {
-                "24k": inr_24k,
-                "22k": purity(inr_24k, 22),
-                "18k": purity(inr_24k, 18),
-                "currency": "INR",
-            },
-            # Cross-currency difference (India typically has a premium)
-            "diff": {
-                "24k_india_premium_inr": diff_inr,   # positive = India is more expensive
-                "24k_india_premium_aed": diff_aed,
-                "note": (f"India gold is {'costlier' if diff_inr > 0 else 'cheaper'} by "
-                         f"₹{abs(diff_inr):.2f}/g (AED {abs(diff_aed):.2f}/g) vs UAE")
-            },
-            # Convenience: 10g prices (common purchase unit in India)
-            "ten_gram": {
-                "uae_24k_aed":   round(aed_24k * 10, 2),
-                "uae_22k_aed":   round(purity(aed_24k,22) * 10, 2),
-                "india_24k_inr": round(inr_24k * 10, 2),
-                "india_22k_inr": round(purity(inr_24k,22) * 10, 2),
-            }
-        }
-    except Exception as e:
-        return {"error": str(e)}
 
 async def fetch_daily_cve_digest() -> list:
     """
@@ -639,7 +560,7 @@ async def fetch_daily_cve_digest() -> list:
 
     return items[:8]
 
-def format_brief_message(cve_items: list, gold: dict, is_weekly: bool = False) -> dict:
+def format_brief_message(cve_items: list, is_weekly: bool = False) -> dict:
     """Format notification content for push/email."""
     now    = datetime.now(timezone.utc)
     prefix = "📊 TFII Weekly Summary" if is_weekly else "🔔 TFII Daily Brief"
@@ -663,40 +584,8 @@ def format_brief_message(cve_items: list, gold: dict, is_weekly: bool = False) -
     else:
         cve_text = "\n🛡️ No new critical CVEs in the last 7 days ✅\n"
 
-    # ── Gold section ─────────────────────────────────────────────────────────
-    gold_text = ""
-    if "error" not in gold:
-        u   = gold.get("uae",{})
-        ind = gold.get("india",{})
-        df  = gold.get("diff",{})
-        tg  = gold.get("ten_gram",{})
-        gold_text = f"""
-💰 GOLD RATES — {now.strftime("%d %b %Y")}
-{"─" * 35}
-🇦🇪 UAE (per gram)
-   24K: AED {u.get('24k','—')}  |  22K: AED {u.get('22k','—')}
-   21K: AED {u.get('21k','—')}  |  18K: AED {u.get('18k','—')}
-
-🇮🇳 India (per gram)
-   24K: ₹{ind.get('24k','—')}  |  22K: ₹{ind.get('22k','—')}
-   18K: ₹{ind.get('18k','—')}
-
-📊 10 Gram Prices
-   UAE  24K: AED {tg.get('uae_24k_aed','—')} | 22K: AED {tg.get('uae_22k_aed','—')}
-   India 24K: ₹{tg.get('india_24k_inr','—')} | 22K: ₹{tg.get('india_22k_inr','—')}
-
-⚖️  Difference
-   {df.get('note','N/A')}
-   India premium: ₹{df.get('24k_india_premium_inr','—')}/g  =  AED {df.get('24k_india_premium_aed','—')}/g
-
-💱 Rates: 1 USD = AED {gold.get('usd_aed','—')} | 1 USD = ₹{gold.get('usd_inr','—')}
-   Gold spot: USD {gold.get('xau_usd','—')}/troy oz
-"""
-    else:
-        gold_text = f"\n💰 Gold rates unavailable: {gold.get('error','')}\n"
-
     title = f"{prefix} — {date}"
-    body  = cve_text + gold_text
+    body  = cve_text
 
     # HTML version for email
     html = f"""<html><body style="font-family:monospace;background:#0f172a;color:#e2e8f0;padding:20px;">
@@ -783,8 +672,8 @@ async def send_daily_brief_job():
         settings = await get_notif_settings(conn)
         if not settings.get("enabled"): return
         if not settings.get("daily_enabled", True): return
-        cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
-        msg = format_brief_message(cve_items, gold, is_weekly=False)
+        cve_items = await fetch_daily_cve_digest()
+        msg = format_brief_message(cve_items, is_weekly=False)
         errors = await send_notification(msg["title"], msg["body"], msg["html"], settings)
         if errors: print(f"[notify] Send errors: {errors}")
     except Exception as e:
@@ -801,8 +690,8 @@ async def send_weekly_summary_job():
         settings = await get_notif_settings(conn)
         if not settings.get("enabled"): return
         if not settings.get("weekly_enabled", True): return
-        cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
-        msg = format_brief_message(cve_items, gold, is_weekly=True)
+        cve_items = await fetch_daily_cve_digest()
+        msg = format_brief_message(cve_items, is_weekly=True)
         errors = await send_notification(msg["title"], msg["body"], msg["html"], settings)
         if errors: print(f"[notify] Send errors: {errors}")
     except Exception as e:
@@ -972,12 +861,11 @@ async def test_notification(admin=Depends(require_admin), conn=Depends(get_db)):
     settings = await get_notif_settings(conn)
     if not settings:
         raise HTTPException(status_code=400, detail="No notification settings configured. Save settings first.")
-    gold = await fetch_gold_rates()
-    msg  = format_brief_message(
+    msg = format_brief_message(
         [{"cve_id":"CVE-2024-TEST","name":"Test Notification","vendor":"TFII","product":"Platform",
           "description":"This is a test notification from your ThreatFeed Intelligence Platform.",
           "source":"Test","severity":"INFO","kev_date":"","due_date":""}],
-        gold, is_weekly=False
+        is_weekly=False
     )
     errors = await send_notification(
         f"🧪 TFII Test — {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M')} UTC",
@@ -994,20 +882,20 @@ async def send_brief_now(type: str = "daily", admin=Depends(require_admin), conn
     settings = await get_notif_settings(conn)
     if not settings:
         raise HTTPException(status_code=400, detail="No notification settings configured.")
-    cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
+    cve_items = await fetch_daily_cve_digest()
     is_weekly = (type == "weekly")
-    msg    = format_brief_message(cve_items, gold, is_weekly=is_weekly)
+    msg    = format_brief_message(cve_items, is_weekly=is_weekly)
     errors = await send_notification(msg["title"], msg["body"], msg["html"], settings)
     if errors:
         raise HTTPException(status_code=500, detail=f"Send errors: {'; '.join(errors)}")
-    return {"status":"sent","cves_found":len(cve_items),"gold_ok":"error" not in gold}
+    return {"status":"sent","cves_found":len(cve_items)}
 
 @app.get("/admin/notify/preview")
 async def preview_brief(type: str = "daily", admin=Depends(require_admin)):
     """Preview what the next brief will look like (no send)."""
-    cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
-    msg = format_brief_message(cve_items, gold, is_weekly=(type=="weekly"))
-    return {**msg, "cves": cve_items, "gold": gold}
+    cve_items = await fetch_daily_cve_digest()
+    msg = format_brief_message(cve_items, is_weekly=(type=="weekly"))
+    return {**msg, "cves": cve_items}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ACCESS REQUESTS — explorer (demo) users requesting full-access upgrade
