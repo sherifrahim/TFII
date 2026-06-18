@@ -1066,7 +1066,7 @@ class AccessRequestIn(BaseModel):
     message: Optional[str] = None
 
 @app.post("/access-requests", status_code=201)
-def submit_access_request(body: AccessRequestIn, user=Depends(get_current_user), conn=Depends(get_db)):
+async def submit_access_request(body: AccessRequestIn, user=Depends(get_current_user), conn=Depends(get_db)):
     if user["role"] != "explorer":
         raise HTTPException(status_code=400, detail="Only explorer/demo accounts need to request access.")
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1079,6 +1079,20 @@ def submit_access_request(body: AccessRequestIn, user=Depends(get_current_user),
         (rid, user["id"], body.email.strip(), (body.message or "").strip()[:1000]))
     cur2.execute("UPDATE users SET email = %s WHERE id = %s", (body.email.strip(), user["id"]))
     conn.commit()
+
+    # Notify admin via configured channels (ntfy/Telegram/email)
+    try:
+        settings = await get_notif_settings(conn)
+        if settings:
+            note   = f"\n\"{body.message.strip()[:200]}\"" if body.message else ""
+            title  = f"🔓 TFII — New Access Request"
+            body_t = (f"User: {user['username']}\n"
+                      f"Email: {body.email}{note}\n\n"
+                      f"Review in Settings → Access Requests.")
+            await send_notification(title, body_t, body_t, settings)
+    except Exception as e:
+        print(f"[access-request] Admin notify failed (non-critical): {e}")
+
     return {"status":"submitted","id":rid}
 
 @app.get("/access-requests/me")
