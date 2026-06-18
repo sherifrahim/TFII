@@ -4670,6 +4670,27 @@ function PasswordChangeCard({token,C}){
   );
 }
 
+function CleanupButton({token,C}){
+  const [running,setRunning]=useState(false);
+  const [result,setResult]=useState("");
+  async function run(){
+    setRunning(true);setResult("");
+    const r=await api("/admin/cleanup-advisory-iocs",{method:"POST"},token);
+    if(r.ok){const d=await r.json();setResult(`✓ ${d.message}`);}
+    else setResult("✗ Cleanup failed");
+    setRunning(false);
+  }
+  return(
+    <div>
+      <Btn onClick={run} disabled={running} variant="dim" C={C}>
+        {running?"Running...":"🧹 Run Cleanup Now"}
+      </Btn>
+      {result&&<div style={{marginTop:10,fontSize:12,fontWeight:600,
+        color:result.startsWith("✓")?C.green:C.red}}>{result}</div>}
+    </div>
+  );
+}
+
 function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}){
   const isAdmin = me?.role==="admin";
   const [notifSettings,setNotifSettings]=useState(null);
@@ -4811,6 +4832,22 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
 
       {/* Change Password */}
       <PasswordChangeCard token={token} C={C}/>
+
+      {/* ── ADMIN: IOC Feed Cleanup ── */}
+      {isAdmin&&(
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+          padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:4}}>
+            🧹 IOC Feed Cleanup
+          </div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:14,lineHeight:1.6}}>
+            Removes false-positive IOCs that were auto-added from CVE references —
+            vendor advisory URLs, Google, CISA, GitHub, and other trusted domains
+            that should never have been in the feed. Safe to run multiple times.
+          </div>
+          <CleanupButton token={token} C={C}/>
+        </div>
+      )}
 
       {/* ── ADMIN: Access Requests ── */}
       {isAdmin&&(
