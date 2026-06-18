@@ -79,19 +79,19 @@ const THEMES = {
 
 // ── MODE NAV DEFINITIONS ──────────────────────────────────────────────────────
 const IOC_NAV=[
-  {id:"dashboard",label:"Dashboard",     icon:"grid"},
-  {id:"feed",     label:"IOC Feed",      icon:"list"},
-  {id:"add",      label:"Add IOC",       icon:"plus"},
+  {id:"dashboard",label:"Dashboard",     icon:"grid",   locked:true},
+  {id:"feed",     label:"IOC Feed",      icon:"list",   locked:true},
+  {id:"add",      label:"Add IOC",       icon:"plus",   locked:true},
   {id:"bulklookup",label:"Bulk Lookup",  icon:"search"},
-  {id:"campaigns",label:"Campaigns",     icon:"folder"},
-  {id:"map",      label:"Geo Map",       icon:"map"},
+  {id:"campaigns",label:"Campaigns",     icon:"folder", locked:true},
+  {id:"map",      label:"Geo Map",       icon:"map",    locked:true},
   {id:"public",   label:"Public Lookup", icon:"search"},
-  {id:"import",   label:"Import",        icon:"upload"},
-  {id:"export",   label:"Export",        icon:"download"},
+  {id:"import",   label:"Import",        icon:"upload", locked:true},
+  {id:"export",   label:"Export",        icon:"download",locked:true},
 ];
 const CVE_NAV=[
-  {id:"dashboard",label:"Dashboard",     icon:"grid"},
-  {id:"cve",      label:"CVE Monitor",   icon:"shield"},
+  {id:"dashboard",label:"Dashboard",     icon:"grid",   locked:true},
+  {id:"cve",      label:"CVE Monitor",   icon:"shield", locked:true},
   {id:"cvelookup",label:"CVE Lookup",    icon:"search"},
   {id:"cvewall",  label:"CVE Wall",      icon:"rss"},
   {id:"intel",    label:"Intel Wall",    icon:"rss"},
@@ -1883,6 +1883,87 @@ invoice.pdf.exe`;
   );
 }
 
+
+// ── PUBLIC SEARCH ─────────────────────────────────────────────────────────────
+// ── DEMO LOCKED PAGE (explorer role hits a gated feature) ────────────────────
+function DemoLockedPage({token,C,featureLabel}){
+  const [requestStatus,setRequestStatus]=useState(null); // null | 'pending' | 'approved' | 'denied'
+  const [checking,setChecking]=useState(true);
+  const [showForm,setShowForm]=useState(false);
+  const [email,setEmail]=useState("");
+  const [message,setMessage]=useState("");
+  const [submitting,setSubmitting]=useState(false);
+  const [err,setErr]=useState("");
+
+  useEffect(()=>{
+    api("/access-requests/me",{},token).then(r=>r.ok?r.json():null).then(d=>{
+      if(d&&d.status) setRequestStatus(d.status);
+      setChecking(false);
+    }).catch(()=>setChecking(false));
+  },[token]);
+
+  async function submit(){
+    if(!email.trim()){setErr("Email is required so we can let you know.");return;}
+    setSubmitting(true);setErr("");
+    const r=await api("/access-requests",{method:"POST",
+      body:JSON.stringify({email:email.trim(),message:message.trim()})},token);
+    if(r.ok){setRequestStatus("pending");setShowForm(false);}
+    else{const e=await r.json();setErr(e.detail||"Could not submit request.");}
+    setSubmitting(false);
+  }
+
+  return(
+    <div style={{maxWidth:560,margin:"60px auto",textAlign:"center"}}>
+      <div style={{fontSize:40,marginBottom:16}}>🔒</div>
+      <div style={{fontSize:18,fontWeight:700,color:C.white||C.textHi,marginBottom:10}}>
+        {featureLabel} is part of the live workspace
+      </div>
+      <div style={{fontSize:13,color:C.muted,lineHeight:1.7,marginBottom:28}}>
+        You're using the TFII demo — CVE Lookup, the KQL/SPL builder, OSINT tools, CVE Wall,
+        and Bulk IOC Lookup are fully open for anyone to try. The IOC Feed, CVE Monitor, and
+        Campaigns are tied to a real, personal threat-intel workspace, so for now those stay
+        invite-only while the server is still small. If you've had a chance to look around and
+        find it useful, you're welcome to request full access below.
+      </div>
+
+      {checking ? null : requestStatus==="pending" ? (
+        <div style={{padding:"16px 20px",background:C.amber+"10",border:`1px solid ${C.amber}30`,
+          borderRadius:10,color:C.amber,fontSize:13,fontWeight:600}}>
+          ⏳ Your request is in — you'll get an email once it's reviewed.
+        </div>
+      ) : requestStatus==="denied" ? (
+        <div style={{padding:"16px 20px",background:C.surfaceHi,border:`1px solid ${C.border}`,
+          borderRadius:10,color:C.muted,fontSize:13}}>
+          Your previous request wasn't approved. Feel free to reach out directly if you'd like to discuss it.
+        </div>
+      ) : showForm ? (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+          padding:"20px 24px",textAlign:"left"}}>
+          <Field label="Your Email" C={C}>
+            <Inp value={email} onChange={setEmail} placeholder="you@email.com" C={C}/>
+          </Field>
+          <Field label="Anything you'd like to mention? (optional)" C={C}>
+            <textarea value={message} onChange={e=>setMessage(e.target.value)}
+              placeholder="What you're hoping to use it for, your background, etc."
+              rows={3}
+              style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:13,
+                outline:"none",fontFamily:"inherit",resize:"vertical",boxSizing:"border-box"}}/>
+          </Field>
+          {err&&<div style={{fontSize:12,color:C.red,marginBottom:12}}>{err}</div>}
+          <div style={{display:"flex",gap:8}}>
+            <Btn onClick={submit} disabled={submitting} C={C}>
+              {submitting?"Submitting...":"Submit Request"}
+            </Btn>
+            <Btn onClick={()=>setShowForm(false)} variant="ghost" C={C}>Cancel</Btn>
+          </div>
+        </div>
+      ) : (
+        <Btn onClick={()=>setShowForm(true)} C={C}>Request Full Access</Btn>
+      )}
+    </div>
+  );
+}
 
 // ── PUBLIC SEARCH ─────────────────────────────────────────────────────────────
 function PublicSearch({C}){
@@ -4598,6 +4679,37 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
   const [preview,setPreview]=useState(null);
   const [previewLoading,setPreviewLoading]=useState(false);
   const [sending,setSending]=useState(false);
+  const [accessRequests,setAccessRequests]=useState([]);
+  const [accessLoading,setAccessLoading]=useState(false);
+  const [decidingId,setDecidingId]=useState(null);
+  const [accessMsg,setAccessMsg]=useState("");
+
+  function loadAccessRequests(){
+    setAccessLoading(true);
+    api("/admin/access-requests?status=pending",{},token).then(r=>r.ok?r.json():[]).then(d=>{
+      setAccessRequests(d||[]);setAccessLoading(false);
+    }).catch(()=>setAccessLoading(false));
+  }
+
+  useEffect(()=>{ if(isAdmin) loadAccessRequests(); },[isAdmin]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  async function decideRequest(id, action, role){
+    setDecidingId(id);setAccessMsg("");
+    const r = action==="approve"
+      ? await api(`/admin/access-requests/${id}/approve`,{method:"POST",body:JSON.stringify({role:role||"analyst"})},token)
+      : await api(`/admin/access-requests/${id}/deny`,{method:"POST"},token);
+    if(r.ok){
+      const d=await r.json();
+      setAccessMsg(action==="approve"
+        ? `✓ Approved as ${d.granted_role}${d.email_sent?" — welcome email sent":" — could not send email, configure SMTP in Daily Brief settings below"}`
+        : "✓ Request denied");
+      loadAccessRequests();
+    } else {
+      const e=await r.json();setAccessMsg(`✗ ${e.detail||"Failed"}`);
+    }
+    setDecidingId(null);
+    setTimeout(()=>setAccessMsg(""),6000);
+  }
 
   const THEMES=[{id:"light",label:"Light"},{id:"dark",label:"Dark"},{id:"operator",label:"Operator"}];
 
@@ -4699,6 +4811,72 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
 
       {/* Change Password */}
       <PasswordChangeCard token={token} C={C}/>
+
+      {/* ── ADMIN: Access Requests ── */}
+      {isAdmin&&(
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+          padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
+                🔓 Access Requests {accessRequests.length>0&&`(${accessRequests.length})`}
+              </div>
+              <div style={{fontSize:11,color:C.muted}}>
+                Explorer/demo users requesting full access to the IOC Feed, CVE Monitor, and Campaigns
+              </div>
+            </div>
+            <button onClick={loadAccessRequests}
+              style={{fontSize:11,padding:"5px 12px",borderRadius:6,background:C.surfaceHi,
+                border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>
+              {accessLoading?"...":"↻ Refresh"}
+            </button>
+          </div>
+
+          {accessRequests.length===0?(
+            <div style={{fontSize:12,color:C.muted,padding:"12px 0",textAlign:"center"}}>
+              No pending requests.
+            </div>
+          ):(
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {accessRequests.map(req=>(
+                <div key={req.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                  flexWrap:"wrap",gap:10,padding:"12px 14px",background:C.surfaceHi,
+                  border:`1px solid ${C.border}`,borderRadius:9}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:600,color:C.white||C.textHi}}>{req.username}</div>
+                    <div style={{fontSize:11,color:C.muted}}>{req.email}</div>
+                    {req.message&&<div style={{fontSize:11,color:C.text,marginTop:4,fontStyle:"italic"}}>"{req.message}"</div>}
+                    <div style={{fontSize:10,color:C.muted,marginTop:2}}>
+                      Requested {new Date(req.requested_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                    <button onClick={()=>decideRequest(req.id,"approve","analyst")} disabled={decidingId===req.id}
+                      style={{fontSize:11,padding:"6px 12px",borderRadius:6,cursor:"pointer",
+                        background:C.green+"15",border:`1px solid ${C.green}40`,color:C.green,
+                        fontWeight:600,fontFamily:"inherit"}}>
+                      {decidingId===req.id?"...":"✓ Approve"}
+                    </button>
+                    <button onClick={()=>decideRequest(req.id,"deny")} disabled={decidingId===req.id}
+                      style={{fontSize:11,padding:"6px 12px",borderRadius:6,cursor:"pointer",
+                        background:C.surface,border:`1px solid ${C.border}`,color:C.muted,
+                        fontWeight:600,fontFamily:"inherit"}}>
+                      Deny
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {accessMsg&&(
+            <div style={{marginTop:10,fontSize:12,fontWeight:600,
+              color:accessMsg.startsWith("✓")?C.green:C.red}}>{accessMsg}</div>
+          )}
+          <div style={{fontSize:10,color:C.muted,marginTop:10}}>
+            Approval emails reuse the SMTP settings configured below in Admin Notifications.
+          </div>
+        </div>
+      )}
 
       {/* ── ADMIN: Notification Center ── */}
       {isAdmin&&notifSettings&&(
@@ -5022,6 +5200,8 @@ export default function App(){
     ...(mode==="ioc"?IOC_NAV:CVE_NAV),
     ...(me?.role==="admin"?ADMIN_NAV:USER_NAV),
   ];
+  const currentNavLocked = NAV.find(n=>n.id===view)?.locked;
+  const showLockedPage   = me?.role==="explorer" && currentNavLocked;
 
   if(!session){
     return(
@@ -5035,9 +5215,19 @@ export default function App(){
             </div>
             <Field label="Username" C={C}><Inp value={authUsername} onChange={setAuthUsername} placeholder="username" C={C}/></Field>
             <Field label="Password" C={C}><Inp value={authPassword} onChange={setAuthPassword} type="password" placeholder="••••••••" C={C}/></Field>
-            {authTab==="signup"&&<Field label="Invite Code" C={C}><Inp value={authInviteCode} onChange={setAuthInviteCode} placeholder="Get this from admin" C={C}/></Field>}
+            {authTab==="signup"&&(
+              <>
+                <Field label="Invite Code (optional)" C={C}><Inp value={authInviteCode} onChange={setAuthInviteCode} placeholder="Have one? Enter it for full access" C={C}/></Field>
+                <div style={{fontSize:11,color:C.muted,marginTop:-8,marginBottom:16,lineHeight:1.6}}>
+                  No invite code? You can still sign up to explore the demo — CVE Lookup, the KQL/SPL builder,
+                  OSINT tools, and Bulk IOC Lookup are fully usable. The personal IOC feed, CVE Monitor, and
+                  Campaigns are invite-only for now, since the server's still small. You can request full
+                  access once you've had a look around.
+                </div>
+              </>
+            )}
             {authErr&&<div style={{fontSize:12,color:C.red,marginBottom:16,padding:"10px 14px",background:C.red+"15",borderRadius:8,border:`1px solid ${C.red}30`}}>{authErr}</div>}
-            <Btn onClick={authTab==="login"?authLogin:authSignup} disabled={authLoading||!authUsername||!authPassword||(authTab==="signup"&&!authInviteCode)} C={C} full>{authLoading?"Please wait...":(authTab==="login"?"Sign In →":"Create Account →")}</Btn>
+            <Btn onClick={authTab==="login"?authLogin:authSignup} disabled={authLoading||!authUsername||!authPassword} C={C} full>{authLoading?"Please wait...":(authTab==="login"?"Sign In →":"Create Account →")}</Btn>
             <div style={{marginTop:16,fontSize:11,color:C.muted,textAlign:"center"}}>{API_BASE.replace("https://","")}</div>
           </div>
         </div>
@@ -5109,6 +5299,7 @@ export default function App(){
         <nav style={{padding:"10px 10px",flex:1,overflowY:"auto"}}>
           {NAV.map(n=>{
             const active=view===n.id;
+            const locked=me?.role==="explorer"&&n.locked;
             return(
               <button key={n.id} className="nav-item" onClick={()=>setView(n.id)}
                 style={{
@@ -5116,11 +5307,13 @@ export default function App(){
                   padding:"9px 12px",borderRadius:8,marginBottom:2,
                   border:"none",cursor:"pointer",textAlign:"left",
                   background:active?C.navActive:"transparent",
-                  color:active?C.accentText:C.text,
+                  color:active?C.accentText:(locked?C.muted:C.text),
+                  opacity:locked?0.6:1,
                   fontFamily:"inherit",fontSize:13,fontWeight:active?600:400,
                 }}>
                 <NavIcon name={n.icon} size={16} color={active?C.accentText:C.muted}/>
-                <span className="sidebar-label">{n.label}</span>
+                <span className="sidebar-label" style={{flex:1}}>{n.label}</span>
+                {locked&&<span className="sidebar-label" style={{fontSize:11}}>🔒</span>}
               </button>
             );
           })}
@@ -5180,6 +5373,8 @@ export default function App(){
         </div>
 
         <div style={{flex:1,overflow:"auto",padding:"24px"}}>
+          {showLockedPage ? <DemoLockedPage token={token} C={C} featureLabel={NAV.find(n=>n.id===view)?.label||"This"}/> : (
+          <>
           {view==="dashboard"&&<><Dashboard token={token} C={C}/><CVESummaryStrip token={token} C={C}/></>}
           {view==="cve"&&<CVEDashboard token={token} C={C}/>}
           {view==="cvelookup"&&<CVELookup token={token} C={C} initialId={cvelookupId}/>}
@@ -5481,6 +5676,8 @@ export default function App(){
                 </table>
               </Card>
             </div>
+          )}
+          </>
           )}
         </div>
       </div>

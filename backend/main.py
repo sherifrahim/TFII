@@ -347,7 +347,12 @@ async def startup():
         """CREATE TABLE IF NOT EXISTS users (
             id VARCHAR(100) PRIMARY KEY, username VARCHAR(50) UNIQUE NOT NULL,
             password TEXT NOT NULL, role VARCHAR(20) DEFAULT 'analyst',
-            active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT NOW())""",
+            email VARCHAR(255), active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT NOW())""",
+        """CREATE TABLE IF NOT EXISTS access_requests (
+            id VARCHAR(100) PRIMARY KEY, user_id VARCHAR(100) NOT NULL,
+            email VARCHAR(255) NOT NULL, message TEXT,
+            status VARCHAR(20) DEFAULT 'pending', granted_role VARCHAR(20),
+            requested_at TIMESTAMP DEFAULT NOW(), decided_at TIMESTAMP, decided_by VARCHAR(100))""",
         """CREATE TABLE IF NOT EXISTS invite_codes (
             code VARCHAR(64) PRIMARY KEY, role VARCHAR(20) DEFAULT 'analyst',
             created_by VARCHAR(100), used BOOLEAN DEFAULT FALSE,
@@ -446,6 +451,10 @@ async def startup():
 
     # add user_id to api_usage_log if missing
     try: cur.execute("ALTER TABLE api_usage_log ADD COLUMN IF NOT EXISTS user_id VARCHAR(100)")
+    except Exception: conn.rollback()
+
+    # add email to users if missing (needed for explorer → access-request flow)
+    try: cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)")
     except Exception: conn.rollback()
 
     cur.execute("SELECT COUNT(*) FROM users")
@@ -845,6 +854,19 @@ def require_admin(user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
+def require_full_access(user=Depends(get_current_user)):
+    """
+    Blocks the 'explorer' role from sensitive data — the personal IOC
+    feed, monitored assets, and campaigns. Explorers can still use every
+    stateless tool (CVE lookup, KQL/SPL builder, OSINT, CVE Wall, and
+    read-only Bulk IOC Lookup) but can't see or modify the owner's
+    actual tracked threat-intel data.
+    """
+    if user["role"] == "explorer":
+        raise HTTPException(status_code=403,
+            detail="This is part of the live workspace, not available in demo/explorer mode. Request full access to unlock it.")
+    return user
+
 # ── MODELS ────────────────────────────────────────────────────────────────────
 class IOCIn(BaseModel):
     type: str; value: str; industry: Optional[str] = "General"
@@ -858,7 +880,7 @@ class UserCreate(BaseModel):
     username: str; password: str; role: Optional[str] = "analyst"
 
 class SignupRequest(BaseModel):
-    username: str; password: str; invite_code: str
+    username: str; password: str; invite_code: Optional[str] = None
 
 class PasswordChange(BaseModel):
     current_password: str; new_password: str
@@ -986,6 +1008,129 @@ async def preview_brief(type: str = "daily", admin=Depends(require_admin)):
     cve_items, gold = await asyncio.gather(fetch_daily_cve_digest(), fetch_gold_rates())
     msg = format_brief_message(cve_items, gold, is_weekly=(type=="weekly"))
     return {**msg, "cves": cve_items, "gold": gold}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ACCESS REQUESTS — explorer (demo) users requesting full-access upgrade
+# ═══════════════════════════════════════════════════════════════════════════════
+
+REPO_URL = "https://github.com/sherifrahim/TFII"
+
+async def send_welcome_email(to_email: str, username: str, conn) -> bool:
+    """
+    Sends the approval/welcome email to a newly-upgraded user. Reuses the
+    same SMTP settings configured for the admin Daily Brief feature —
+    one SMTP config, two uses.
+    """
+    settings = await get_notif_settings(conn)
+    if not (settings.get("smtp_host") and settings.get("smtp_user")):
+        return False
+    try:
+        import smtplib, email.mime.multipart, email.mime.text
+        title = "You're approved — welcome to TFII"
+        body_text = (
+            f"Hi {username},\n\n"
+            f"Your request for full access to TFII (ThreatFeed Intelligence Platform) has been approved.\n\n"
+            f"Log back in with your existing username and password — the IOC Feed, CVE Monitor, "
+            f"and Campaigns sections are now unlocked.\n\n"
+            f"TFII is open source. If you'd like to look at the code, self-host your own instance, "
+            f"or contribute, it's here:\n{REPO_URL}\n\n"
+            f"Thanks for trying it out.\n"
+        )
+        body_html = f"""<html><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:24px;">
+<h2 style="color:#10b981;">You're approved — welcome to TFII</h2>
+<p>Hi {username},</p>
+<p>Your request for full access to <b>TFII (ThreatFeed Intelligence Platform)</b> has been approved.</p>
+<p>Log back in with your existing username and password — the IOC Feed, CVE Monitor, and Campaigns
+sections are now unlocked.</p>
+<p>TFII is open source. If you'd like to look at the code, self-host your own instance, or contribute:<br/>
+<a href="{REPO_URL}" style="color:#10b981;">{REPO_URL}</a></p>
+<p>Thanks for trying it out.</p>
+</body></html>"""
+        msg = email.mime.multipart.MIMEMultipart("alternative")
+        msg["Subject"] = title
+        msg["From"]    = settings.get("smtp_from", settings.get("smtp_user",""))
+        msg["To"]      = to_email
+        msg.attach(email.mime.text.MIMEText(body_text, "plain"))
+        msg.attach(email.mime.text.MIMEText(body_html, "html"))
+        with smtplib.SMTP(settings["smtp_host"], int(settings.get("smtp_port", 587))) as smtp:
+            smtp.ehlo(); smtp.starttls(); smtp.ehlo()
+            smtp.login(settings["smtp_user"], settings["smtp_pass"])
+            smtp.sendmail(msg["From"], msg["To"], msg.as_string())
+        return True
+    except Exception as e:
+        print(f"[access-request] Welcome email failed for {to_email}: {e}")
+        return False
+
+class AccessRequestIn(BaseModel):
+    email: str
+    message: Optional[str] = None
+
+@app.post("/access-requests", status_code=201)
+def submit_access_request(body: AccessRequestIn, user=Depends(get_current_user), conn=Depends(get_db)):
+    if user["role"] != "explorer":
+        raise HTTPException(status_code=400, detail="Only explorer/demo accounts need to request access.")
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT id FROM access_requests WHERE user_id = %s AND status = 'pending'", (user["id"],))
+    if cur.fetchone():
+        raise HTTPException(status_code=400, detail="You already have a pending request — sit tight.")
+    rid = f"req--{uuid.uuid4()}"
+    cur2 = conn.cursor()
+    cur2.execute("""INSERT INTO access_requests (id,user_id,email,message) VALUES (%s,%s,%s,%s)""",
+        (rid, user["id"], body.email.strip(), (body.message or "").strip()[:1000]))
+    cur2.execute("UPDATE users SET email = %s WHERE id = %s", (body.email.strip(), user["id"]))
+    conn.commit()
+    return {"status":"submitted","id":rid}
+
+@app.get("/access-requests/me")
+def my_access_request(user=Depends(get_current_user), conn=Depends(get_db)):
+    """So the explorer's UI can show 'request pending' instead of the request form again."""
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM access_requests WHERE user_id = %s ORDER BY requested_at DESC LIMIT 1",
+        (user["id"],))
+    return cur.fetchone() or {}
+
+@app.get("/admin/access-requests")
+def list_access_requests(status: str = "pending", admin=Depends(require_admin), conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    if status == "all":
+        cur.execute("""SELECT r.*, u.username FROM access_requests r
+            JOIN users u ON r.user_id = u.id ORDER BY r.requested_at DESC""")
+    else:
+        cur.execute("""SELECT r.*, u.username FROM access_requests r
+            JOIN users u ON r.user_id = u.id WHERE r.status = %s ORDER BY r.requested_at DESC""", (status,))
+    return cur.fetchall()
+
+class AccessDecision(BaseModel):
+    role: Optional[str] = "analyst"
+
+@app.post("/admin/access-requests/{request_id}/approve")
+async def approve_access_request(request_id: str, body: AccessDecision,
+                                  admin=Depends(require_admin), conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM access_requests WHERE id = %s", (request_id,))
+    req = cur.fetchone()
+    if not req: raise HTTPException(status_code=404, detail="Request not found")
+    if req["status"] != "pending": raise HTTPException(status_code=400, detail=f"Request already {req['status']}")
+    granted_role = body.role if body.role in ("analyst","admin") else "analyst"
+    cur2 = conn.cursor()
+    cur2.execute("UPDATE users SET role = %s WHERE id = %s", (granted_role, req["user_id"]))
+    cur2.execute("""UPDATE access_requests SET status='approved', granted_role=%s,
+        decided_at=NOW(), decided_by=%s WHERE id=%s""", (granted_role, admin["id"], request_id))
+    conn.commit()
+    cur.execute("SELECT username FROM users WHERE id = %s", (req["user_id"],))
+    u = cur.fetchone()
+    email_sent = await send_welcome_email(req["email"], u["username"] if u else "there", conn)
+    return {"status":"approved","granted_role":granted_role,"email_sent":email_sent}
+
+@app.post("/admin/access-requests/{request_id}/deny")
+def deny_access_request(request_id: str, admin=Depends(require_admin), conn=Depends(get_db)):
+    cur = conn.cursor()
+    cur.execute("""UPDATE access_requests SET status='denied', decided_at=NOW(), decided_by=%s
+        WHERE id=%s AND status='pending'""", (admin["id"], request_id))
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Pending request not found")
+    conn.commit()
+    return {"status":"denied"}
 
 
 def create_notification(conn, type_: str, title: str, body: str,
@@ -1799,19 +1944,30 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), c
 @limiter.limit("5/hour")
 async def signup(request: Request, body: SignupRequest, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM invite_codes WHERE code = %s AND used = FALSE", (body.invite_code,))
-    invite = cur.fetchone()
-    if not invite: raise HTTPException(status_code=400, detail="Invalid or already used invite code")
     cur.execute("SELECT id FROM users WHERE username = %s", (body.username,))
     if cur.fetchone(): raise HTTPException(status_code=400, detail="Username already taken")
+
+    if body.invite_code:
+        # Invited signup — grants whatever role the invite specifies (analyst/admin)
+        cur.execute("SELECT * FROM invite_codes WHERE code = %s AND used = FALSE", (body.invite_code,))
+        invite = cur.fetchone()
+        if not invite: raise HTTPException(status_code=400, detail="Invalid or already used invite code")
+        role = invite["role"]
+    else:
+        # No invite — open explorer signup. Sandboxed: full access to stateless
+        # tools (CVE lookup, KQL/SPL builder, OSINT, CVE Wall, read-only Bulk
+        # IOC Lookup), no access to the owner's personal IOC feed/assets/campaigns.
+        role = "explorer"
+
     uid = f"user--{uuid.uuid4()}"
     cur2 = conn.cursor()
     cur2.execute("INSERT INTO users (id,username,password,role) VALUES (%s,%s,%s,%s)",
-        (uid,body.username,pwd_ctx.hash(body.password),invite["role"]))
-    cur2.execute("UPDATE invite_codes SET used = TRUE WHERE code = %s", (body.invite_code,))
+        (uid,body.username,pwd_ctx.hash(body.password),role))
+    if body.invite_code:
+        cur2.execute("UPDATE invite_codes SET used = TRUE WHERE code = %s", (body.invite_code,))
     conn.commit()
-    token = create_token({"sub":uid,"username":body.username,"role":invite["role"]})
-    return {"access_token":token,"token_type":"bearer","username":body.username,"role":invite["role"]}
+    token = create_token({"sub":uid,"username":body.username,"role":role})
+    return {"access_token":token,"token_type":"bearer","username":body.username,"role":role}
 
 @app.get("/auth/me")
 def me(user=Depends(get_current_user)):
@@ -1982,14 +2138,14 @@ def enable_user(user_id: str, admin=Depends(require_admin), conn=Depends(get_db)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/campaigns")
-def list_campaigns(user=Depends(get_current_user), conn=Depends(get_db)):
+def list_campaigns(user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""SELECT c.*, COUNT(i.id) as ioc_count FROM campaigns c
         LEFT JOIN iocs i ON i.campaign_id = c.id GROUP BY c.id ORDER BY c.created_at DESC""")
     return cur.fetchall()
 
 @app.post("/campaigns", status_code=201)
-def create_campaign(body: CampaignIn, user=Depends(get_current_user), conn=Depends(get_db)):
+def create_campaign(body: CampaignIn, user=Depends(require_full_access), conn=Depends(get_db)):
     cid = f"campaign--{uuid.uuid4()}"
     cur = conn.cursor()
     cur.execute("INSERT INTO campaigns (id,name,description,threat_actor,industry_targets,created_by) VALUES (%s,%s,%s,%s,%s,%s)",
@@ -2010,7 +2166,7 @@ def delete_campaign(campaign_id: str, admin=Depends(require_admin), conn=Depends
 @app.get("/iocs")
 def list_iocs(industry: Optional[str]=None, tlp: Optional[str]=None, ioc_type: Optional[str]=None,
               include_expired: bool=False, include_fp: bool=False, campaign_id: Optional[str]=None,
-              user=Depends(get_current_user), conn=Depends(get_db)):
+              user=Depends(require_full_access), conn=Depends(get_db)):
     cur   = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     query = """SELECT i.*, u.username as author, c.name as campaign_name FROM iocs i
         LEFT JOIN users u ON i.created_by = u.id
@@ -2030,7 +2186,7 @@ def list_iocs(industry: Optional[str]=None, tlp: Optional[str]=None, ioc_type: O
     return rows
 
 @app.get("/iocs/search")
-def search_iocs(q: str, user=Depends(get_current_user), conn=Depends(get_db)):
+def search_iocs(q: str, user=Depends(require_full_access), conn=Depends(get_db)):
     normalized = refang(q.strip())
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""SELECT i.*, u.username as author FROM iocs i LEFT JOIN users u ON i.created_by = u.id
@@ -2043,7 +2199,7 @@ def search_iocs(q: str, user=Depends(get_current_user), conn=Depends(get_db)):
     return {"query":q,"normalized":normalized,"count":len(rows),"results":rows}
 
 @app.post("/iocs/check")
-def check_duplicate(body: dict, user=Depends(get_current_user), conn=Depends(get_db)):
+def check_duplicate(body: dict, user=Depends(require_full_access), conn=Depends(get_db)):
     value = refang(body.get("value","").strip())
     cur   = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT i.*, u.username as author FROM iocs i LEFT JOIN users u ON i.created_by = u.id WHERE i.value = %s", (value,))
@@ -2051,7 +2207,7 @@ def check_duplicate(body: dict, user=Depends(get_current_user), conn=Depends(get
     return {"exists":bool(existing),"existing":existing}
 
 @app.post("/iocs", status_code=201)
-async def add_ioc(ioc: IOCIn, user=Depends(get_current_user), conn=Depends(get_db)):
+async def add_ioc(ioc: IOCIn, user=Depends(require_full_access), conn=Depends(get_db)):
     canonical = refang(ioc.value.strip()); defanged = defang(canonical, ioc.type)
     enrichment = await enrich(ioc.type, canonical, ioc.confidence, conn, user=user)
     final_confidence = enrichment.get("calculated_confidence", ioc.confidence)
@@ -2084,7 +2240,7 @@ class BulkIOCCreate(BaseModel):
     items: List[BulkIOCItem]
 
 @app.post("/iocs/bulk-create", status_code=201)
-async def bulk_create_iocs(body: BulkIOCCreate, user=Depends(get_current_user), conn=Depends(get_db)):
+async def bulk_create_iocs(body: BulkIOCCreate, user=Depends(require_full_access), conn=Depends(get_db)):
     """
     Add multiple IOCs to the feed in one call — used by Bulk Lookup's
     'Add Selected to Feed' action. Reuses enrichment data already computed
@@ -2122,7 +2278,7 @@ async def bulk_create_iocs(body: BulkIOCCreate, user=Depends(get_current_user), 
             "created_count": len(created), "skipped_count": len(skipped)}
 
 @app.patch("/iocs/{ioc_id}/false-positive")
-def toggle_fp(ioc_id: str, body: FPUpdate, user=Depends(get_current_user), conn=Depends(get_db)):
+def toggle_fp(ioc_id: str, body: FPUpdate, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT created_by FROM iocs WHERE id = %s", (ioc_id,))
     ioc = cur.fetchone()
@@ -2135,13 +2291,13 @@ def toggle_fp(ioc_id: str, body: FPUpdate, user=Depends(get_current_user), conn=
     conn.commit(); return {"status":"updated","false_positive":body.false_positive}
 
 @app.patch("/iocs/{ioc_id}/campaign")
-def assign_campaign(ioc_id: str, body: dict, user=Depends(get_current_user), conn=Depends(get_db)):
+def assign_campaign(ioc_id: str, body: dict, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor()
     cur.execute("UPDATE iocs SET campaign_id = %s WHERE id = %s", (body.get("campaign_id"), ioc_id))
     conn.commit(); return {"status":"updated"}
 
 @app.post("/iocs/{ioc_id}/re-enrich")
-async def re_enrich(ioc_id: str, user=Depends(get_current_user), conn=Depends(get_db)):
+async def re_enrich(ioc_id: str, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM iocs WHERE id = %s", (ioc_id,))
     ioc = cur.fetchone()
@@ -2236,10 +2392,14 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
                         "reason": "; ".join(flags) if flags else "No red flags in filename — submit the file's MD5/SHA256 hash for a real reputation check",
                         "enrichment": {"flags": flags}, "geo": None}
 
-            # Reuse a fresh cached enrichment from an existing IOC record if one exists
-            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute("SELECT * FROM iocs WHERE value = %s", (refanged,))
-            existing = cur.fetchone()
+            # Reuse a fresh cached enrichment from an existing IOC record if one
+            # exists — but never for explorer role, since that would leak
+            # whether/what the owner has personally tracked on this indicator
+            existing = None
+            if user.get("role") != "explorer":
+                cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cur.execute("SELECT * FROM iocs WHERE value = %s", (refanged,))
+                existing = cur.fetchone()
 
             enrichment = await enrich(ioc_type, refanged, 50, conn,
                 force=False, existing=existing.get("enrichment") if existing else None, user=user)
@@ -2315,13 +2475,13 @@ async def bulk_ioc_lookup_file(file: UploadFile = File(...), user=Depends(get_cu
 
 
 @app.get("/iocs/{ioc_id}/score-history")
-def score_history(ioc_id: str, user=Depends(get_current_user), conn=Depends(get_db)):
+def score_history(ioc_id: str, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM ioc_score_history WHERE ioc_id = %s ORDER BY created_at DESC", (ioc_id,))
     return cur.fetchall()
 
 @app.delete("/iocs/{ioc_id}")
-def delete_ioc(ioc_id: str, user=Depends(get_current_user), conn=Depends(get_db)):
+def delete_ioc(ioc_id: str, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT created_by, value, type FROM iocs WHERE id = %s", (ioc_id,))
     ioc = cur.fetchone()
@@ -2338,20 +2498,20 @@ def delete_ioc(ioc_id: str, user=Depends(get_current_user), conn=Depends(get_db)
     conn.commit(); return {"status":"deleted"}
 
 @app.get("/iocs/{ioc_id}/notes")
-def get_notes(ioc_id: str, user=Depends(get_current_user), conn=Depends(get_db)):
+def get_notes(ioc_id: str, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM ioc_notes WHERE ioc_id = %s ORDER BY created_at ASC", (ioc_id,))
     return cur.fetchall()
 
 @app.post("/iocs/{ioc_id}/notes", status_code=201)
-def add_note(ioc_id: str, body: NoteIn, user=Depends(get_current_user), conn=Depends(get_db)):
+def add_note(ioc_id: str, body: NoteIn, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor()
     cur.execute("INSERT INTO ioc_notes (ioc_id,note,username,user_id) VALUES (%s,%s,%s,%s)",
         (ioc_id,body.note,user["username"],user["id"]))
     conn.commit(); return {"status":"created"}
 
 @app.delete("/iocs/{ioc_id}/notes/{note_id}")
-def delete_note(ioc_id: str, note_id: int, user=Depends(get_current_user), conn=Depends(get_db)):
+def delete_note(ioc_id: str, note_id: int, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT user_id FROM ioc_notes WHERE id = %s AND ioc_id = %s", (note_id,ioc_id))
     note = cur.fetchone()
@@ -2363,7 +2523,7 @@ def delete_note(ioc_id: str, note_id: int, user=Depends(get_current_user), conn=
     conn.commit(); return {"status":"deleted"}
 
 @app.get("/iocs/{ioc_id}/relationships")
-def get_relationships(ioc_id: str, user=Depends(get_current_user), conn=Depends(get_db)):
+def get_relationships(ioc_id: str, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""SELECT r.*,
         s.value as source_value, s.type as source_type, s.value_defanged as source_defanged,
@@ -2374,7 +2534,7 @@ def get_relationships(ioc_id: str, user=Depends(get_current_user), conn=Depends(
     return cur.fetchall()
 
 @app.post("/iocs/{ioc_id}/relationships", status_code=201)
-def add_relationship(ioc_id: str, body: RelationshipIn, user=Depends(get_current_user), conn=Depends(get_db)):
+def add_relationship(ioc_id: str, body: RelationshipIn, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor()
     cur.execute("SELECT id FROM iocs WHERE id = %s", (ioc_id,))
     if not cur.fetchone(): raise HTTPException(status_code=404, detail="Source IOC not found")
@@ -2385,13 +2545,13 @@ def add_relationship(ioc_id: str, body: RelationshipIn, user=Depends(get_current
     conn.commit(); return {"status":"created"}
 
 @app.delete("/iocs/relationships/{rel_id}")
-def delete_relationship(rel_id: int, user=Depends(get_current_user), conn=Depends(get_db)):
+def delete_relationship(rel_id: int, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor()
     cur.execute("DELETE FROM ioc_relationships WHERE id = %s", (rel_id,))
     conn.commit(); return {"status":"deleted"}
 
 @app.get("/iocs/pivot/subnet/{ip}")
-def subnet_pivot(ip: str, user=Depends(get_current_user), conn=Depends(get_db)):
+def subnet_pivot(ip: str, user=Depends(require_full_access), conn=Depends(get_db)):
     try:
         parts = ip.split(".")
         if len(parts) != 4: raise ValueError
@@ -2409,7 +2569,7 @@ def subnet_pivot(ip: str, user=Depends(get_current_user), conn=Depends(get_db)):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/assets")
-def list_assets(user=Depends(get_current_user), conn=Depends(get_db)):
+def list_assets(user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""SELECT a.*,
         COUNT(DISTINCT cf.id) as cve_count,
@@ -2420,7 +2580,7 @@ def list_assets(user=Depends(get_current_user), conn=Depends(get_db)):
     return cur.fetchall()
 
 @app.post("/assets", status_code=201)
-async def create_asset(body: AssetIn, user=Depends(get_current_user), conn=Depends(get_db)):
+async def create_asset(body: AssetIn, user=Depends(require_full_access), conn=Depends(get_db)):
     aid = f"asset--{uuid.uuid4()}"
     cpe = body.cpe or ""
 
@@ -2750,7 +2910,7 @@ def delete_asset(asset_id: str, admin=Depends(require_admin), conn=Depends(get_d
 @app.get("/cves")
 def list_cves(asset_id: Optional[str]=None, patch_available: Optional[bool]=None,
               kev_only: bool=False, min_score: Optional[float]=None,
-              user=Depends(get_current_user), conn=Depends(get_db)):
+              user=Depends(require_full_access), conn=Depends(get_db)):
     cur   = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     query = """SELECT cf.*, a.name as asset_name, a.criticality as asset_criticality
         FROM cve_findings cf LEFT JOIN assets a ON cf.asset_id = a.id WHERE 1=1"""
@@ -2850,7 +3010,7 @@ async def poll_now(admin=Depends(require_admin), conn=Depends(get_db)):
             "patches_detected":len(all_patched),"assets_polled":len(assets)}
 
 @app.get("/cves/stats/summary")
-def cve_summary(user=Depends(get_current_user), conn=Depends(get_db)):
+def cve_summary(user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT COUNT(*) as total FROM cve_findings")
     total = cur.fetchone()["total"]
@@ -2876,7 +3036,7 @@ def cve_summary(user=Depends(get_current_user), conn=Depends(get_db)):
             "last_poll":last_poll["polled_at"].isoformat() if last_poll else None}
 
 @app.get("/cves/{cve_id}")
-def get_cve(cve_id: str, user=Depends(get_current_user), conn=Depends(get_db)):
+def get_cve(cve_id: str, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""SELECT cf.*, a.name as asset_name FROM cve_findings cf
         LEFT JOIN assets a ON cf.asset_id = a.id WHERE cf.cve_id = %s""", (cve_id,))
@@ -2891,7 +3051,7 @@ def get_cve(cve_id: str, user=Depends(get_current_user), conn=Depends(get_db)):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/stats/dashboard")
-def dashboard(user=Depends(get_current_user), conn=Depends(get_db)):
+def dashboard(user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT COUNT(*) as total FROM iocs WHERE (valid_until IS NULL OR valid_until > NOW()) AND (false_positive IS NULL OR false_positive = FALSE)")
     total = cur.fetchone()["total"]
@@ -3327,7 +3487,7 @@ async def search_cves(
     year: int = 0,
     limit: int = 50,
     offset: int = 0,
-    user=Depends(get_current_user),
+    user=Depends(require_full_access),
     conn=Depends(get_db)
 ):
     """Full CVE search with filters — OpenCVE-parity search endpoint."""
@@ -4091,7 +4251,7 @@ async def mitre_actor_lookup(name: str, user=Depends(get_current_user)):
 STIX_TYPE_MAP = {"ipv4-addr":"IPv4","ipv6-addr":"IPv6","domain-name":"Domain","url":"URL","email-addr":"Email"}
 
 @app.post("/iocs/import/stix")
-async def import_stix(body: STIXImport, user=Depends(get_current_user), conn=Depends(get_db)):
+async def import_stix(body: STIXImport, user=Depends(require_full_access), conn=Depends(get_db)):
     objects = body.bundle.get("objects",[]); results = {"imported":0,"skipped":0,"errors":[]}
     cur = conn.cursor()
     for obj in objects:
@@ -4125,7 +4285,7 @@ async def import_stix(body: STIXImport, user=Depends(get_current_user), conn=Dep
     conn.commit(); return results
 
 @app.post("/iocs/import/taxii")
-async def poll_taxii(body: TAXIIPoll, user=Depends(get_current_user), conn=Depends(get_db)):
+async def poll_taxii(body: TAXIIPoll, user=Depends(require_full_access), conn=Depends(get_db)):
     headers = {"Accept":"application/taxii+json;version=2.1"}
     if body.token:   headers["Authorization"] = f"Bearer {body.token}"
     if body.api_key: headers["x-api-key"] = body.api_key
@@ -4139,7 +4299,7 @@ async def poll_taxii(body: TAXIIPoll, user=Depends(get_current_user), conn=Depen
     return {"taxii_url":url,"objects_received":len(objects),**result}
 
 @app.post("/iocs/import/misp")
-async def misp_pull(body: MISPPull, user=Depends(get_current_user), conn=Depends(get_db)):
+async def misp_pull(body: MISPPull, user=Depends(require_full_access), conn=Depends(get_db)):
     headers = {"Authorization":body.misp_key,"Accept":"application/json","Content-Type":"application/json"}
     url = f"{body.misp_url.rstrip('/')}/attributes/restSearch"
     payload = {"returnFormat":"json","limit":body.limit,"type":["ip-dst","ip-src","domain","url","md5","sha1","sha256"]}
@@ -4169,7 +4329,7 @@ async def misp_pull(body: MISPPull, user=Depends(get_current_user), conn=Depends
     conn.commit(); return results
 
 @app.post("/iocs/import/csv")
-async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user), conn=Depends(get_db)):
+async def import_csv(file: UploadFile = File(...), user=Depends(require_full_access), conn=Depends(get_db)):
     content = await file.read()
     reader  = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
     results = {"imported":0,"skipped":0,"errors":[]}; cur = conn.cursor()
@@ -4195,7 +4355,7 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
 
 @app.get("/stix/bundle")
 def stix_bundle(industry: Optional[str]=None, include_expired: bool=False,
-                user=Depends(get_current_user), conn=Depends(get_db)):
+                user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     q = "SELECT * FROM iocs WHERE (false_positive IS NULL OR false_positive = FALSE)"; params = []
     if industry: q += " AND industry = %s"; params.append(industry)
@@ -4205,7 +4365,7 @@ def stix_bundle(industry: Optional[str]=None, include_expired: bool=False,
             "created":datetime.now(timezone.utc).isoformat(),"objects":[row_to_stix(r) for r in rows]}
 
 @app.get("/taxii/")
-def taxii_discovery(user=Depends(get_current_user)):
+def taxii_discovery(user=Depends(require_full_access)):
     return JSONResponse(content={"title":"ThreatFeed Intelligence Platform",
         "description":"Industry-vertical IOC intelligence","contact":"ti@your-domain.com",
         "default":f"{SERVER_URL}/","api_roots":[f"{SERVER_URL}/"]},
