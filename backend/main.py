@@ -1098,6 +1098,8 @@ async def vt_ip(ip, conn=None, key: str = None, user_id: str = None):
     if conn: log_api_call(conn,"virustotal",ip,False,user_id)
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.get(f"https://www.virustotal.com/api/v3/ip_addresses/{ip}", headers={"x-apikey":k})
+    if r.status_code == 401: return {"source":"VirusTotal","error":"Invalid API key"}
+    if r.status_code == 429: return {"source":"VirusTotal","error":"Rate limit reached"}
     if r.status_code != 200: return {"source":"VirusTotal","error":f"HTTP {r.status_code}"}
     attrs = r.json().get("data",{}).get("attributes",{})
     stats = attrs.get("last_analysis_stats",{})
@@ -1112,6 +1114,8 @@ async def vt_domain(domain, conn=None, key: str = None, user_id: str = None):
     if conn: log_api_call(conn,"virustotal",domain,False,user_id)
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.get(f"https://www.virustotal.com/api/v3/domains/{domain}", headers={"x-apikey":k})
+    if r.status_code == 401: return {"source":"VirusTotal","error":"Invalid API key"}
+    if r.status_code == 429: return {"source":"VirusTotal","error":"Rate limit reached"}
     if r.status_code != 200: return {"source":"VirusTotal","error":f"HTTP {r.status_code}"}
     attrs = r.json().get("data",{}).get("attributes",{})
     stats = attrs.get("last_analysis_stats",{})
@@ -1139,10 +1143,37 @@ async def vt_url_lookup(url_val, conn=None, key: str = None, user_id: str = None
     if not k: return {"source":"VirusTotal","skipped":True}
     if conn: log_api_call(conn,"virustotal",url_val,False,user_id)
     url_id = base64.urlsafe_b64encode(url_val.encode()).decode().rstrip("=")
-    async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.get(f"https://www.virustotal.com/api/v3/urls/{url_id}", headers={"x-apikey":k})
-    if r.status_code == 404: return {"source":"VirusTotal","found":False,"vt_score":0}
-    if r.status_code != 200: return {"source":"VirusTotal","error":f"HTTP {r.status_code}"}
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get(f"https://www.virustotal.com/api/v3/urls/{url_id}",
+                        headers={"x-apikey":k})
+        if r.status_code == 404:
+            # URL not in VT yet — submit it for scanning, then re-check once
+            try:
+                submit_r = await c.post("https://www.virustotal.com/api/v3/urls",
+                    headers={"x-apikey":k},
+                    data={"url": url_val})
+                if submit_r.status_code in (200, 201):
+                    analysis_id = submit_r.json().get("data",{}).get("id","")
+                    # Wait briefly and poll the analysis result
+                    await asyncio.sleep(8)
+                    poll_r = await c.get(f"https://www.virustotal.com/api/v3/analyses/{analysis_id}",
+                                         headers={"x-apikey":k})
+                    if poll_r.status_code == 200:
+                        attrs = poll_r.json().get("data",{}).get("attributes",{})
+                        stats = attrs.get("stats",{})
+                        mal   = stats.get("malicious",0); total = sum(stats.values()) or 1
+                        if attrs.get("status") == "completed":
+                            return {"source":"VirusTotal","malicious":mal,"total":total,
+                                    "vt_score":round((mal/total)*100) if total else 0,
+                                    "link":f"https://www.virustotal.com/gui/url/{url_id}",
+                                    "note":"Newly submitted — first scan"}
+            except Exception:
+                pass
+            return {"source":"VirusTotal","found":False,"vt_score":0,
+                    "note":"Not previously scanned — submitted for analysis"}
+        if r.status_code == 401: return {"source":"VirusTotal","error":"Invalid API key"}
+        if r.status_code == 429: return {"source":"VirusTotal","error":"Rate limit reached — try again later"}
+        if r.status_code != 200: return {"source":"VirusTotal","error":f"HTTP {r.status_code}"}
     stats = r.json().get("data",{}).get("attributes",{}).get("last_analysis_stats",{})
     mal = stats.get("malicious",0); total = sum(stats.values()) or 1
     return {"source":"VirusTotal","malicious":mal,"total":total,
