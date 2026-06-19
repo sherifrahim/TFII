@@ -101,6 +101,7 @@ const CVE_NAV=[
 ];
 const ADMIN_NAV=[
   {id:"settings", label:"Settings",      icon:"settings"},
+  {id:"health",   label:"Health",        icon:"heartbeat"},
   {id:"users",    label:"Users",         icon:"usergroup"},
   {id:"invites",  label:"Invites",       icon:"mail"},
 ];
@@ -124,6 +125,7 @@ function NavIcon({name,size=16,color="currentColor"}){
     rss:      <svg {...s}><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>,
     users:    <svg {...s}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
     radar:    <svg {...s}><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>,
+    heartbeat:<svg {...s}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>,
     code:     <svg {...s}><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>,
     settings: <svg {...s}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
     usergroup:<svg {...s}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
@@ -4634,6 +4636,193 @@ function ApiKeysSection({token,C}){
 
 const DAILY_FREE_QUOTA = 10;
 
+// ── HEALTH CHECK DASHBOARD ────────────────────────────────────────────────────
+function HealthPage({token,C}){
+  const [data,setData]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [lastRun,setLastRun]=useState(null);
+
+  async function runCheck(){
+    setLoading(true);
+    const r=await api("/admin/health",{},token);
+    if(r.ok){setData(await r.json());setLastRun(new Date());}
+    setLoading(false);
+  }
+
+  useEffect(()=>{runCheck();},[]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  function StatusDot({ok}){
+    return <span style={{display:"inline-block",width:10,height:10,borderRadius:"50%",
+      background:ok?C.green:C.red,flexShrink:0,marginTop:2}}/>;
+  }
+
+  function CheckCard({title,check}){
+    if(!check) return null;
+    const ok=check.ok!==false;
+    return(
+      <div style={{background:C.surfaceHi,border:`1px solid ${ok?C.border:C.red+"40"}`,
+        borderRadius:10,padding:"12px 16px"}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:ok?0:8}}>
+          <StatusDot ok={ok}/>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi}}>{title}</div>
+            <div style={{fontSize:11,color:ok?C.muted:C.red,marginTop:2}}>{check.status||""}</div>
+          </div>
+        </div>
+        {/* Extra detail rows */}
+        {check.iocs!==undefined&&(
+          <div style={{display:"flex",gap:16,marginTop:8,flexWrap:"wrap"}}>
+            {[["IOCs",check.iocs],["CVE Findings",check.cve_findings],["Assets",check.assets],["Users",check.active_users]].map(([l,v])=>v!==undefined&&(
+              <div key={l} style={{fontSize:11,color:C.muted}}>
+                <span style={{fontWeight:600,color:C.text}}>{v}</span> {l}
+              </div>
+            ))}
+          </div>
+        )}
+        {check.used_pct!==undefined&&(
+          <div style={{marginTop:8}}>
+            <div style={{height:4,background:C.border,borderRadius:2,overflow:"hidden"}}>
+              <div style={{width:`${Math.min(check.used_pct,100)}%`,height:"100%",borderRadius:2,
+                background:check.used_pct>90?C.red:check.used_pct>75?C.amber:C.green}}/>
+            </div>
+          </div>
+        )}
+        {check.age_hours!==undefined&&(
+          <div style={{marginTop:8,fontSize:11,color:C.muted}}>
+            Polled {check.assets_polled} assets · {check.new_cves} new CVEs · {check.patches_detected} patches
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function ApiKeyRow({svc,info}){
+    const labels={virustotal:"VirusTotal",abuseipdb:"AbuseIPDB",urlhaus:"URLhaus",
+      shodan:"Shodan",hibp:"HaveIBeenPwned",groq:"Groq",nvd:"NVD"};
+    return(
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+        padding:"6px 0",borderBottom:`1px solid ${C.border}20`}}>
+        <span style={{fontSize:12,color:C.text}}>{labels[svc]||svc}</span>
+        <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:600,
+          background:info.configured?C.green+"15":C.surfaceHi,
+          color:info.configured?C.green:C.muted}}>
+          {info.configured ? info.source : "not configured"}
+        </span>
+      </div>
+    );
+  }
+
+  function ConnRow({name,check}){
+    return(
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+        padding:"6px 0",borderBottom:`1px solid ${C.border}20`}}>
+        <span style={{fontSize:12,color:C.text}}>{name}</span>
+        <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:600,
+          background:check.ok?C.green+"15":C.red+"15",
+          color:check.ok?C.green:C.red}}>
+          {check.status}
+        </span>
+      </div>
+    );
+  }
+
+  const overall=data?.overall;
+  const overallColor=overall==="ok"?C.green:overall==="degraded"?C.red:C.muted;
+
+  return(
+    <div style={{maxWidth:900}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:18,fontWeight:700,color:C.white||C.textHi}}>System Health</div>
+          {lastRun&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>
+            Last checked: {lastRun.toLocaleTimeString()}
+          </div>}
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          {overall&&(
+            <div style={{fontSize:12,fontWeight:700,padding:"6px 14px",borderRadius:8,
+              background:overallColor+"15",border:`1px solid ${overallColor}40`,color:overallColor}}>
+              {overall==="ok"?"✓ ALL SYSTEMS OK":"⚠ DEGRADED"}
+            </div>
+          )}
+          <Btn onClick={runCheck} disabled={loading} variant="dim" C={C}>
+            {loading?"Checking...":"↻ Refresh"}
+          </Btn>
+        </div>
+      </div>
+
+      {loading&&!data&&(
+        <div style={{textAlign:"center",padding:48,color:C.muted,fontSize:14}}>Running health checks...</div>
+      )}
+
+      {data&&(
+        <div style={{display:"grid",gap:12,gridTemplateColumns:"1fr 1fr"}}>
+          {/* Left column */}
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <CheckCard title="Database" check={data.checks?.database}/>
+            <CheckCard title="CVE Poll" check={data.checks?.cve_poll}/>
+            <CheckCard title="Disk" check={data.checks?.disk}/>
+            <CheckCard title="Memory" check={data.checks?.memory}/>
+          </div>
+          {/* Right column */}
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            {/* API Keys */}
+            <div style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 16px"}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi,marginBottom:10}}>
+                API Keys ({data.checks?.api_keys?.status})
+              </div>
+              {data.checks?.api_keys?.services&&Object.entries(data.checks.api_keys.services).map(([svc,info])=>(
+                <ApiKeyRow key={svc} svc={svc} info={info}/>
+              ))}
+            </div>
+            {/* Connectivity */}
+            <div style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 16px"}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi,marginBottom:10}}>
+                External Connectivity
+              </div>
+              {data.checks?.connectivity&&Object.entries(data.checks.connectivity).map(([name,check])=>(
+                <ConnRow key={name} name={name} check={check}/>
+              ))}
+            </div>
+            {/* Access Requests */}
+            {data.checks?.access_requests&&(
+              <div style={{background:C.surfaceHi,border:`1px solid ${
+                (data.checks.access_requests.pending||0)>0?C.amber+"40":C.border}`,
+                borderRadius:10,padding:"12px 16px"}}>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi}}>Access Requests</div>
+                  {data.checks.access_requests.pending>0&&(
+                    <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
+                      background:C.amber+"15",color:C.amber}}>
+                      {data.checks.access_requests.pending} pending
+                    </span>
+                  )}
+                </div>
+                <div style={{fontSize:11,color:C.muted,marginTop:4}}>{data.checks.access_requests.status}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Server-side script tip */}
+      <div style={{marginTop:20,padding:"14px 16px",background:C.surfaceHi,
+        border:`1px solid ${C.border}`,borderRadius:10}}>
+        <div style={{fontSize:12,fontWeight:600,color:C.white||C.textHi,marginBottom:6}}>
+          Server-side health check script
+        </div>
+        <div style={{fontSize:11,color:C.muted,marginBottom:8}}>
+          For a deeper server check (systemd, nginx, SSL cert expiry, disk, memory) run directly on the VM:
+        </div>
+        <code style={{display:"block",fontSize:11,padding:"8px 12px",background:C.surface,
+          borderRadius:6,color:C.accentText,fontFamily:"monospace"}}>
+          bash /home/ubuntu/threatfeed-repo/scripts/health_check.sh
+        </code>
+      </div>
+    </div>
+  );
+}
+
 function PasswordChangeCard({token,C}){
   const [cur,setCur]=useState(""); const [nw,setNw]=useState(""); const [conf,setConf]=useState("");
   const [msg,setMsg]=useState(""); const [err,setErr]=useState(""); const [saving,setSaving]=useState(false);
@@ -5424,6 +5613,7 @@ export default function App(){
           {view==="public"&&<PublicSearch C={C}/>}
           {view==="bulklookup"&&<BulkLookup token={token} C={C}/>}
           {view==="settings"&&<SettingsPage themeName={themeName} setThemeName={setThemeName} token={token} onLogout={logout} C={C} me={me} onOpenApiKeys={()=>setShowApiKeyModal(true)}/>}
+          {view==="health"&&me?.role==="admin"&&<HealthPage token={token} C={C}/>}
 
           {view==="feed"&&(
             <>

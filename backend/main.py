@@ -2955,6 +2955,150 @@ def health():
     """Docker healthcheck endpoint."""
     return {"status": "ok", "service": "TFII"}
 
+@app.get("/admin/health")
+async def health_detailed(admin=Depends(require_admin), conn=Depends(get_db)):
+    """
+    Detailed system health check — admin only.
+    Checks: DB, disk, memory, API keys, scheduler, last CVE poll, API quotas.
+    """
+    import shutil, time
+    report = {"checked_at": datetime.now(timezone.utc).isoformat(), "checks": {}}
+    overall_ok = True
+
+    # ── 1. Database ──────────────────────────────────────────────────────────
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM iocs")
+        ioc_count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM assets WHERE active=TRUE")
+        asset_count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM cve_findings")
+        cve_count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM users WHERE active=TRUE")
+        user_count = cur.fetchone()[0]
+        report["checks"]["database"] = {
+            "ok": True, "status": "Connected",
+            "iocs": ioc_count, "assets": asset_count,
+            "cve_findings": cve_count, "active_users": user_count
+        }
+    except Exception as e:
+        report["checks"]["database"] = {"ok": False, "status": f"ERROR: {e}"}
+        overall_ok = False
+
+    # ── 2. Last CVE poll ─────────────────────────────────────────────────────
+    try:
+        cur.execute("""SELECT polled_at, assets_polled, new_cves, patches_detected
+            FROM cve_poll_log ORDER BY polled_at DESC LIMIT 1""")
+        last_poll = cur.fetchone()
+        if last_poll:
+            polled_at, assets_polled, new_cves, patches = last_poll
+            age_hours = (datetime.now(timezone.utc) - polled_at.replace(tzinfo=timezone.utc)).total_seconds() / 3600
+            stale = age_hours > 8
+            report["checks"]["cve_poll"] = {
+                "ok": not stale,
+                "last_poll": polled_at.isoformat(),
+                "age_hours": round(age_hours, 1),
+                "assets_polled": assets_polled,
+                "new_cves": new_cves,
+                "patches_detected": patches,
+                "status": f"Last poll {round(age_hours,1)}h ago" + (" — STALE (>8h)" if stale else "")
+            }
+            if stale: overall_ok = False
+        else:
+            report["checks"]["cve_poll"] = {"ok": False, "status": "No poll has run yet"}
+    except Exception as e:
+        report["checks"]["cve_poll"] = {"ok": False, "status": f"ERROR: {e}"}
+
+    # ── 3. Disk space ────────────────────────────────────────────────────────
+    try:
+        total, used, free = shutil.disk_usage("/")
+        pct_used = round(used / total * 100, 1)
+        low_disk = free < 1 * 1024**3  # warn if < 1GB free
+        report["checks"]["disk"] = {
+            "ok": not low_disk,
+            "total_gb": round(total / 1024**3, 1),
+            "used_gb":  round(used  / 1024**3, 1),
+            "free_gb":  round(free  / 1024**3, 1),
+            "used_pct": pct_used,
+            "status": f"{pct_used}% used, {round(free/1024**3,1)}GB free" + (" — LOW DISK" if low_disk else "")
+        }
+        if low_disk: overall_ok = False
+    except Exception as e:
+        report["checks"]["disk"] = {"ok": False, "status": f"ERROR: {e}"}
+
+    # ── 4. Memory ────────────────────────────────────────────────────────────
+    try:
+        with open("/proc/meminfo") as f:
+            meminfo = {l.split(":")[0]: int(l.split()[1]) for l in f if ":" in l and "kB" in l}
+        total_mb = meminfo.get("MemTotal", 0) // 1024
+        free_mb  = (meminfo.get("MemAvailable", 0)) // 1024
+        used_mb  = total_mb - free_mb
+        pct_used = round(used_mb / total_mb * 100, 1) if total_mb else 0
+        low_mem  = free_mb < 256  # warn if < 256MB available
+        report["checks"]["memory"] = {
+            "ok": not low_mem,
+            "total_mb": total_mb, "used_mb": used_mb, "free_mb": free_mb,
+            "used_pct": pct_used,
+            "status": f"{pct_used}% used, {free_mb}MB available" + (" — LOW MEMORY" if low_mem else "")
+        }
+        if low_mem: overall_ok = False
+    except Exception as e:
+        report["checks"]["memory"] = {"ok": False, "status": f"ERROR: {e}"}
+
+    # ── 5. API key status ────────────────────────────────────────────────────
+    try:
+        cur.execute("SELECT id FROM users WHERE role='admin' LIMIT 1")
+        admin_row = cur.fetchone()
+        quota = get_all_quota_status(conn, admin_row[0] if admin_row else "", True)
+        key_summary = {}
+        for svc, info in quota.items():
+            has_key = info.get("has_personal_key") or bool(PLATFORM_KEYS.get(svc,""))
+            key_summary[svc] = {
+                "configured": has_key,
+                "source": "personal" if info.get("has_personal_key") else ("env" if PLATFORM_KEYS.get(svc,"") else "none")
+            }
+        report["checks"]["api_keys"] = {"ok": True, "services": key_summary,
+            "status": f"{sum(1 for v in key_summary.values() if v['configured'])}/{len(key_summary)} services configured"}
+    except Exception as e:
+        report["checks"]["api_keys"] = {"ok": False, "status": f"ERROR: {e}"}
+
+    # ── 6. External connectivity (quick probe) ───────────────────────────────
+    connectivity = {}
+    probes = [
+        ("NVD API", "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1"),
+        ("CISA KEV", "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"),
+        ("EPSS", "https://api.first.org/data/v1/epss?limit=1"),
+    ]
+    async def probe(name, url):
+        try:
+            async with httpx.AsyncClient(timeout=6) as c:
+                r = await c.get(url)
+            return name, r.status_code in (200, 206), f"HTTP {r.status_code}"
+        except Exception as ex:
+            return name, False, str(ex)[:60]
+
+    probe_results = await asyncio.gather(*[probe(n,u) for n,u in probes], return_exceptions=True)
+    for pr in probe_results:
+        if isinstance(pr, tuple):
+            name, ok, msg = pr
+            connectivity[name] = {"ok": ok, "status": msg}
+            if not ok: overall_ok = False
+    report["checks"]["connectivity"] = connectivity
+
+    # ── 7. Pending access requests ────────────────────────────────────────────
+    try:
+        cur.execute("SELECT COUNT(*) FROM access_requests WHERE status='pending'")
+        pending = cur.fetchone()[0]
+        report["checks"]["access_requests"] = {
+            "ok": True, "pending": pending,
+            "status": f"{pending} pending request(s)" if pending else "No pending requests"
+        }
+    except Exception as e:
+        report["checks"]["access_requests"] = {"ok": True, "pending": 0, "status": "N/A"}
+
+    report["overall"] = "ok" if overall_ok else "degraded"
+    return report
+
 
 def geo_stats(user=Depends(get_current_user), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
