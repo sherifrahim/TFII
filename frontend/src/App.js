@@ -4640,8 +4640,6 @@ function ApiKeysSection({token,C}){
 
 const DAILY_FREE_QUOTA = 10;
 
-// ── THREAT FEED CONNECTORS PAGE ───────────────────────────────────────────────
-function ConnectorsPage({token,C}){
 // ── CLIENT ADVISORY BUILDER ───────────────────────────────────────────────────
 function AdvisoryBuilder({token,C}){
   const [iocPool,setIocPool]=useState([]);
@@ -5016,7 +5014,8 @@ function AdvisoryBuilder({token,C}){
   );
 }
 
-
+// ── THREAT FEED CONNECTORS PAGE ───────────────────────────────────────────────
+function ConnectorsPage({token,C}){
   const [cfg,setCfg]=useState({
     threatfox_enabled:false, malwarebazaar_enabled:false, urlhaus_enabled:false,
     threatfox_days:1, malwarebazaar_limit:100, urlhaus_limit:100, schedule_hours:24
@@ -6186,9 +6185,9 @@ export default function App(){
           {view==="querygen"&&<QueryGenerator token={token} C={C}/>}
           {view==="public"&&<PublicSearch C={C}/>}
           {view==="bulklookup"&&<BulkLookup token={token} C={C}/>}
-          {view==="advisory"&&<AdvisoryBuilder token={token} C={C}/>}
           {view==="settings"&&<SettingsPage themeName={themeName} setThemeName={setThemeName} token={token} onLogout={logout} C={C} me={me} onOpenApiKeys={()=>setShowApiKeyModal(true)}/>}
           {view==="health"&&me?.role==="admin"&&<HealthPage token={token} C={C}/>}
+          {view==="advisory"&&<AdvisoryBuilder token={token} C={C}/>}
           {view==="connectors"&&me?.role==="admin"&&<ConnectorsPage token={token} C={C}/>}
 
           {view==="feed"&&(
