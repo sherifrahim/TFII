@@ -79,20 +79,22 @@ const THEMES = {
 
 // ── MODE NAV DEFINITIONS ──────────────────────────────────────────────────────
 const IOC_NAV=[
-  {id:"dashboard",label:"Dashboard",     icon:"grid",   locked:true},
-  {id:"feed",     label:"IOC Feed",      icon:"list",   locked:true},
-  {id:"add",      label:"Add IOC",       icon:"plus",   locked:true},
-  {id:"bulklookup",label:"Bulk Lookup",  icon:"search"},
-  {id:"campaigns",label:"Campaigns",     icon:"folder", locked:true},
-  {id:"map",      label:"Geo Map",       icon:"map",    locked:true},
-  {id:"public",   label:"Public Lookup", icon:"search"},
-  {id:"import",   label:"Import",        icon:"upload", locked:true},
-  {id:"export",   label:"Export",        icon:"download",locked:true},
+  {id:"dashboard",  label:"Dashboard",     icon:"grid",   locked:true},
+  {id:"feed",       label:"IOC Feed",      icon:"list",   locked:true},
+  {id:"add",        label:"Add IOC",       icon:"plus",   locked:true},
+  {id:"bulklookup", label:"Bulk Lookup",   icon:"search"},
+  {id:"advisory",   label:"Advisory",      icon:"send",   locked:true},
+  {id:"campaigns",  label:"Campaigns",     icon:"folder", locked:true},
+  {id:"map",        label:"Geo Map",       icon:"map",    locked:true},
+  {id:"public",     label:"Public Lookup", icon:"search"},
+  {id:"import",     label:"Import",        icon:"upload", locked:true},
+  {id:"export",     label:"Export",        icon:"download",locked:true},
 ];
 const CVE_NAV=[
   {id:"dashboard",label:"Dashboard",     icon:"grid",   locked:true},
   {id:"cve",      label:"CVE Monitor",   icon:"shield", locked:true},
   {id:"cvelookup",label:"CVE Lookup",    icon:"search"},
+  {id:"advisory", label:"Advisory",      icon:"send",   locked:true},
   {id:"cvewall",  label:"CVE Wall",      icon:"rss"},
   {id:"intel",    label:"Intel Wall",    icon:"rss"},
   {id:"actors",   label:"Threat Actors", icon:"users"},
@@ -127,6 +129,7 @@ function NavIcon({name,size=16,color="currentColor"}){
     users:    <svg {...s}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
     radar:    <svg {...s}><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>,
     heartbeat:<svg {...s}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>,
+    send:     <svg {...s}><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>,
     code:     <svg {...s}><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>,
     settings: <svg {...s}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
     usergroup:<svg {...s}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
@@ -4639,6 +4642,331 @@ const DAILY_FREE_QUOTA = 10;
 
 // ── THREAT FEED CONNECTORS PAGE ───────────────────────────────────────────────
 function ConnectorsPage({token,C}){
+// ── CLIENT ADVISORY BUILDER ───────────────────────────────────────────────────
+function AdvisoryBuilder({token,C}){
+  const [iocPool,setIocPool]=useState([]);
+  const [poolLoading,setPoolLoading]=useState(true);
+  const [familyFilter,setFamilyFilter]=useState("fintech");
+  const [typeFilter,setTypeFilter]=useState("");
+  const [selectedIocIds,setSelectedIocIds]=useState(new Set());
+  const [cveSearch,setCveSearch]=useState("");
+  const [cveSearching,setCveSearching]=useState(false);
+  const [selectedCves,setSelectedCves]=useState([]);
+  const [clientName,setClientName]=useState("");
+  const [analystName,setAnalystName]=useState("");
+  const [sector,setSector]=useState("Financial Services / Fintech");
+  const [tlp,setTlp]=useState("AMBER");
+  const [customNote,setCustomNote]=useState("");
+  const [generating,setGenerating]=useState(false);
+  const [result,setResult]=useState(null);
+  const [err,setErr]=useState("");
+
+  const MAX_IOCS=5; const MAX_CVES=2;
+
+  // Unique malware families in pool for filter dropdown
+  const families=[...new Set(iocPool.map(i=>i.family).filter(Boolean))].sort();
+
+  useEffect(()=>{
+    loadPool(familyFilter);
+  },[familyFilter,typeFilter]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadPool(fam){
+    setPoolLoading(true);
+    const params=new URLSearchParams({sector:fam==="fintech"?"fintech":"",family:fam==="fintech"?"":fam,limit:80});
+    if(typeFilter) params.set("ioc_type",typeFilter);
+    const r=await api(`/advisory/iocs?${params}`,{},token);
+    if(r.ok) setIocPool(await r.json());
+    setPoolLoading(false);
+  }
+
+  function toggleIoc(id){
+    setSelectedIocIds(prev=>{
+      const n=new Set(prev);
+      if(n.has(id)) n.delete(id);
+      else if(n.size<MAX_IOCS) n.add(id);
+      return n;
+    });
+  }
+
+  async function searchCve(){
+    const q=cveSearch.trim().toUpperCase();
+    if(!q.startsWith("CVE-")||selectedCves.some(c=>c.id===q)) return;
+    if(selectedCves.length>=MAX_CVES){setErr(`Max ${MAX_CVES} CVEs`);return;}
+    setCveSearching(true);setErr("");
+    const r=await api(`/cve/lookup?id=${q}`,{},token);
+    if(r.ok){
+      const d=await r.json();
+      const nvd=d.sources?.find(s=>s.source==="NVD")||d.sources?.[0]||{};
+      setSelectedCves(p=>[...p,{
+        id:q,
+        description:(nvd.description||"No description available.").slice(0,400),
+        cvss_score: nvd.cvss_score||"N/A",
+        severity:   nvd.severity||"UNKNOWN",
+      }]);
+      setCveSearch("");
+    } else setErr("CVE not found");
+    setCveSearching(false);
+  }
+
+  async function generate(){
+    if(!clientName.trim()){setErr("Client name is required.");return;}
+    if(selectedIocIds.size===0&&selectedCves.length===0){setErr("Select at least one IOC or CVE.");return;}
+    setGenerating(true);setErr("");setResult(null);
+    const r=await api("/advisory/generate",{method:"POST",body:JSON.stringify({
+      ioc_ids:[...selectedIocIds], cve_ids:selectedCves.map(c=>c.id),
+      client_name:clientName, analyst_name:analystName||"TFII Analyst",
+      sector, tlp, custom_note:customNote,
+    })},token);
+    if(r.ok) setResult(await r.json());
+    else{const e=await r.json();setErr(e.detail||"Generation failed.");}
+    setGenerating(false);
+  }
+
+  function downloadEml(){
+    if(!result) return;
+    const boundary="----=_Part_TFII_"+Date.now();
+    const eml=[
+      `MIME-Version: 1.0`,
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      `Subject: ${result.subject}`,
+      `From: TFII Advisory <noreply@tfii.dev>`,
+      ``,
+      `--${boundary}`,
+      `Content-Type: text/plain; charset=UTF-8`,
+      `Content-Transfer-Encoding: 7bit`,
+      ``,
+      result.plain_text||"",
+      ``,
+      `--${boundary}`,
+      `Content-Type: text/html; charset=UTF-8`,
+      `Content-Transfer-Encoding: 7bit`,
+      ``,
+      result.html||"",
+      ``,
+      `--${boundary}--`,
+    ].join("\r\n");
+    const blob=new Blob([eml],{type:"message/rfc822"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url; a.download=`TFII-Advisory-${clientName.replace(/\s+/g,"-")}.eml`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  const TLP_COLORS={RED:"#dc2626",AMBER:"#d97706",GREEN:"#16a34a",WHITE:"#6b7280"};
+  const selectedIocs=iocPool.filter(i=>selectedIocIds.has(i.id));
+
+  if(result){
+    return(
+      <div style={{maxWidth:900}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10}}>
+          <div>
+            <div style={{fontSize:16,fontWeight:700,color:C.white||C.textHi}}>Advisory Preview</div>
+            <div style={{fontSize:11,color:C.muted}}>{result.subject}</div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <Btn onClick={downloadEml} C={C}>📧 Download .eml (Open in Mail)</Btn>
+            <Btn onClick={()=>setResult(null)} variant="ghost" C={C}>← Edit</Btn>
+          </div>
+        </div>
+        <div style={{background:"#fff",borderRadius:12,overflow:"hidden",boxShadow:"0 4px 24px rgba(0,0,0,0.15)"}}>
+          <iframe
+            srcDoc={result.html}
+            title="Advisory Preview"
+            style={{width:"100%",minHeight:700,border:"none",display:"block"}}
+            sandbox="allow-same-origin"
+          />
+        </div>
+        <div style={{marginTop:12,fontSize:11,color:C.muted,textAlign:"center"}}>
+          Download the .eml file and open it in Outlook, Apple Mail, or Thunderbird to send directly to your client.
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{maxWidth:1000}}>
+      <div style={{marginBottom:20}}>
+        <div style={{fontSize:16,fontWeight:700,color:C.white||C.textHi,marginBottom:4}}>Client Advisory Builder</div>
+        <div style={{fontSize:12,color:C.muted}}>Select IOCs from connector feeds + CVEs → generate a professional HTML advisory email.</div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+        {/* ── IOC Picker ── */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px",boxShadow:C.shadow}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi}}>Threat Indicators</div>
+              <div style={{fontSize:10,color:C.muted}}>Select up to {MAX_IOCS} — {selectedIocIds.size} selected</div>
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              <select value={familyFilter} onChange={e=>setFamilyFilter(e.target.value)}
+                style={{fontSize:11,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"4px 8px",borderRadius:6,fontFamily:"inherit"}}>
+                <option value="fintech">🏦 Fintech / GCC</option>
+                {families.map(f=><option key={f} value={f}>{f}</option>)}
+                <option value="">All families</option>
+              </select>
+              <select value={typeFilter} onChange={e=>setTypeFilter(e.target.value)}
+                style={{fontSize:11,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"4px 8px",borderRadius:6,fontFamily:"inherit"}}>
+                <option value="">All types</option>
+                {["IPv4","Domain","URL","MD5","SHA256"].map(t=><option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{maxHeight:340,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+            {poolLoading&&<div style={{textAlign:"center",padding:24,color:C.muted,fontSize:12}}>Loading...</div>}
+            {!poolLoading&&iocPool.length===0&&(
+              <div style={{textAlign:"center",padding:24,color:C.muted,fontSize:12}}>
+                No connector IOCs found for this filter.<br/>
+                Go to Admin → Connectors and run a sync first.
+              </div>
+            )}
+            {iocPool.map(ioc=>{
+              const sel=selectedIocIds.has(ioc.id);
+              const disabled=!sel&&selectedIocIds.size>=MAX_IOCS;
+              return(
+                <div key={ioc.id} onClick={()=>!disabled&&toggleIoc(ioc.id)}
+                  style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",
+                    borderRadius:8,cursor:disabled?"not-allowed":"pointer",
+                    background:sel?C.accentDim:C.surfaceHi,
+                    border:`1px solid ${sel?C.accent:C.border}`,
+                    opacity:disabled?0.4:1}}>
+                  <input type="checkbox" checked={sel} readOnly
+                    style={{accentColor:C.accent,flexShrink:0,cursor:"pointer"}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                      <span style={{fontSize:10,padding:"1px 6px",borderRadius:3,fontWeight:700,
+                        background:C.accentDim,color:C.accentText}}>{ioc.type}</span>
+                      {ioc.family&&<span style={{fontSize:10,padding:"1px 6px",borderRadius:3,
+                        background:C.red+"15",color:C.red,fontWeight:600}}>{ioc.family}</span>}
+                      <span style={{fontSize:9,color:C.muted}}>{ioc.source}</span>
+                    </div>
+                    <div style={{fontSize:11,fontFamily:"monospace",color:C.text,marginTop:3,
+                      wordBreak:"break-all",lineHeight:1.3}}>{ioc.value}</div>
+                  </div>
+                  <div style={{fontSize:10,color:C.muted,flexShrink:0}}>{ioc.confidence}%</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ── CVE Picker ── */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px",boxShadow:C.shadow}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:4}}>CVE Advisories</div>
+          <div style={{fontSize:10,color:C.muted,marginBottom:12}}>Search any CVE ID — up to {MAX_CVES} selected</div>
+          <div style={{display:"flex",gap:6,marginBottom:12}}>
+            <input value={cveSearch} onChange={e=>setCveSearch(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&searchCve()}
+              placeholder="CVE-2024-12345"
+              style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:13,
+                outline:"none",fontFamily:"monospace"}}/>
+            <Btn onClick={searchCve} disabled={cveSearching||selectedCves.length>=MAX_CVES} C={C}>
+              {cveSearching?"...":"Add"}
+            </Btn>
+          </div>
+          {selectedCves.length===0&&(
+            <div style={{textAlign:"center",padding:32,color:C.muted,fontSize:12,lineHeight:1.6}}>
+              Type a CVE ID above and press Add<br/>
+              <span style={{fontSize:10}}>e.g. CVE-2024-3094, CVE-2025-12345</span>
+            </div>
+          )}
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {selectedCves.map(cve=>(
+              <div key={cve.id} style={{padding:"10px 12px",background:C.surfaceHi,
+                border:`1px solid ${C.border}`,borderRadius:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <span style={{fontSize:11,fontWeight:700,color:C.accentText}}>{cve.id}</span>
+                    <span style={{fontSize:10,padding:"1px 6px",borderRadius:3,fontWeight:700,
+                      background:C.red+"15",color:C.red}}>{cve.severity} {cve.cvss_score}</span>
+                  </div>
+                  <button onClick={()=>setSelectedCves(p=>p.filter(c=>c.id!==cve.id))}
+                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16,lineHeight:1}}>×</button>
+                </div>
+                <div style={{fontSize:11,color:C.muted,lineHeight:1.5}}>{cve.description.slice(0,180)}...</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Advisory Config ── */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+        padding:"16px 20px",marginBottom:16,boxShadow:C.shadow}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:14}}>Advisory Details</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+          {[["Client / Organisation *",clientName,setClientName,"ACME Fintech Ltd"],
+            ["Analyst Name",analystName,setAnalystName,"Your name"]].map(([label,val,set,ph])=>(
+            <div key={label}>
+              <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>{label}</div>
+              <input value={val} onChange={e=>set(e.target.value)} placeholder={ph}
+                style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                  color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:13,
+                  outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
+            </div>
+          ))}
+          <div>
+            <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>Sector</div>
+            <input value={sector} onChange={e=>setSector(e.target.value)}
+              style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:13,
+                outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
+          </div>
+          <div>
+            <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>TLP Classification</div>
+            <div style={{display:"flex",gap:6}}>
+              {["WHITE","GREEN","AMBER","RED"].map(t=>(
+                <button key={t} onClick={()=>setTlp(t)}
+                  style={{flex:1,padding:"7px 4px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",
+                    fontSize:11,fontWeight:700,border:`2px solid ${tlp===t?TLP_COLORS[t]:C.border}`,
+                    background:tlp===t?TLP_COLORS[t]+"20":"transparent",
+                    color:tlp===t?TLP_COLORS[t]:C.muted}}>
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>Additional Context (optional)</div>
+          <textarea value={customNote} onChange={e=>setCustomNote(e.target.value)}
+            placeholder="e.g. Client is expanding into Pakistan market. Focus on mobile banking threats."
+            rows={2}
+            style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+              color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:12,
+              outline:"none",fontFamily:"inherit",resize:"vertical",boxSizing:"border-box"}}/>
+        </div>
+      </div>
+
+      {/* ── Summary + Generate ── */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+        <div style={{fontSize:12,color:C.muted}}>
+          <span style={{color:selectedIocIds.size>0?C.accentText:C.muted,fontWeight:600}}>
+            {selectedIocIds.size} IOC{selectedIocIds.size!==1?"s":""}
+          </span>
+          <span style={{margin:"0 8px",color:C.border}}>·</span>
+          <span style={{color:selectedCves.length>0?C.accentText:C.muted,fontWeight:600}}>
+            {selectedCves.length} CVE{selectedCves.length!==1?"s":""}
+          </span>
+          <span style={{margin:"0 8px",color:C.border}}>·</span>
+          <span style={{padding:"2px 8px",borderRadius:4,fontWeight:700,fontSize:11,
+            background:(TLP_COLORS[tlp]||C.muted)+"20",color:TLP_COLORS[tlp]||C.muted}}>
+            TLP:{tlp}
+          </span>
+          {clientName&&<span style={{marginLeft:8}}>for <strong style={{color:C.text}}>{clientName}</strong></span>}
+        </div>
+        <Btn onClick={generate} disabled={generating||(!selectedIocIds.size&&!selectedCves.length)||!clientName} C={C}>
+          {generating?"Generating Advisory...":"✉ Generate Advisory"}
+        </Btn>
+      </div>
+      {err&&<div style={{marginTop:10,fontSize:12,color:C.red,fontWeight:600}}>{err}</div>}
+    </div>
+  );
+}
+
+
   const [cfg,setCfg]=useState({
     threatfox_enabled:false, malwarebazaar_enabled:false, urlhaus_enabled:false,
     threatfox_days:1, malwarebazaar_limit:100, urlhaus_limit:100, schedule_hours:24
@@ -5808,6 +6136,7 @@ export default function App(){
           {view==="querygen"&&<QueryGenerator token={token} C={C}/>}
           {view==="public"&&<PublicSearch C={C}/>}
           {view==="bulklookup"&&<BulkLookup token={token} C={C}/>}
+          {view==="advisory"&&<AdvisoryBuilder token={token} C={C}/>}
           {view==="settings"&&<SettingsPage themeName={themeName} setThemeName={setThemeName} token={token} onLogout={logout} C={C} me={me} onOpenApiKeys={()=>setShowApiKeyModal(true)}/>}
           {view==="health"&&me?.role==="admin"&&<HealthPage token={token} C={C}/>}
           {view==="connectors"&&me?.role==="admin"&&<ConnectorsPage token={token} C={C}/>}

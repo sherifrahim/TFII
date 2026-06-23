@@ -5057,6 +5057,264 @@ async def call_groq(system: str, user: str, max_tokens: int = 2500) -> str:
         raise HTTPException(status_code=502, detail=f"Groq API error: {r.status_code}")
     return r.json()["choices"][0]["message"]["content"]
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLIENT ADVISORY BUILDER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Malware families actively targeting GCC / South Asia fintech sector
+FINTECH_FAMILIES = {
+    # Banking trojans / stealers
+    "remcos","agentesla","agent_tesla","agent tesla",
+    "formbook","form_book","form book",
+    "snakekeylogger","snake_keylogger","snake keylogger",
+    "asyncrat","async_rat","async rat",
+    "lokibot","loki_bot","loki bot",
+    "guloader","gup_loader","guloader",
+    "njrat","nj_rat","nj rat",
+    "dcrat","dc_rat","dc rat",
+    "nanocore","nano_core","nano core",
+    "warzone","warzoner",
+    "redline","redline_stealer","redline stealer",
+    "raccoon","raccoon_stealer","raccoon stealer",
+    "vidar","vidar_stealer",
+    "stealc","lumma","lummac2",
+    # Banking-specific
+    "qakbot","qbot","quakbot",
+    "icedid","iced_id",
+    "trickbot","trick_bot",
+    "dridex","emotet",
+    "grandoreiro","xenomorph","sova","anubis","cerberus","flubot",
+    # RATs / backdoors common in GCC targeted attacks
+    "cobalt_strike","cobalt strike","cobaltstrike",
+    "systembc","system_bc",
+    "netsupport","netsupportrat",
+    "ave_maria","avemaria",
+    "buer","buerloader",
+    "darkcomet","dark_comet",
+}
+
+@app.get("/advisory/iocs")
+def advisory_ioc_pool(
+    family: str = "",
+    ioc_type: str = "",
+    sector: str = "fintech",
+    limit: int = 50,
+    user=Depends(get_current_user),
+    conn=Depends(get_db)
+):
+    """
+    Return IOCs from connector feeds suitable for a client advisory.
+    Defaults to fintech-relevant malware families for GCC/South Asia.
+    """
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    if sector == "fintech" and not family:
+        # Build a filter for known fintech-targeting families
+        family_conditions = []
+        params = []
+        for fam in FINTECH_FAMILIES:
+            family_conditions.append("EXISTS (SELECT 1 FROM unnest(tags) t WHERE t ILIKE %s)")
+            params.append(f"%{fam}%")
+        fintech_filter = f"AND ({' OR '.join(family_conditions)})" if family_conditions else ""
+        # Also include 'fintech' tagged items
+        query = f"""
+            SELECT id,type,value,value_defanged,confidence,tlp,tags,enrichment,created_at
+            FROM iocs
+            WHERE ('connector'=ANY(tags) OR 'threatfox'=ANY(tags) OR 'malwarebazaar'=ANY(tags))
+            {'AND verdict != false_positive' if False else ''}
+            AND (false_positive IS NULL OR false_positive = FALSE)
+            {fintech_filter}
+            ORDER BY created_at DESC LIMIT %s
+        """
+        cur.execute(query, params + [limit])
+    else:
+        fam_filter = ""
+        params = []
+        if family:
+            fam_filter = "AND EXISTS (SELECT 1 FROM unnest(tags) t WHERE t ILIKE %s)"
+            params.append(f"%{family}%")
+        type_filter = "AND type = %s" if ioc_type else ""
+        if ioc_type: params.append(ioc_type)
+        cur.execute(f"""
+            SELECT id,type,value,value_defanged,confidence,tlp,tags,enrichment,created_at
+            FROM iocs
+            WHERE ('connector'=ANY(tags) OR 'threatfox'=ANY(tags) OR 'malwarebazaar'=ANY(tags))
+            AND (false_positive IS NULL OR false_positive = FALSE)
+            {fam_filter} {type_filter}
+            ORDER BY confidence DESC, created_at DESC LIMIT %s
+        """, params + [limit])
+
+    rows = cur.fetchall()
+    result = []
+    for r in rows:
+        enr = r.get("enrichment") or {}
+        malware_family = (enr.get("malware_family") or "")
+        # extract the most relevant tag for display
+        tags = r.get("tags") or []
+        family_tag = malware_family or next(
+            (t for t in tags if t not in ("connector","threatfox","malwarebazaar","urlhaus","malware-hash","malware-url")), ""
+        )
+        result.append({
+            "id":           r["id"],
+            "type":         r["type"],
+            "value":        r.get("value_defanged") or r["value"],
+            "value_raw":    r["value"],
+            "confidence":   r["confidence"],
+            "tlp":          r["tlp"],
+            "family":       family_tag,
+            "tags":         tags,
+            "source":       "ThreatFox" if "threatfox" in tags else "MalwareBazaar" if "malwarebazaar" in tags else "URLhaus" if "urlhaus" in tags else "Feed",
+        })
+    return result
+
+class AdvisoryRequest(BaseModel):
+    ioc_ids:     List[str]
+    cve_ids:     List[str]
+    client_name: str
+    analyst_name: Optional[str] = "TFII Analyst"
+    sector:      Optional[str] = "Financial Services / Fintech"
+    tlp:         Optional[str] = "AMBER"
+    custom_note: Optional[str] = ""
+
+@app.post("/advisory/generate")
+async def generate_advisory(body: AdvisoryRequest, user=Depends(get_current_user), conn=Depends(get_db)):
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured.")
+    if not body.ioc_ids and not body.cve_ids:
+        raise HTTPException(status_code=400, detail="Select at least one IOC or CVE.")
+
+    # ── Fetch selected IOCs ───────────────────────────────────────────────────
+    iocs = []
+    if body.ioc_ids:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM iocs WHERE id = ANY(%s)", (body.ioc_ids,))
+        for r in cur.fetchall():
+            enr = r.get("enrichment") or {}
+            iocs.append({
+                "type":     r["type"],
+                "value":    r.get("value_defanged") or r["value"],
+                "family":   enr.get("malware_family") or next(
+                    (t for t in (r.get("tags") or []) if t not in ("connector","threatfox","malwarebazaar")), "Unknown"),
+                "confidence": r["confidence"],
+                "source":   "ThreatFox" if "threatfox" in (r.get("tags") or []) else
+                            "MalwareBazaar" if "malwarebazaar" in (r.get("tags") or []) else "URLhaus",
+            })
+
+    # ── Fetch selected CVEs ───────────────────────────────────────────────────
+    cves = []
+    for cve_id in body.cve_ids[:3]:
+        try:
+            async with httpx.AsyncClient(timeout=12) as c:
+                r = await c.get(
+                    f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id.upper()}")
+            if r.status_code == 200:
+                items = r.json().get("vulnerabilities", [])
+                if items:
+                    vuln = items[0]["cve"]
+                    desc = next(
+                        (d["value"] for d in vuln.get("descriptions",[]) if d["lang"]=="en"), "")
+                    metrics = vuln.get("metrics",{})
+                    cvss_data = (
+                        metrics.get("cvssMetricV31",[{}])[0].get("cvssData") or
+                        metrics.get("cvssMetricV30",[{}])[0].get("cvssData") or
+                        metrics.get("cvssMetricV2",[{}])[0].get("cvssData") or {}
+                    )
+                    cves.append({
+                        "id": cve_id.upper(),
+                        "description": desc[:600],
+                        "cvss_score": cvss_data.get("baseScore","N/A"),
+                        "severity": cvss_data.get("baseSeverity", "UNKNOWN"),
+                        "vector": cvss_data.get("vectorString",""),
+                    })
+        except Exception:
+            cves.append({"id": cve_id.upper(), "description": "Could not fetch details.", "cvss_score":"N/A","severity":"UNKNOWN","vector":""})
+
+    today = datetime.now(timezone.utc).strftime("%d %B %Y")
+
+    system_prompt = """You are a senior threat intelligence analyst writing a formal advisory for a fintech client.
+Generate a professional HTML email advisory. Return ONLY valid JSON with this exact structure:
+{"subject": "...", "html": "...", "plain_text": "..."}
+
+The HTML must:
+- Use inline CSS only (email client compatible — Outlook, Gmail)
+- Dark navy/professional colour scheme (#0f2744 header, #ffffff body)
+- Include a TLP classification banner at the top
+- Have clearly structured sections with subtle dividers
+- Be formatted for a C-suite or security team audience
+- Not include any placeholder text — everything must be fully written
+
+Never say "I generated this" or reference AI."""
+
+    ioc_block = "\n".join([
+        f"- {i['type']}: {i['value']} | Family: {i['family']} | Confidence: {i['confidence']}% | Source: {i['source']}"
+        for i in iocs
+    ]) or "None selected"
+
+    cve_block = "\n".join([
+        f"- {c['id']} | CVSS {c['cvss_score']} ({c['severity']}) | {c['description'][:300]}"
+        for c in cves
+    ]) or "None selected"
+
+    user_msg = f"""Generate a threat advisory email with these details:
+
+Date: {today}
+Client: {body.client_name}
+Sector: {body.sector}
+TLP: TLP:{body.tlp}
+Analyst: {body.analyst_name}
+{"Additional context: " + body.custom_note if body.custom_note else ""}
+
+ACTIVE THREAT INDICATORS ({len(iocs)} IOCs):
+{ioc_block}
+
+CVE ADVISORIES ({len(cves)} CVEs):
+{cve_block}
+
+Structure:
+1. TLP:{body.tlp} banner (coloured — RED=#dc2626, AMBER=#d97706, GREEN=#16a34a, WHITE=#374151)
+2. Header: "Threat Intelligence Advisory — {body.client_name}" with date
+3. Executive Summary (2-3 sentences — threat landscape context for fintech/GCC sector)
+4. Section: "Active Threat Indicators" — HTML table with columns: Type, Indicator (defanged), Malware Family, Source, Confidence
+5. Section: "Vulnerability Advisories" — for each CVE: ID badge, severity, description, recommended action
+6. Section: "Recommended Actions" — 4-5 specific, actionable steps relevant to these specific threats
+7. Footer: Analyst name, date, TLP reminder, "This advisory is for authorised recipients only"
+
+Return as JSON: {{"subject": "TLP:{body.tlp} // Threat Advisory — {body.client_name} // {today}", "html": "<full html>", "plain_text": "<plain text version>"}}"""
+
+    try:
+        raw = await call_groq(system_prompt, user_msg, max_tokens=4000)
+        import json as _j
+        # strip markdown fences if present
+        clean = raw.strip()
+        if clean.startswith("```"): clean = re.sub(r"^```[a-z]*\n?","",clean).rstrip("`").strip()
+        data = _j.loads(clean)
+        return {
+            "subject":    data.get("subject",""),
+            "html":       data.get("html",""),
+            "plain_text": data.get("plain_text",""),
+            "iocs":       iocs,
+            "cves":       cves,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Advisory generation failed: {e}")
+
+
+    async with httpx.AsyncClient(timeout=45) as c:
+        r = await c.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role":"system","content":system},{"role":"user","content":user}],
+                "temperature": 0.2,
+                "max_tokens": max_tokens,
+                "response_format": {"type": "json_object"},
+            }
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Groq API error: {r.status_code}")
+    return r.json()["choices"][0]["message"]["content"]
+
 @app.post("/query-gen/generate")
 async def generate_query(body: QueryGenRequest, user=Depends(get_current_user)):
     if not GROQ_API_KEY:
