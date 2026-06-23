@@ -2241,51 +2241,70 @@ def purge_old_cves(before_year: int = 2023, admin=Depends(require_admin), conn=D
 @app.post("/admin/cleanup-advisory-iocs")
 def cleanup_advisory_iocs(admin=Depends(require_admin), conn=Depends(get_db)):
     """
-    Purge IOCs that are clearly false positives: advisory/vendor URLs, reference
-    links, and auto-extracted junk that never should have been in the feed.
-    Covers both 'auto-extracted' and 'public-lookup' tagged entries, plus any
-    Domain/URL IOC whose value matches the expanded TRUSTED_DOMAINS list.
+    Purge IOCs that were auto-extracted from CVE advisory references.
+    
+    Nuclear mode: delete ALL URL/Domain IOCs that were auto-added,
+    regardless of what domain they point to. The old code was pulling
+    NVD reference URLs (changelog links, vendor release notes, LWN articles,
+    blogspot posts, etc.) and treating them as threat indicators. None of
+    them are. If a real threat URL needs to be in the feed it should be
+    added manually with intent.
+    
+    Also removes any URL/Domain matching TRUSTED_DOMAINS regardless of
+    how it got in.
+    
     Safe to run multiple times.
     """
     cur = conn.cursor()
     removed = 0
 
-    # 1. All auto-extracted and public-lookup IOCs: URLs and Domains from trusted sources
+    # 1. Nuclear: delete ALL URLs/Domains that were auto-added by any automated path.
+    #    This covers: auto-extracted (old CVE poll), auto-added (old public search),
+    #    public-lookup. None of these should ever have been in the feed.
     cur.execute("""
-        SELECT id, value FROM iocs
-        WHERE (
+        SELECT id FROM iocs
+        WHERE type IN ('URL', 'Domain')
+        AND (
             'auto-extracted' = ANY(tags) OR
             'public-lookup'  = ANY(tags) OR
             'auto-added'     = ANY(tags)
         )
-        AND type IN ('URL','Domain')
     """)
+    rows = cur.fetchall()
+    for (ioc_id,) in rows:
+        cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
+        cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
+        removed += 1
+
+    # 2. Any URL/Domain that matches known advisory/vendor/news domains,
+    #    regardless of how it was tagged (catches ones that slipped through
+    #    without the auto-extracted tag via other paths).
+    cur.execute("SELECT id, value FROM iocs WHERE type IN ('URL', 'Domain')")
     for ioc_id, value in cur.fetchall():
         if any(td in (value or "").lower() for td in TRUSTED_DOMAINS):
             cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
             cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
             removed += 1
 
-    # 2. Any Domain IOC that is literally a trusted domain — regardless of tags
-    # (catches ones that slipped through without the auto-extracted tag)
-    cur.execute("SELECT id, value FROM iocs WHERE type = 'Domain'")
-    for ioc_id, value in cur.fetchall():
-        if any(td in (value or "").lower() for td in TRUSTED_DOMAINS):
-            cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
-            cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
-            removed += 1
-
-    # 3. Any URL IOC pointing to a trusted domain — regardless of tags
-    cur.execute("SELECT id, value FROM iocs WHERE type = 'URL'")
-    for ioc_id, value in cur.fetchall():
-        if any(td in (value or "").lower() for td in TRUSTED_DOMAINS):
-            cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
-            cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
-            removed += 1
+    # 3. Anything with no created_by (system-generated, never manually added).
+    #    These are orphan records from old automated ingestion paths.
+    cur.execute("""
+        SELECT id FROM iocs
+        WHERE type IN ('URL', 'Domain')
+        AND (created_by IS NULL OR created_by = '')
+    """)
+    for (ioc_id,) in cur.fetchall():
+        cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
+        cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
+        removed += 1
 
     conn.commit()
     return {"status": "done", "removed": removed,
-            "message": f"Removed {removed} false-positive IOCs from the feed"}
+            "message": (
+                f"Removed {removed} false-positive IOCs from the feed. "
+                f"These were reference links and advisory URLs from CVE records — "
+                f"never actual threat indicators."
+            )}
 
 @app.post("/auth/change-password")
 def change_password(body: PasswordChange, user=Depends(get_current_user), conn=Depends(get_db)):
