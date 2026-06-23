@@ -1231,14 +1231,14 @@ async def run_urlhaus_connector(conn, auth_key: str, limit: int = 100) -> dict:
     added = 0; skipped = 0; errors = []
     try:
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post("https://urlhaus-api.abuse.ch/v1/urls/recent/limit/{}/".format(min(limit,1000)),
+            r = await c.post("https://urlhaus-api.abuse.ch/v1/urls/recent/",
                 headers={"Auth-Key": auth_key})
         if r.status_code == 401:
             return {"ok": False, "error": "Invalid Auth-Key"}
         if r.status_code != 200:
             return {"ok": False, "error": f"HTTP {r.status_code}"}
         data = r.json()
-        urls = data.get("urls") or []
+        urls = (data.get("urls") or [])[:limit]  # slice to configured limit
         cur = conn.cursor()
 
         for item in urls:
