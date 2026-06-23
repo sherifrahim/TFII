@@ -479,8 +479,11 @@ async def startup():
         # Weekly summary — every Sunday at 8 AM
         scheduler.add_job(send_weekly_summary_job, CronTrigger(day_of_week="sun", hour=8, minute=0),
                           id="weekly_summary", replace_existing=True, misfire_grace_time=600)
+        # Threat feed connectors — daily sync of ThreatFox/MalwareBazaar/URLhaus
+        scheduler.add_job(scheduled_connector_sync, IntervalTrigger(hours=24),
+                          id="connector_sync", replace_existing=True, misfire_grace_time=3600)
         scheduler.start()
-        print("[scheduler] CVE poll every 6h | Daily brief 08:00 | Weekly summary Sundays")
+        print("[scheduler] CVE poll every 6h | Daily brief 08:00 | Weekly Sundays | Connectors every 24h")
     except ImportError:
         print("[scheduler] apscheduler not installed — run: pip install apscheduler")
 
@@ -1035,6 +1038,375 @@ def deny_access_request(request_id: str, admin=Depends(require_admin), conn=Depe
     return {"status":"denied"}
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# THREAT FEED CONNECTORS
+# Purpose-built IOC feeds from sources that *only* publish threat indicators —
+# not CVE advisories, not PoC links, not vendor summaries. These are the
+# only automated IOC sources. Everything else requires explicit user action.
+#
+# Connectors:
+#   ThreatFox    — C2 IPs, domains, URLs tagged to malware families (abuse.ch)
+#   MalwareBazaar — malware file hashes with family + tag info (abuse.ch)
+#   URLhaus       — malware distribution URLs (abuse.ch)
+#
+# All require the same URLHAUS_AUTH_KEY / abuse.ch Auth-Key.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+CONNECTOR_SETTINGS_KEY = "connector_settings"
+
+async def get_connector_settings(conn) -> dict:
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT value FROM system_settings WHERE key = %s", (CONNECTOR_SETTINGS_KEY,))
+        row = cur.fetchone()
+        if row: return json.loads(row["value"])
+    except Exception: pass
+    return {}
+
+async def run_threatfox_connector(conn, auth_key: str, days_back: int = 1) -> dict:
+    """
+    Pull recent IOCs from ThreatFox (abuse.ch).
+    Returns C2 IPs, domains, URLs, and hashes tagged to specific malware families.
+    Only adds indicators with confidence >= 50 and a known malware family tag.
+    """
+    added = 0; skipped = 0; errors = []
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post("https://threatfox-api.abuse.ch/api/v1/",
+                json={"query": "get_iocs", "days": min(days_back, 7)},
+                headers={"Auth-Key": auth_key})
+        if r.status_code == 401:
+            return {"ok": False, "error": "Invalid Auth-Key"}
+        if r.status_code != 200:
+            return {"ok": False, "error": f"HTTP {r.status_code}"}
+        data = r.json()
+        if data.get("query_status") != "ok":
+            return {"ok": False, "error": data.get("query_status", "unknown error")}
+
+        iocs = data.get("data") or []
+        cur = conn.cursor()
+
+        for item in iocs:
+            try:
+                ioc_val  = (item.get("ioc") or "").strip()
+                ioc_type = item.get("ioc_type", "")
+                malware  = item.get("malware", "") or item.get("malware_printable", "")
+                confidence = int(item.get("confidence_level", 50))
+                threat_type = item.get("threat_type", "")
+                tags     = [t for t in (item.get("tags") or []) if t]
+
+                if not ioc_val or confidence < 50:
+                    skipped += 1; continue
+
+                # Map ThreatFox types to TFII types
+                type_map = {
+                    "ip:port":  "IPv4",   # strip the port
+                    "domain":   "Domain",
+                    "url":      "URL",
+                    "md5_hash": "MD5",
+                    "sha256_hash": "SHA256",
+                }
+                tfii_type = type_map.get(ioc_type)
+                if not tfii_type:
+                    skipped += 1; continue
+
+                # Strip port from ip:port format
+                if ioc_type == "ip:port" and ":" in ioc_val:
+                    ioc_val = ioc_val.split(":")[0]
+                    if not re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', ioc_val):
+                        skipped += 1; continue
+
+                canonical = refang(ioc_val)
+                defanged  = defang(canonical, tfii_type)
+                tlp       = "RED" if confidence >= 75 else "AMBER"
+                desc      = f"ThreatFox: {malware or threat_type or 'unknown'}"
+                if item.get("comment"): desc += f" — {item['comment'][:200]}"
+
+                ioc_tags  = ["threatfox", "connector"]
+                if malware: ioc_tags.append(malware.lower().replace(" ","_")[:30])
+                if tags: ioc_tags.extend(tags[:3])
+
+                cur.execute("""
+                    INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,
+                        description,tags,enrichment,valid_until)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT DO NOTHING
+                """, (
+                    f"indicator--{uuid.uuid4()}", tfii_type, canonical, defanged,
+                    "General", tlp, confidence, desc, ioc_tags,
+                    psycopg2.extras.Json({
+                        "source": "ThreatFox",
+                        "malware_family": malware,
+                        "threat_type": threat_type,
+                        "threatfox_id": item.get("id"),
+                        "enriched_at": datetime.now(timezone.utc).isoformat(),
+                    }),
+                    datetime.now(timezone.utc) + timedelta(days=90)
+                ))
+                if cur.rowcount > 0: added += 1
+                else: skipped += 1
+            except Exception as e:
+                errors.append(str(e)[:80])
+
+        conn.commit()
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+    return {"ok": True, "added": added, "skipped": skipped,
+            "total_received": len(iocs), "errors": errors[:5]}
+
+async def run_malwarebazaar_connector(conn, auth_key: str, limit: int = 100) -> dict:
+    """
+    Pull recent malware samples from MalwareBazaar (abuse.ch).
+    Returns SHA256, MD5, SHA1 hashes with malware family and tags.
+    Only pure hash IOCs — no URLs, no advisory noise.
+    """
+    added = 0; skipped = 0; errors = []
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post("https://mb-api.abuse.ch/api/v1/",
+                data={"query": "get_recent", "selector": "time"},
+                headers={"Auth-Key": auth_key})
+        if r.status_code != 200:
+            return {"ok": False, "error": f"HTTP {r.status_code}"}
+        data = r.json()
+        if data.get("query_status") not in ("ok", "OK"):
+            return {"ok": False, "error": data.get("query_status", "error")}
+
+        samples = (data.get("data") or [])[:limit]
+        cur = conn.cursor()
+
+        for sample in samples:
+            try:
+                sha256 = (sample.get("sha256_hash") or "").strip()
+                md5    = (sample.get("md5_hash") or "").strip()
+                malware = sample.get("signature") or sample.get("tags", ["unknown"])[0] if sample.get("tags") else "unknown"
+                tags   = sample.get("tags") or []
+                file_type = sample.get("file_type", "")
+
+                for hash_val, hash_type in [(sha256, "SHA256"), (md5, "MD5")]:
+                    if not hash_val: continue
+                    ioc_tags = ["malwarebazaar", "connector", "malware-hash"]
+                    if malware and malware != "unknown":
+                        ioc_tags.append(malware.lower().replace(" ","_")[:30])
+                    if file_type: ioc_tags.append(file_type.lower()[:20])
+
+                    cur.execute("""
+                        INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,
+                            description,tags,enrichment,valid_until)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT DO NOTHING
+                    """, (
+                        f"indicator--{uuid.uuid4()}", hash_type, hash_val, hash_val,
+                        "General", "RED", 85,
+                        f"MalwareBazaar: {malware} ({file_type})" if file_type else f"MalwareBazaar: {malware}",
+                        ioc_tags,
+                        psycopg2.extras.Json({
+                            "source": "MalwareBazaar",
+                            "malware_family": malware,
+                            "file_type": file_type,
+                            "sha256": sha256,
+                            "md5": md5,
+                            "enriched_at": datetime.now(timezone.utc).isoformat(),
+                        }),
+                        datetime.now(timezone.utc) + timedelta(days=180)
+                    ))
+                    if cur.rowcount > 0: added += 1
+                    else: skipped += 1
+            except Exception as e:
+                errors.append(str(e)[:80])
+
+        conn.commit()
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+    return {"ok": True, "added": added, "skipped": skipped,
+            "total_received": len(samples), "errors": errors[:5]}
+
+async def run_urlhaus_connector(conn, auth_key: str, limit: int = 100) -> dict:
+    """
+    Pull recent malware distribution URLs from URLhaus (abuse.ch).
+    Only online/unknown status URLs — not cleaned-up ones.
+    """
+    added = 0; skipped = 0; errors = []
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post("https://urlhaus-api.abuse.ch/v1/urls/recent/limit/{}/".format(min(limit,1000)),
+                headers={"Auth-Key": auth_key})
+        if r.status_code == 401:
+            return {"ok": False, "error": "Invalid Auth-Key"}
+        if r.status_code != 200:
+            return {"ok": False, "error": f"HTTP {r.status_code}"}
+        data = r.json()
+        urls = data.get("urls") or []
+        cur = conn.cursor()
+
+        for item in urls:
+            try:
+                url_val = (item.get("url") or "").strip()
+                status  = item.get("url_status", "")
+                threat  = item.get("threat", "")
+                tags    = [t.get("tag","") for t in (item.get("tags") or [])]
+
+                # Only ingest active or recently active malware URLs
+                if not url_val or status == "offline":
+                    skipped += 1; continue
+
+                canonical = refang(url_val)
+                ioc_tags  = ["urlhaus", "connector", "malware-url"]
+                if threat: ioc_tags.append(threat.lower().replace(" ","_")[:30])
+                if tags:   ioc_tags.extend([t.lower() for t in tags[:3] if t])
+
+                cur.execute("""
+                    INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,
+                        description,tags,enrichment,valid_until)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT DO NOTHING
+                """, (
+                    f"indicator--{uuid.uuid4()}", "URL", canonical, defang(canonical,"URL"),
+                    "General", "RED", 85,
+                    f"URLhaus: {threat or 'malware distribution URL'} [{status}]",
+                    ioc_tags,
+                    psycopg2.extras.Json({
+                        "source": "URLhaus",
+                        "url_status": status,
+                        "threat": threat,
+                        "urlhaus_id": item.get("id"),
+                        "urlhaus_reference": item.get("urlhaus_reference",""),
+                        "enriched_at": datetime.now(timezone.utc).isoformat(),
+                    }),
+                    datetime.now(timezone.utc) + timedelta(days=30)  # shorter TTL — URLs go offline fast
+                ))
+                if cur.rowcount > 0: added += 1
+                else: skipped += 1
+            except Exception as e:
+                errors.append(str(e)[:80])
+
+        conn.commit()
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+    return {"ok": True, "added": added, "skipped": skipped,
+            "total_received": len(urls), "errors": errors[:5]}
+
+def log_connector_run(conn, connector: str, result: dict):
+    """Store connector run result in system_settings for status display."""
+    try:
+        key = f"connector_last_run_{connector}"
+        val = json.dumps({**result, "ran_at": datetime.now(timezone.utc).isoformat()})
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO system_settings (key,value) VALUES (%s,%s)
+            ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value""", (key, val))
+        conn.commit()
+    except Exception: pass
+
+# ── Connector endpoints (admin-only) ─────────────────────────────────────────
+
+class ConnectorSettingsBody(BaseModel):
+    threatfox_enabled:     bool = False
+    malwarebazaar_enabled: bool = False
+    urlhaus_enabled:       bool = False
+    threatfox_days:        int  = 1     # how many days back to pull
+    malwarebazaar_limit:   int  = 100   # max recent samples
+    urlhaus_limit:         int  = 100   # max recent URLs
+    schedule_hours:        int  = 24    # how often to auto-sync
+
+@app.get("/admin/connectors/settings")
+def get_connector_settings_ep(admin=Depends(require_admin), conn=Depends(get_db)):
+    import asyncio as _a
+    settings = _a.get_event_loop().run_until_complete(get_connector_settings(conn)) if False else {}
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("SELECT key, value FROM system_settings WHERE key LIKE 'connector%'")
+        rows = {r["key"]: json.loads(r["value"]) for r in cur.fetchall()}
+        cfg = rows.get(CONNECTOR_SETTINGS_KEY, {})
+        last_runs = {
+            k.replace("connector_last_run_", ""): v
+            for k, v in rows.items() if k.startswith("connector_last_run_")
+        }
+        return {**cfg, "last_runs": last_runs}
+    except Exception:
+        return {"last_runs": {}}
+
+@app.post("/admin/connectors/settings")
+def save_connector_settings_ep(body: ConnectorSettingsBody, admin=Depends(require_admin), conn=Depends(get_db)):
+    cur = conn.cursor()
+    cur.execute("""INSERT INTO system_settings (key,value) VALUES (%s,%s)
+        ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value""",
+        (CONNECTOR_SETTINGS_KEY, json.dumps(body.dict())))
+    conn.commit()
+    return {"status": "saved"}
+
+@app.post("/admin/connectors/sync")
+async def sync_connectors(connectors: str = "all", admin=Depends(require_admin), conn=Depends(get_db)):
+    """
+    Manually trigger connector sync. connectors= all | threatfox | malwarebazaar | urlhaus
+    """
+    auth_key = URLHAUS_AUTH_KEY or resolve_api_key(conn, "urlhaus", admin)[0]
+    if not auth_key:
+        raise HTTPException(status_code=400,
+            detail="No abuse.ch Auth-Key configured. Add URLHAUS_AUTH_KEY to .env or save it in Settings → API Keys.")
+
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT value FROM system_settings WHERE key = %s", (CONNECTOR_SETTINGS_KEY,))
+    row = cur.fetchone()
+    cfg = json.loads(row["value"]) if row else {}
+
+    results = {}
+    run_all = connectors == "all"
+
+    if run_all or connectors == "threatfox":
+        r = await run_threatfox_connector(conn, auth_key, days_back=cfg.get("threatfox_days",1))
+        results["threatfox"] = r
+        log_connector_run(conn, "threatfox", r)
+
+    if run_all or connectors == "malwarebazaar":
+        r = await run_malwarebazaar_connector(conn, auth_key, limit=cfg.get("malwarebazaar_limit",100))
+        results["malwarebazaar"] = r
+        log_connector_run(conn, "malwarebazaar", r)
+
+    if run_all or connectors == "urlhaus":
+        r = await run_urlhaus_connector(conn, auth_key, limit=cfg.get("urlhaus_limit",100))
+        results["urlhaus"] = r
+        log_connector_run(conn, "urlhaus", r)
+
+    total_added = sum(v.get("added",0) for v in results.values())
+    return {"status": "complete", "results": results, "total_added": total_added}
+
+async def scheduled_connector_sync():
+    """APScheduler job — runs all enabled connectors on schedule."""
+    conn = None
+    try:
+        conn = get_db_direct()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT value FROM system_settings WHERE key = %s", (CONNECTOR_SETTINGS_KEY,))
+        row = cur.fetchone()
+        if not row: return
+        cfg = json.loads(row["value"])
+
+        auth_key = URLHAUS_AUTH_KEY
+        if not auth_key: return
+
+        if cfg.get("threatfox_enabled"):
+            r = await run_threatfox_connector(conn, auth_key, days_back=cfg.get("threatfox_days",1))
+            log_connector_run(conn, "threatfox", r)
+            print(f"[connector] ThreatFox: +{r.get('added',0)} IOCs")
+
+        if cfg.get("malwarebazaar_enabled"):
+            r = await run_malwarebazaar_connector(conn, auth_key, limit=cfg.get("malwarebazaar_limit",100))
+            log_connector_run(conn, "malwarebazaar", r)
+            print(f"[connector] MalwareBazaar: +{r.get('added',0)} IOCs")
+
+        if cfg.get("urlhaus_enabled"):
+            r = await run_urlhaus_connector(conn, auth_key, limit=cfg.get("urlhaus_limit",100))
+            log_connector_run(conn, "urlhaus", r)
+            print(f"[connector] URLhaus: +{r.get('added',0)} IOCs")
+    except Exception as e:
+        print(f"[connector] Scheduled sync error: {e}")
+    finally:
+        if conn: conn.close()
+
+# ─────────────────────────────────────────────────────────────────────────────
 def create_notification(conn, type_: str, title: str, body: str,
                          severity: str = "info", metadata: dict = None):
     try:
@@ -3165,6 +3537,10 @@ def get_audit(limit: int=100, admin=Depends(require_admin), conn=Depends(get_db)
 
 @app.get("/public/search")
 async def public_search(q: str, conn=Depends(get_db)):
+    """
+    Public IOC lookup — no auth required. Enriches and returns results.
+    Does NOT auto-add to the IOC feed. That must be an explicit user action.
+    """
     canonical = refang(q.strip()); ioc_type = detect_type(canonical)
     now = datetime.now(timezone.utc).isoformat()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -3185,22 +3561,13 @@ async def public_search(q: str, conn=Depends(get_db)):
     enrichment = await enrich(ioc_type, canonical, 50)
     score, reasons = calc_confidence(enrichment, 50)
     enrichment["calculated_confidence"] = score; enrichment["confidence_reasons"] = reasons
-    auto_added = False; verdict = "MALICIOUS" if score >= 80 else "SUSPICIOUS" if score >= 50 else "CLEAN"
-    if score >= 50:
-        try:
-            ioc_id = f"indicator--{uuid.uuid4()}"; defanged = defang(canonical, ioc_type)
-            valid_until = datetime.now(timezone.utc) + timedelta(days=90)
-            cur2 = conn.cursor()
-            cur2.execute("""INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,description,tags,enrichment,valid_until)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
-                (ioc_id,ioc_type,canonical,defanged,"General","RED" if score>=80 else "AMBER",score,
-                 f"Auto-added via public lookup. Verdict: {verdict}.",
-                 ["auto-added","public-lookup"],psycopg2.extras.Json(enrichment),valid_until))
-            conn.commit(); auto_added = True
-        except Exception: pass
-    return {"source":"providers","found_in_db":False,"auto_added":auto_added,"ioc_type":ioc_type,
+    verdict = "MALICIOUS" if score >= 80 else "SUSPICIOUS" if score >= 50 else "CLEAN"
+    # Never auto-add to feed from public search.
+    # User must explicitly add via the authenticated IOC feed interface.
+    return {"source":"providers","found_in_db":False,"auto_added":False,"ioc_type":ioc_type,
             "value":canonical,"verdict":verdict,"confidence":score,"reasons":reasons,
             "enrichment":enrichment,"checked_at":now}
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # OSINT

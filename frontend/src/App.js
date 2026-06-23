@@ -100,10 +100,11 @@ const CVE_NAV=[
   {id:"querygen", label:"Query Builder", icon:"code"},
 ];
 const ADMIN_NAV=[
-  {id:"settings", label:"Settings",      icon:"settings"},
-  {id:"health",   label:"Health",        icon:"heartbeat"},
-  {id:"users",    label:"Users",         icon:"usergroup"},
-  {id:"invites",  label:"Invites",       icon:"mail"},
+  {id:"settings",    label:"Settings",    icon:"settings"},
+  {id:"health",      label:"Health",      icon:"heartbeat"},
+  {id:"connectors",  label:"Connectors",  icon:"radar"},
+  {id:"users",       label:"Users",       icon:"usergroup"},
+  {id:"invites",     label:"Invites",     icon:"mail"},
 ];
 const USER_NAV=[
   {id:"settings", label:"Settings",      icon:"settings"},
@@ -4636,6 +4637,201 @@ function ApiKeysSection({token,C}){
 
 const DAILY_FREE_QUOTA = 10;
 
+// ── THREAT FEED CONNECTORS PAGE ───────────────────────────────────────────────
+function ConnectorsPage({token,C}){
+  const [cfg,setCfg]=useState({
+    threatfox_enabled:false, malwarebazaar_enabled:false, urlhaus_enabled:false,
+    threatfox_days:1, malwarebazaar_limit:100, urlhaus_limit:100, schedule_hours:24
+  });
+  const [lastRuns,setLastRuns]=useState({});
+  const [saving,setSaving]=useState(false);
+  const [syncing,setSyncing]=useState(null);
+  const [msg,setMsg]=useState("");
+
+  useEffect(()=>{
+    api("/admin/connectors/settings",{},token).then(r=>r.ok?r.json():null).then(d=>{
+      if(!d) return;
+      const {last_runs,...rest}=d;
+      if(Object.keys(rest).length) setCfg(p=>({...p,...rest}));
+      if(last_runs) setLastRuns(last_runs);
+    });
+  },[token]);
+
+  async function save(){
+    setSaving(true);setMsg("");
+    const r=await api("/admin/connectors/settings",{method:"POST",body:JSON.stringify(cfg)},token);
+    setMsg(r.ok?"✓ Settings saved":"✗ Save failed");
+    setSaving(false); setTimeout(()=>setMsg(""),3000);
+  }
+
+  async function sync(connector){
+    setSyncing(connector);setMsg("");
+    const r=await api(`/admin/connectors/sync?connectors=${connector}`,{method:"POST"},token);
+    if(r.ok){
+      const d=await r.json();
+      const added=d.total_added||0;
+      const details=Object.entries(d.results||{}).map(([k,v])=>
+        `${k}: +${v.added||0} added${v.error?` (error: ${v.error})`:""}` ).join(" | ");
+      setMsg(`✓ Sync complete — ${added} new IOCs added. ${details}`);
+      // Refresh last runs
+      api("/admin/connectors/settings",{},token).then(r=>r.ok?r.json():null).then(d=>{
+        if(d?.last_runs) setLastRuns(d.last_runs);
+      });
+    } else {
+      const e=await r.json(); setMsg(`✗ ${e.detail||"Sync failed"}`);
+    }
+    setSyncing(null); setTimeout(()=>setMsg(""),10000);
+  }
+
+  const CONNECTORS=[
+    {
+      id:"threatfox", name:"ThreatFox", icon:"🦊", source:"abuse.ch",
+      desc:"C2 IP addresses, domains, and URLs tagged to specific malware families (Cobalt Strike, Emotet, RedLine, etc.).",
+      enabled_key:"threatfox_enabled",
+      settings:[{key:"threatfox_days",label:"Days back",min:1,max:7,type:"number"}],
+    },
+    {
+      id:"malwarebazaar", name:"MalwareBazaar", icon:"💀", source:"abuse.ch",
+      desc:"Malware sample hashes (SHA256/MD5) with family classifications. Pure hash IOCs — no advisory noise.",
+      enabled_key:"malwarebazaar_enabled",
+      settings:[{key:"malwarebazaar_limit",label:"Max samples",min:10,max:500,type:"number"}],
+    },
+    {
+      id:"urlhaus", name:"URLhaus", icon:"🔗", source:"abuse.ch",
+      desc:"Active malware distribution URLs — sites hosting or distributing malware payloads. Short TTL (30 days).",
+      enabled_key:"urlhaus_enabled",
+      settings:[{key:"urlhaus_limit",label:"Max URLs",min:10,max:1000,type:"number"}],
+    },
+  ];
+
+  return(
+    <div style={{maxWidth:860}}>
+      <div style={{marginBottom:20}}>
+        <div style={{fontSize:18,fontWeight:700,color:C.white||C.textHi,marginBottom:4}}>
+          Threat Feed Connectors
+        </div>
+        <div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>
+          The only automated IOC source. These feeds exclusively publish threat indicators — no CVE advisories,
+          no PoC links, no vendor writeups. All require your abuse.ch Auth-Key (Settings → Manage API Keys → URLhaus).
+        </div>
+      </div>
+
+      {/* Global schedule */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+        padding:"16px 20px",marginBottom:16,boxShadow:C.shadow}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:C.white||C.textHi}}>Auto-sync schedule</div>
+            <div style={{fontSize:11,color:C.muted}}>Enabled connectors sync automatically on this interval</div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:12,color:C.muted}}>Every</span>
+            <select value={cfg.schedule_hours}
+              onChange={e=>setCfg(p=>({...p,schedule_hours:parseInt(e.target.value)}))}
+              style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,
+                padding:"5px 10px",borderRadius:6,fontSize:12,fontFamily:"inherit"}}>
+              {[6,12,24,48].map(h=><option key={h} value={h}>{h}h</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Connector cards */}
+      <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
+        {CONNECTORS.map(conn=>{
+          const enabled=cfg[conn.enabled_key];
+          const last=lastRuns[conn.id];
+          return(
+            <div key={conn.id} style={{background:C.surface,
+              border:`1px solid ${enabled?C.accent+"40":C.border}`,borderRadius:12,
+              padding:"16px 20px",boxShadow:C.shadow}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+                gap:12,flexWrap:"wrap"}}>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                    <span style={{fontSize:20}}>{conn.icon}</span>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi}}>{conn.name}</div>
+                      <div style={{fontSize:10,color:C.muted}}>via {conn.source}</div>
+                    </div>
+                    <label style={{display:"flex",alignItems:"center",gap:6,marginLeft:8,cursor:"pointer"}}>
+                      <input type="checkbox" checked={enabled||false}
+                        onChange={e=>setCfg(p=>({...p,[conn.enabled_key]:e.target.checked}))}
+                        style={{accentColor:C.accent,width:15,height:15}}/>
+                      <span style={{fontSize:11,color:enabled?C.accentText:C.muted,fontWeight:600}}>
+                        {enabled?"Enabled":"Disabled"}
+                      </span>
+                    </label>
+                  </div>
+                  <div style={{fontSize:12,color:C.muted,marginBottom:10,lineHeight:1.5}}>{conn.desc}</div>
+                  {/* Settings */}
+                  <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+                    {conn.settings.map(s=>(
+                      <label key={s.key} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:C.muted}}>
+                        {s.label}:
+                        <input type="number" min={s.min} max={s.max} value={cfg[s.key]||s.min}
+                          onChange={e=>setCfg(p=>({...p,[s.key]:parseInt(e.target.value)||s.min}))}
+                          style={{width:60,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                            color:C.inputText,padding:"3px 6px",borderRadius:5,fontSize:11,fontFamily:"inherit"}}/>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                {/* Status + sync button */}
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <button onClick={()=>sync(conn.id)} disabled={!!syncing}
+                    style={{padding:"7px 14px",borderRadius:7,cursor:"pointer",fontFamily:"inherit",
+                      fontSize:12,fontWeight:600,
+                      background:C.accentDim,border:`1px solid ${C.accent}40`,color:C.accentText}}>
+                    {syncing===conn.id?"Syncing...":"↻ Sync Now"}
+                  </button>
+                  {last&&(
+                    <div style={{marginTop:8,fontSize:10,color:C.muted,textAlign:"right"}}>
+                      {last.ok?(
+                        <span style={{color:C.green}}>✓ +{last.added} added</span>
+                      ):(
+                        <span style={{color:C.red}}>✗ {last.error}</span>
+                      )}
+                      <br/>
+                      {last.ran_at ? new Date(last.ran_at).toLocaleString() : ""}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Actions */}
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <Btn onClick={save} disabled={saving} C={C}>{saving?"Saving...":"💾 Save Settings"}</Btn>
+        <Btn onClick={()=>sync("all")} disabled={!!syncing} variant="dim" C={C}>
+          {syncing==="all"?"Syncing all...":"↻ Sync All Now"}
+        </Btn>
+      </div>
+      {msg&&<div style={{marginTop:12,fontSize:12,fontWeight:600,
+        color:msg.startsWith("✓")?C.green:C.red,lineHeight:1.5}}>{msg}</div>}
+
+      {/* IOC source policy note */}
+      <div style={{marginTop:20,padding:"12px 16px",background:C.surfaceHi,
+        border:`1px solid ${C.border}`,borderRadius:10}}>
+        <div style={{fontSize:11,fontWeight:600,color:C.white||C.textHi,marginBottom:4}}>
+          IOC Feed Policy
+        </div>
+        <div style={{fontSize:11,color:C.muted,lineHeight:1.7}}>
+          IOCs enter the feed through <strong style={{color:C.text}}>3 paths only</strong>:<br/>
+          1. <strong style={{color:C.text}}>Manual addition</strong> — Add IOC form, Bulk Lookup → Add to Feed<br/>
+          2. <strong style={{color:C.text}}>Imports</strong> — STIX, TAXII, MISP, CSV (Settings → Import)<br/>
+          3. <strong style={{color:C.text}}>These connectors</strong> — ThreatFox, MalwareBazaar, URLhaus<br/>
+          <br/>
+          <span style={{color:C.amber}}>Never auto-added from:</span> CVE advisory text, NVD references, PoC links, vendor writeups, or news feeds.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── HEALTH CHECK DASHBOARD ────────────────────────────────────────────────────
 function HealthPage({token,C}){
   const [data,setData]=useState(null);
@@ -5614,6 +5810,7 @@ export default function App(){
           {view==="bulklookup"&&<BulkLookup token={token} C={C}/>}
           {view==="settings"&&<SettingsPage themeName={themeName} setThemeName={setThemeName} token={token} onLogout={logout} C={C} me={me} onOpenApiKeys={()=>setShowApiKeyModal(true)}/>}
           {view==="health"&&me?.role==="admin"&&<HealthPage token={token} C={C}/>}
+          {view==="connectors"&&me?.role==="admin"&&<ConnectorsPage token={token} C={C}/>}
 
           {view==="feed"&&(
             <>
