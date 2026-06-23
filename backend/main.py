@@ -5093,6 +5093,181 @@ FINTECH_FAMILIES = {
     "darkcomet","dark_comet",
 }
 
+# Vendors/products that matter to most organisations — used to filter CISA KEV
+COMMON_TECH_KEYWORDS = [
+    # Microsoft ecosystem
+    "microsoft","windows","azure","office","exchange","sharepoint","defender",
+    "edge","teams","iis","ntlm","outlook","active directory","hyper-v",
+    # Linux
+    "linux","kernel","ubuntu","debian","red hat","rhel","centos","fedora",
+    # Web servers / infrastructure
+    "apache","nginx","iis","http",
+    # Scripting / runtimes
+    "node.js","nodejs","php","python","perl","ruby",
+    # Java
+    "java","openjdk","tomcat","spring","log4",
+    # Databases
+    "mysql","postgresql","mongodb","redis","mssql","sql server","oracle database",
+    # Cloud / containers
+    "kubernetes","docker","vmware","esxi","vsphere","aws","amazon","azure",
+    # Security / networking
+    "cisco","fortinet","palo alto","juniper","sonicwall","f5","netscaler","citrix","ivanti",
+    # Browsers
+    "chrome","chromium","firefox","webkit","safari",
+    # CMS / productivity
+    "wordpress","drupal","joomla","confluence","jira","gitlab","jenkins","git",
+    # Common enterprise
+    "openssl","openssh","curl","libcurl","weblogic","websphere","sharepoint",
+    # Mobile / IoT
+    "android","ios","iphone",
+    # Vendors known for fintech-relevant flaws
+    "splunk","elastic","kibana","grafana",
+]
+
+@app.get("/advisory/suggested-cves")
+async def suggested_cves(limit: int = 15, days: int = 30, user=Depends(get_current_user)):
+    """
+    Surface the most relevant CVEs for a client advisory:
+    1. Fetch CISA KEV (confirmed actively exploited) — filtered for commonly-used tech
+    2. Enrich each with EPSS exploitation probability
+    3. Sort by priority: KEV + EPSS score + CVSS severity
+    Returns the top {limit} most actionable CVEs.
+    """
+    results = []
+
+    async with httpx.AsyncClient(timeout=15) as c:
+        # Pull full CISA KEV catalog
+        kev_r = await c.get(
+            "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json")
+
+    if kev_r.status_code != 200:
+        raise HTTPException(status_code=502, detail="Could not fetch CISA KEV catalog")
+
+    vulns = kev_r.json().get("vulnerabilities", [])
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    # Filter: recent KEV additions + commonly-used tech
+    relevant = []
+    for v in vulns:
+        date_added = v.get("dateAdded", "")
+        vendor  = (v.get("vendorProject") or "").lower()
+        product = (v.get("product") or "").lower()
+        combined = f"{vendor} {product}"
+
+        if date_added < cutoff:
+            continue
+
+        if any(kw in combined for kw in COMMON_TECH_KEYWORDS):
+            relevant.append(v)
+
+    # If fewer than limit results in the window, extend the search
+    if len(relevant) < limit:
+        for v in vulns:
+            if v in relevant:
+                continue
+            vendor  = (v.get("vendorProject") or "").lower()
+            product = (v.get("product") or "").lower()
+            combined = f"{vendor} {product}"
+            if any(kw in combined for kw in COMMON_TECH_KEYWORDS):
+                relevant.append(v)
+            if len(relevant) >= limit * 3:
+                break
+
+    # Sort by date added (newest first)
+    relevant.sort(key=lambda x: x.get("dateAdded",""), reverse=True)
+
+    # Enrich top candidates with EPSS
+    top_candidates = relevant[:limit * 2]
+    cve_ids = [v["cveID"] for v in top_candidates if v.get("cveID")]
+
+    epss_map = {}
+    if cve_ids:
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                epss_r = await c.get("https://api.first.org/data/v1/epss",
+                    params={"cve": ",".join(cve_ids[:50]), "limit": 100})
+            if epss_r.status_code == 200:
+                for item in epss_r.json().get("data", []):
+                    epss_map[item["cve"]] = {
+                        "epss": round(float(item.get("epss", 0)) * 100, 1),
+                        "percentile": round(float(item.get("percentile", 0)) * 100, 1),
+                    }
+        except Exception:
+            pass
+
+    # Fetch NVD CVSS for top candidates in parallel
+    async def fetch_nvd_cvss(cve_id: str) -> dict:
+        try:
+            async with httpx.AsyncClient(timeout=8) as c:
+                r = await c.get(
+                    f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}")
+            if r.status_code == 200:
+                items = r.json().get("vulnerabilities", [])
+                if items:
+                    cve = items[0]["cve"]
+                    metrics = cve.get("metrics", {})
+                    cvss = (
+                        metrics.get("cvssMetricV31", [{}])[0].get("cvssData") or
+                        metrics.get("cvssMetricV30", [{}])[0].get("cvssData") or
+                        metrics.get("cvssMetricV2", [{}])[0].get("cvssData") or {}
+                    )
+                    return {
+                        "cvss_score": cvss.get("baseScore"),
+                        "severity":   cvss.get("baseSeverity", ""),
+                    }
+        except Exception:
+            pass
+        return {}
+
+    # Batch NVD calls (throttled — don't hammer NVD)
+    nvd_map = {}
+    for i in range(0, min(len(cve_ids), limit * 2), 5):
+        batch = cve_ids[i:i+5]
+        batch_results = await asyncio.gather(*[fetch_nvd_cvss(c) for c in batch],
+                                              return_exceptions=True)
+        for cve_id, res in zip(batch, batch_results):
+            if not isinstance(res, Exception):
+                nvd_map[cve_id] = res
+        if i + 5 < len(cve_ids):
+            await asyncio.sleep(0.5)  # gentle rate limit for NVD
+
+    # Build final result list with priority scoring
+    for v in top_candidates:
+        cve_id  = v.get("cveID", "")
+        epss    = epss_map.get(cve_id, {})
+        nvd     = nvd_map.get(cve_id, {})
+        severity = nvd.get("severity", "").upper()
+        cvss     = nvd.get("cvss_score")
+
+        # Priority score: EPSS percentile + severity boost
+        priority = epss.get("percentile", 0)
+        if severity == "CRITICAL": priority += 40
+        elif severity == "HIGH":   priority += 20
+        kev_days_ago = max(0, (datetime.now(timezone.utc) -
+            datetime.strptime(v.get("dateAdded","2000-01-01"), "%Y-%m-%d")
+            .replace(tzinfo=timezone.utc)).days) if v.get("dateAdded") else 999
+        priority += max(0, 30 - kev_days_ago)  # boost for very recent KEV additions
+
+        results.append({
+            "id":              cve_id,
+            "vendor":          v.get("vendorProject", ""),
+            "product":         v.get("product", ""),
+            "name":            v.get("vulnerabilityName", ""),
+            "description":     v.get("shortDescription", ""),
+            "kev_date":        v.get("dateAdded", ""),
+            "due_date":        v.get("dueDate", ""),
+            "ransomware":      v.get("knownRansomwareCampaignUse", "Unknown") == "Known",
+            "cvss_score":      cvss,
+            "severity":        severity or "UNKNOWN",
+            "epss_pct":        epss.get("percentile"),
+            "epss_score":      epss.get("epss"),
+            "priority":        priority,
+        })
+
+    results.sort(key=lambda x: x["priority"], reverse=True)
+    return results[:limit]
+
+
 @app.get("/advisory/iocs")
 def advisory_ioc_pool(
     family: str = "",

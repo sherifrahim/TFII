@@ -4649,6 +4649,8 @@ function AdvisoryBuilder({token,C}){
   const [familyFilter,setFamilyFilter]=useState("fintech");
   const [typeFilter,setTypeFilter]=useState("");
   const [selectedIocIds,setSelectedIocIds]=useState(new Set());
+  const [suggestedCves,setSuggestedCves]=useState([]);
+  const [cveLoading,setCveLoading]=useState(true);
   const [cveSearch,setCveSearch]=useState("");
   const [cveSearching,setCveSearching]=useState(false);
   const [selectedCves,setSelectedCves]=useState([]);
@@ -4668,7 +4670,13 @@ function AdvisoryBuilder({token,C}){
 
   useEffect(()=>{
     loadPool(familyFilter);
-  },[familyFilter,typeFilter]);// eslint-disable-line react-hooks/exhaustive-deps
+    // Load suggested CVEs from CISA KEV + EPSS on mount
+    setCveLoading(true);
+    api("/advisory/suggested-cves?limit=15&days=45",{},token)
+      .then(r=>r.ok?r.json():[])
+      .then(d=>{setSuggestedCves(d);setCveLoading(false);})
+      .catch(()=>setCveLoading(false));
+  },[]);// eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadPool(fam){
     setPoolLoading(true);
@@ -4852,43 +4860,130 @@ function AdvisoryBuilder({token,C}){
         </div>
 
         {/* ── CVE Picker ── */}
-        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px",boxShadow:C.shadow}}>
-          <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:4}}>CVE Advisories</div>
-          <div style={{fontSize:10,color:C.muted,marginBottom:12}}>Search any CVE ID — up to {MAX_CVES} selected</div>
-          <div style={{display:"flex",gap:6,marginBottom:12}}>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px",boxShadow:C.shadow,display:"flex",flexDirection:"column"}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
+            CVE Advisories
+          </div>
+          <div style={{fontSize:10,color:C.muted,marginBottom:10}}>
+            Surfaced from CISA KEV + EPSS · Actively exploited · Widely-used tech only
+          </div>
+
+          {/* Manual override search */}
+          <div style={{display:"flex",gap:6,marginBottom:10}}>
             <input value={cveSearch} onChange={e=>setCveSearch(e.target.value)}
               onKeyDown={e=>e.key==="Enter"&&searchCve()}
-              placeholder="CVE-2024-12345"
+              placeholder="Or add specific CVE-XXXX-XXXXX"
               style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-                color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:13,
+                color:C.inputText,padding:"6px 10px",borderRadius:6,fontSize:12,
                 outline:"none",fontFamily:"monospace"}}/>
             <Btn onClick={searchCve} disabled={cveSearching||selectedCves.length>=MAX_CVES} C={C}>
               {cveSearching?"...":"Add"}
             </Btn>
           </div>
-          {selectedCves.length===0&&(
-            <div style={{textAlign:"center",padding:32,color:C.muted,fontSize:12,lineHeight:1.6}}>
-              Type a CVE ID above and press Add<br/>
-              <span style={{fontSize:10}}>e.g. CVE-2024-3094, CVE-2025-12345</span>
+
+          {/* Selected CVEs */}
+          {selectedCves.length>0&&(
+            <div style={{marginBottom:10}}>
+              {selectedCves.map(cve=>{
+                const sc = cve.severity==="CRITICAL"?C.red:cve.severity==="HIGH"?C.amber:C.muted;
+                return(
+                  <div key={cve.id} style={{padding:"8px 10px",marginBottom:6,background:C.accentDim,
+                    border:`1px solid ${C.accent}40`,borderRadius:7,
+                    display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:3}}>
+                        <span style={{fontSize:11,fontWeight:700,color:C.accentText}}>{cve.id}</span>
+                        {cve.severity&&<span style={{fontSize:10,padding:"1px 5px",borderRadius:3,
+                          fontWeight:700,background:sc+"15",color:sc}}>
+                          {cve.severity} {cve.cvss_score||""}
+                        </span>}
+                        {cve.kev_date&&<span style={{fontSize:9,color:C.muted}}>KEV {cve.kev_date}</span>}
+                        {cve.ransomware&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,
+                          background:C.red+"15",color:C.red,fontWeight:700}}>🔒 Ransomware</span>}
+                      </div>
+                      <div style={{fontSize:10,color:C.muted,lineHeight:1.4}}>
+                        <strong style={{color:C.text}}>{cve.vendor} {cve.product}</strong>
+                        {" — "}{(cve.name||cve.description||"").slice(0,100)}
+                      </div>
+                    </div>
+                    <button onClick={()=>setSelectedCves(p=>p.filter(c=>c.id!==cve.id))}
+                      style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                        fontSize:16,lineHeight:1,marginLeft:8,flexShrink:0}}>×</button>
+                  </div>
+                );
+              })}
             </div>
           )}
-          <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            {selectedCves.map(cve=>(
-              <div key={cve.id} style={{padding:"10px 12px",background:C.surfaceHi,
-                border:`1px solid ${C.border}`,borderRadius:8}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
-                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                    <span style={{fontSize:11,fontWeight:700,color:C.accentText}}>{cve.id}</span>
-                    <span style={{fontSize:10,padding:"1px 6px",borderRadius:3,fontWeight:700,
-                      background:C.red+"15",color:C.red}}>{cve.severity} {cve.cvss_score}</span>
-                  </div>
-                  <button onClick={()=>setSelectedCves(p=>p.filter(c=>c.id!==cve.id))}
-                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16,lineHeight:1}}>×</button>
-                </div>
-                <div style={{fontSize:11,color:C.muted,lineHeight:1.5}}>{cve.description.slice(0,180)}...</div>
+
+          {/* Suggested CVEs from CISA KEV */}
+          <div style={{flex:1,overflowY:"auto",maxHeight:300}}>
+            {cveLoading&&(
+              <div style={{textAlign:"center",padding:16,color:C.muted,fontSize:12}}>
+                Checking CISA KEV + EPSS for critical actively exploited CVEs...
               </div>
-            ))}
+            )}
+            {!cveLoading&&suggestedCves.length===0&&(
+              <div style={{textAlign:"center",padding:16,color:C.muted,fontSize:12}}>
+                No recent KEV matches. Use the search box above.
+              </div>
+            )}
+            {!cveLoading&&suggestedCves.map(cve=>{
+              const already=selectedCves.some(s=>s.id===cve.id);
+              const disabled=!already&&selectedCves.length>=MAX_CVES;
+              const sc=cve.severity==="CRITICAL"?C.red:cve.severity==="HIGH"?C.amber:C.muted;
+              return(
+                <div key={cve.id}
+                  onClick={()=>{
+                    if(disabled||already) return;
+                    setSelectedCves(p=>[...p,{
+                      id:cve.id, description:cve.description, name:cve.name,
+                      cvss_score:cve.cvss_score, severity:cve.severity,
+                      vendor:cve.vendor, product:cve.product,
+                      kev_date:cve.kev_date, ransomware:cve.ransomware,
+                      epss_pct:cve.epss_pct,
+                    }]);
+                  }}
+                  style={{padding:"8px 10px",marginBottom:5,borderRadius:7,cursor:disabled?"not-allowed":"pointer",
+                    background:already?C.accentDim:C.surfaceHi,
+                    border:`1px solid ${already?C.accent:C.border}`,
+                    opacity:disabled?0.4:1}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",marginBottom:3}}>
+                        <span style={{fontSize:11,fontWeight:700,
+                          color:already?C.accentText:C.text,fontFamily:"monospace"}}>{cve.id}</span>
+                        {cve.severity&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,
+                          fontWeight:700,background:sc+"20",color:sc}}>
+                          {cve.severity}{cve.cvss_score?` ${cve.cvss_score}`:""}
+                        </span>}
+                        {cve.ransomware&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,
+                          background:C.red+"15",color:C.red,fontWeight:700}}>🔒 Ransomware</span>}
+                        {cve.epss_pct!=null&&<span style={{fontSize:9,color:C.muted}}>
+                          EPSS {cve.epss_pct}%ile
+                        </span>}
+                      </div>
+                      <div style={{fontSize:10,color:C.muted,lineHeight:1.4}}>
+                        <span style={{fontWeight:600,color:C.text}}>{cve.vendor}</span>
+                        {" "}{cve.product}
+                        {" — "}{(cve.name||"").slice(0,80)}
+                      </div>
+                    </div>
+                    <div style={{flexShrink:0,marginLeft:8,textAlign:"right"}}>
+                      {cve.kev_date&&<div style={{fontSize:9,color:C.muted}}>
+                        KEV {cve.kev_date}
+                      </div>}
+                      {already&&<div style={{fontSize:10,color:C.accentText,fontWeight:600}}>✓</div>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
+          {selectedCves.length>=MAX_CVES&&(
+            <div style={{fontSize:10,color:C.amber,marginTop:6,textAlign:"center"}}>
+              Max {MAX_CVES} CVEs selected
+            </div>
+          )}
         </div>
       </div>
 
