@@ -31,7 +31,7 @@ const COUNTRY_FLAGS = {
 };
 
 const THEMES = {
-  // Professional light — matches screenshot 1
+  // Professional light
   light:{
     name:"Light",font:"'Inter',sans-serif",
     bg:"#f8fafc",surface:"#ffffff",surfaceHi:"#f1f5f9",
@@ -45,8 +45,9 @@ const THEMES = {
     badge:"#f1f5f9",navActive:"#f0fdf4",navActiveBorder:"#10b981",
     statNum:"#0f172a",statLabel:"#10b981",
     sidebarBg:"#ffffff",topbarBg:"#ffffff",
+    glass:false,
   },
-  // Professional dark — same aesthetic, dark slate
+  // Professional dark
   dark:{
     name:"Dark",font:"'Inter',sans-serif",
     bg:"#0f172a",surface:"#1e293b",surfaceHi:"#334155",
@@ -55,25 +56,79 @@ const THEMES = {
     text:"#94a3b8",textHi:"#e2e8f0",muted:"#64748b",mutedHi:"#94a3b8",
     white:"#f1f5f9",green:"#10b981",amber:"#f59e0b",red:"#f87171",purple:"#a78bfa",
     inputBg:"#1e293b",inputBorder:"#334155",inputText:"#f1f5f9",
-    shadow:"0 1px 3px rgba(0,0,0,0.3)",
-    shadowMd:"0 4px 6px -1px rgba(0,0,0,0.4)",
+    shadow:"0 1px 3px rgba(0,0,0,0.3)",shadowMd:"0 4px 6px -1px rgba(0,0,0,0.4)",
     badge:"#334155",navActive:"#10b98118",navActiveBorder:"#10b981",
     statNum:"#f1f5f9",statLabel:"#10b981",
     sidebarBg:"#1e293b",topbarBg:"#1e293b",
+    glass:false,
   },
-  // Operator — keep for those who prefer the terminal aesthetic
-  operator:{
-    name:"Operator",font:"'Space Mono',monospace",
-    bg:"#07070e",surface:"#0d0d1c",surfaceHi:"#111126",
-    border:"#1a1a30",borderHi:"#2a2a45",
-    accent:"#00e5c0",accentDim:"#00e5c014",accentText:"#00e5c0",accentHover:"#00e5c0",
-    text:"#c4c4e0",textHi:"#f0f0ff",muted:"#484870",mutedHi:"#6868a0",
-    white:"#f0f0ff",green:"#00e676",amber:"#ffab00",red:"#ff5252",purple:"#a78bfa",
-    inputBg:"#0a0a18",inputBorder:"#2a2a45",inputText:"#e0e0f8",
-    shadow:"0 2px 12px rgba(0,0,0,0.6)",shadowMd:"0 4px 24px rgba(0,0,0,0.5)",
-    badge:"#141428",navActive:"#00e5c014",navActiveBorder:"#00e5c0",
-    statNum:"#00e5c0",statLabel:"#484870",
-    sidebarBg:"#0d0d1c",topbarBg:"#0d0d1c",
+  // Phosphor — CRT phosphor glow, replaces Operator
+  phosphor:{
+    name:"Phosphor",font:"'Space Mono',monospace",
+    bg:"#000a00",surface:"#010f01",surfaceHi:"#001a00",
+    border:"#003300",borderHi:"#005500",
+    accent:"#39ff14",accentDim:"#39ff1415",accentText:"#39ff14",accentHover:"#7fff00",
+    text:"#00bb00",textHi:"#39ff14",muted:"#005500",mutedHi:"#007700",
+    white:"#c8ffc8",green:"#39ff14",amber:"#ccff00",red:"#ff4444",purple:"#cc44ff",
+    inputBg:"#000d00",inputBorder:"#004400",inputText:"#39ff14",
+    shadow:"0 0 12px rgba(57,255,20,0.15)",shadowMd:"0 0 24px rgba(57,255,20,0.2)",
+    badge:"#001a00",navActive:"#39ff1412",navActiveBorder:"#39ff14",
+    statNum:"#39ff14",statLabel:"#007700",
+    sidebarBg:"#010f01",topbarBg:"#010f01",
+    glass:false,
+    // Phosphor-specific: used for glow text-shadow in extra CSS
+    glow:"0 0 8px rgba(57,255,20,0.8), 0 0 16px rgba(57,255,20,0.4)",
+    scanlines:true,
+  },
+  // Glassmorphic — frosted glass over aurora gradient
+  glass:{
+    name:"Glassmorphic",font:"'Inter',sans-serif",
+    // bg is the full-viewport aurora gradient — rendered via special wrapper
+    bg:"linear-gradient(135deg,#0d0221 0%,#0f3460 30%,#16213e 60%,#1a0533 100%)",
+    surface:"rgba(255,255,255,0.06)",surfaceHi:"rgba(255,255,255,0.10)",
+    border:"rgba(255,255,255,0.12)",borderHi:"rgba(255,255,255,0.22)",
+    accent:"#c084fc",accentDim:"rgba(192,132,252,0.15)",accentText:"#e879f9",accentHover:"#e879f9",
+    text:"rgba(255,255,255,0.72)",textHi:"rgba(255,255,255,0.95)",
+    muted:"rgba(255,255,255,0.38)",mutedHi:"rgba(255,255,255,0.55)",
+    white:"#ffffff",green:"#4ade80",amber:"#fbbf24",red:"#f87171",purple:"#c084fc",
+    inputBg:"rgba(255,255,255,0.07)",inputBorder:"rgba(255,255,255,0.15)",inputText:"rgba(255,255,255,0.92)",
+    shadow:"0 8px 32px rgba(0,0,0,0.4)",shadowMd:"0 16px 48px rgba(0,0,0,0.5)",
+    badge:"rgba(255,255,255,0.08)",navActive:"rgba(192,132,252,0.18)",navActiveBorder:"#c084fc",
+    statNum:"#ffffff",statLabel:"#c084fc",
+    sidebarBg:"rgba(255,255,255,0.04)",topbarBg:"rgba(255,255,255,0.04)",
+    glass:true,          // flag: enable backdrop-filter and gradient bg wrapper
+    blur:"blur(20px)",
+    auroraOrbs:true,     // flag: render decorative aurora orbs in backdrop
+  },
+  // Tokyo Night — deep purple-blue, VS Code vibes
+  tokyo:{
+    name:"Tokyo Night",font:"'Inter',sans-serif",
+    bg:"#1a1b2e",surface:"#24283b",surfaceHi:"#2f3549",
+    border:"#414868",borderHi:"#565f89",
+    accent:"#7c3aed",accentDim:"#7c3aed18",accentText:"#bb9af7",accentHover:"#c0a8f8",
+    text:"#a9b1d6",textHi:"#c0caf5",muted:"#565f89",mutedHi:"#737aa2",
+    white:"#c0caf5",green:"#9ece6a",amber:"#e0af68",red:"#f7768e",purple:"#bb9af7",
+    inputBg:"#1f2335",inputBorder:"#414868",inputText:"#c0caf5",
+    shadow:"0 2px 12px rgba(0,0,0,0.4)",shadowMd:"0 8px 24px rgba(0,0,0,0.5)",
+    badge:"#2f3549",navActive:"#7c3aed18",navActiveBorder:"#7c3aed",
+    statNum:"#c0caf5",statLabel:"#bb9af7",
+    sidebarBg:"#1f2335",topbarBg:"#1f2335",
+    glass:false,
+  },
+  // Nord — Nordic blue-gray, calm and readable
+  nord:{
+    name:"Nord",font:"'Inter',sans-serif",
+    bg:"#2e3440",surface:"#3b4252",surfaceHi:"#434c5e",
+    border:"#4c566a",borderHi:"#5e6779",
+    accent:"#88c0d0",accentDim:"#88c0d018",accentText:"#88c0d0",accentHover:"#8fbcbb",
+    text:"#d8dee9",textHi:"#eceff4",muted:"#4c566a",mutedHi:"#616e88",
+    white:"#eceff4",green:"#a3be8c",amber:"#ebcb8b",red:"#bf616a",purple:"#b48ead",
+    inputBg:"#3b4252",inputBorder:"#4c566a",inputText:"#eceff4",
+    shadow:"0 2px 8px rgba(0,0,0,0.3)",shadowMd:"0 4px 16px rgba(0,0,0,0.4)",
+    badge:"#434c5e",navActive:"#88c0d018",navActiveBorder:"#88c0d0",
+    statNum:"#eceff4",statLabel:"#88c0d0",
+    sidebarBg:"#3b4252",topbarBg:"#3b4252",
+    glass:false,
   },
 };
 
@@ -6031,7 +6086,14 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
     setTimeout(()=>setAccessMsg(""),6000);
   }
 
-  const THEMES=[{id:"light",label:"Light"},{id:"dark",label:"Dark"},{id:"operator",label:"Operator"}];
+  const THEMES_LIST=[
+    {id:"light",label:"Light"},
+    {id:"dark",label:"Dark"},
+    {id:"phosphor",label:"Phosphor"},
+    {id:"glass",label:"Glassmorphic"},
+    {id:"tokyo",label:"Tokyo Night"},
+    {id:"nord",label:"Nord"},
+  ];
 
   useEffect(()=>{
     if(!isAdmin) return;
@@ -6104,10 +6166,10 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
         <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:14}}>
           UI Theme
         </div>
-        <div style={{display:"flex",gap:8}}>
-          {THEMES.map(t=>(
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {THEMES_LIST.map(t=>(
             <button key={t.id} onClick={()=>setThemeName(t.id)}
-              style={{padding:"8px 20px",borderRadius:8,cursor:"pointer",fontFamily:"inherit",
+              style={{padding:"8px 16px",borderRadius:8,cursor:"pointer",fontFamily:"inherit",
                 border:`2px solid ${themeName===t.id?C.accent:C.border}`,
                 background:themeName===t.id?C.accentDim:"transparent",
                 color:themeName===t.id?C.accentText:C.text,fontWeight:600,fontSize:13}}>
@@ -6412,7 +6474,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 export default function App(){
   const [themeName,setThemeName]=useState(()=>localStorage.getItem("tf_theme")||"light");
-  const C=THEMES[themeName]||THEMES.operator;
+  const C=THEMES[themeName]||THEMES.dark;
   const [mode,setMode]=useState(()=>localStorage.getItem("tf_mode")||"ioc");
   function switchMode(m){setMode(m);localStorage.setItem("tf_mode",m);setView("dashboard");}
   const [showApiKeyModal,setShowApiKeyModal]=useState(false);
@@ -6572,7 +6634,49 @@ export default function App(){
   }
 
   return(
-    <div style={{display:"flex",height:"100vh",background:C.bg,color:C.text,fontFamily:C.font||"inherit",overflow:"hidden"}}>
+    <div style={{
+        display:"flex",height:"100vh",
+        background:C.glass?C.bg:"none",
+        backgroundColor:C.glass?undefined:C.bg,
+        backgroundAttachment:C.glass?"fixed":undefined,
+        color:C.text,fontFamily:C.font||"inherit",overflow:"hidden",
+        position:"relative",
+      }}>
+      {/* Glassmorphic: aurora orbs in the backdrop */}
+      {C.auroraOrbs&&(
+        <div style={{position:"fixed",inset:0,pointerEvents:"none",zIndex:0,overflow:"hidden"}}>
+          <div style={{position:"absolute",width:600,height:600,borderRadius:"50%",
+            background:"radial-gradient(circle,rgba(124,58,237,0.35) 0%,transparent 70%)",
+            top:"-10%",left:"-5%",filter:"blur(80px)"}}/>
+          <div style={{position:"absolute",width:500,height:500,borderRadius:"50%",
+            background:"radial-gradient(circle,rgba(236,72,153,0.25) 0%,transparent 70%)",
+            top:"40%",right:"-8%",filter:"blur(80px)"}}/>
+          <div style={{position:"absolute",width:400,height:400,borderRadius:"50%",
+            background:"radial-gradient(circle,rgba(6,182,212,0.2) 0%,transparent 70%)",
+            bottom:"-5%",left:"30%",filter:"blur(60px)"}}/>
+        </div>
+      )}
+      {/* Phosphor: scanlines overlay */}
+      {C.scanlines&&(
+        <div style={{position:"fixed",inset:0,pointerEvents:"none",zIndex:999,
+          backgroundImage:"repeating-linear-gradient(0deg,rgba(0,0,0,0.18) 0px,rgba(0,0,0,0.18) 1px,transparent 1px,transparent 3px)",
+          backgroundSize:"100% 3px"}}/>
+      )}
+      {/* Glassmorphic: extra scoped CSS for glass surfaces */}
+      {C.glass&&<style>{`
+        [data-glass]{
+          backdrop-filter:${C.blur};
+          -webkit-backdrop-filter:${C.blur};
+          background:${C.surface}!important;
+          border:1px solid ${C.border}!important;
+        }
+      `}</style>}
+      {/* Phosphor: glow CSS */}
+      {C.glow&&<style>{`
+        .sidebar-label,.nav-item span,[data-glow]{text-shadow:${C.glow};}
+        input,textarea{text-shadow:${C.glow}!important;}
+        .nav-item:hover svg{filter:drop-shadow(0 0 4px rgba(57,255,20,0.8))!important;}
+      `}</style>}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
         *{box-sizing:border-box;}
@@ -6598,10 +6702,11 @@ export default function App(){
       }}/>}
 
       {/* ── Sidebar ── */}
-      <div className="sidebar" style={{
+      <div className="sidebar" data-glass={C.glass?"":undefined} style={{
         width:240,background:C.sidebarBg||C.surface,
         borderRight:`1px solid ${C.border}`,
         display:"flex",flexDirection:"column",flexShrink:0,
+        position:"relative",zIndex:1,
         boxShadow:themeName==="light"?"1px 0 0 #f1f5f9":"none",
       }}>
         {/* Logo */}
@@ -6676,12 +6781,13 @@ export default function App(){
       {/* ── Main area ── */}
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
         {/* Topbar */}
-        <div style={{
+        <div data-glass={C.glass?"":undefined} style={{
           padding:"0 24px",height:58,
           borderBottom:`1px solid ${C.border}`,
           background:C.topbarBg||C.surface,
           display:"flex",alignItems:"center",
           justifyContent:"space-between",gap:16,flexShrink:0,
+          position:"relative",zIndex:1,
         }}>
           <div style={{fontSize:15,fontWeight:700,color:C.white||C.textHi,letterSpacing:"-0.01em"}}>
             {NAV.find(n=>n.id===view)?.label||view}
