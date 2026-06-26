@@ -103,6 +103,7 @@ const CVE_NAV=[
 ];
 const ADMIN_NAV=[
   {id:"settings",    label:"Settings",    icon:"settings"},
+  {id:"workspace",   label:"Workspace",   icon:"edit"},
   {id:"health",      label:"Health",      icon:"heartbeat"},
   {id:"connectors",  label:"Connectors",  icon:"radar"},
   {id:"users",       label:"Users",       icon:"usergroup"},
@@ -130,6 +131,7 @@ function NavIcon({name,size=16,color="currentColor"}){
     radar:    <svg {...s}><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>,
     heartbeat:<svg {...s}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>,
     send:     <svg {...s}><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>,
+    edit:     <svg {...s}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
     code:     <svg {...s}><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>,
     settings: <svg {...s}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
     usergroup:<svg {...s}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
@@ -4641,6 +4643,523 @@ function ApiKeysSection({token,C}){
 const DAILY_FREE_QUOTA = 10;
 
 // ── CLIENT ADVISORY BUILDER ───────────────────────────────────────────────────
+// ── ADMIN WORKSPACE ───────────────────────────────────────────────────────────
+const NOTE_COLORS = [
+  {id:"default", bg:"",       border:"",       label:"Default"},
+  {id:"red",     bg:"#7f1d1d",border:"#991b1b", label:"Red"},
+  {id:"orange",  bg:"#7c2d12",border:"#9a3412", label:"Orange"},
+  {id:"yellow",  bg:"#713f12",border:"#854d0e", label:"Yellow"},
+  {id:"green",   bg:"#14532d",border:"#166534", label:"Green"},
+  {id:"teal",    bg:"#134e4a",border:"#0f766e", label:"Teal"},
+  {id:"blue",    bg:"#1e3a5f",border:"#1d4ed8", label:"Blue"},
+  {id:"purple",  bg:"#3b0764",border:"#7e22ce", label:"Purple"},
+  {id:"pink",    bg:"#500724",border:"#be185d", label:"Pink"},
+  {id:"gray",    bg:"#1f2937",border:"#374151", label:"Gray"},
+];
+
+function getNoteStyle(colorId, C) {
+  const nc = NOTE_COLORS.find(c=>c.id===colorId);
+  if (!nc || colorId==="default") return {background:C.surface, border:`1px solid ${C.border}`};
+  return {background:nc.bg, border:`1px solid ${nc.border}`};
+}
+
+function WorkspacePage({token,C}){
+  const [notes,setNotes]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [q,setQ]=useState("");
+  const [tagFilter,setTagFilter]=useState("");
+  const [showArchived,setShowArchived]=useState(false);
+  const [editingNote,setEditingNote]=useState(null); // null | note object | "new"
+  const [draftTitle,setDraftTitle]=useState("");
+  const [draftContent,setDraftContent]=useState("");
+  const [draftType,setDraftType]=useState("text");
+  const [draftColor,setDraftColor]=useState("default");
+  const [draftTags,setDraftTags]=useState([]);
+  const [draftChecklist,setDraftChecklist]=useState([]);
+  const [draftLinkedIocs,setDraftLinkedIocs]=useState([]);
+  const [draftLinkedCves,setDraftLinkedCves]=useState([]);
+  const [tagInput,setTagInput]=useState("");
+  const [saving,setSaving]=useState(false);
+  const [showColorPicker,setShowColorPicker]=useState(false);
+  const titleRef=useRef(null);
+
+  // All unique tags across notes for filter bar
+  const allTags=[...new Set(notes.flatMap(n=>n.tags||[]))].sort();
+
+  useEffect(()=>{loadNotes();},[q,tagFilter,showArchived]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadNotes(){
+    setLoading(true);
+    const params=new URLSearchParams({q,archived:showArchived,tag:tagFilter});
+    const r=await api(`/workspace/notes?${params}`,{},token);
+    if(r.ok) setNotes(await r.json());
+    setLoading(false);
+  }
+
+  function openNew(){
+    setDraftTitle(""); setDraftContent(""); setDraftType("text");
+    setDraftColor("default"); setDraftTags([]); setDraftChecklist([]);
+    setDraftLinkedIocs([]); setDraftLinkedCves([]);
+    setTagInput(""); setShowColorPicker(false);
+    setEditingNote("new");
+    setTimeout(()=>titleRef.current?.focus(),50);
+  }
+
+  function openEdit(note){
+    setDraftTitle(note.title||"");
+    setDraftContent(note.content||"");
+    setDraftType(note.note_type||"text");
+    setDraftColor(note.color||"default");
+    setDraftTags(note.tags||[]);
+    setDraftChecklist((note.checklist||[]).map(i=>typeof i==="string"?{text:i,checked:false}:i));
+    setDraftLinkedIocs(note.linked_iocs||[]);
+    setDraftLinkedCves(note.linked_cves||[]);
+    setTagInput(""); setShowColorPicker(false);
+    setEditingNote(note);
+  }
+
+  function closeEdit(){ setEditingNote(null); }
+
+  async function saveNote(){
+    if(!draftTitle.trim()&&!draftContent.trim()&&draftChecklist.length===0){
+      closeEdit(); return;
+    }
+    setSaving(true);
+    const body={title:draftTitle, content:draftContent, note_type:draftType,
+      color:draftColor, tags:draftTags, checklist:draftChecklist,
+      pinned:editingNote==="new"?false:(editingNote?.pinned||false),
+      archived:false, linked_iocs:draftLinkedIocs, linked_cves:draftLinkedCves};
+    let r;
+    if(editingNote==="new"){
+      r=await api("/workspace/notes",{method:"POST",body:JSON.stringify(body)},token);
+    } else {
+      r=await api(`/workspace/notes/${editingNote.id}`,{method:"PATCH",body:JSON.stringify(body)},token);
+    }
+    if(r.ok){ closeEdit(); loadNotes(); }
+    setSaving(false);
+  }
+
+  async function togglePin(note,e){
+    e.stopPropagation();
+    const body={...note, pinned:!note.pinned,
+      tags:note.tags||[], checklist:note.checklist||[],
+      linked_iocs:note.linked_iocs||[], linked_cves:note.linked_cves||[]};
+    const r=await api(`/workspace/notes/${note.id}`,{method:"PATCH",body:JSON.stringify(body)},token);
+    if(r.ok) loadNotes();
+  }
+
+  async function archiveNote(note,e){
+    e.stopPropagation();
+    const body={...note, archived:true,
+      tags:note.tags||[], checklist:note.checklist||[],
+      linked_iocs:note.linked_iocs||[], linked_cves:note.linked_cves||[]};
+    const r=await api(`/workspace/notes/${note.id}`,{method:"PATCH",body:JSON.stringify(body)},token);
+    if(r.ok) loadNotes();
+  }
+
+  async function deleteNote(note,e){
+    e.stopPropagation();
+    if(!window.confirm("Delete this note permanently?")) return;
+    const r=await api(`/workspace/notes/${note.id}`,{method:"DELETE"},token);
+    if(r.ok) loadNotes();
+  }
+
+  async function toggleCheckItem(note,idx){
+    const cl=(note.checklist||[]).map((item,i)=>
+      i===idx?{...item,checked:!item.checked}:item);
+    const body={...note,checklist:cl,
+      tags:note.tags||[],linked_iocs:note.linked_iocs||[],linked_cves:note.linked_cves||[]};
+    const r=await api(`/workspace/notes/${note.id}`,{method:"PATCH",body:JSON.stringify(body)},token);
+    if(r.ok) loadNotes();
+  }
+
+  function addTag(){
+    const t=tagInput.trim().toLowerCase().replace(/\s+/g,"-");
+    if(t&&!draftTags.includes(t)){setDraftTags(p=>[...p,t]);}
+    setTagInput("");
+  }
+
+  function addCheckItem(){
+    setDraftChecklist(p=>[...p,{text:"",checked:false}]);
+  }
+
+  const pinned=notes.filter(n=>n.pinned);
+  const unpinned=notes.filter(n=>!n.pinned);
+
+  function NoteCard({note}){
+    const ns=getNoteStyle(note.color,C);
+    const checklist=(note.checklist||[]);
+    const done=checklist.filter(i=>i.checked).length;
+    return(
+      <div onClick={()=>openEdit(note)}
+        style={{...ns, borderRadius:12, padding:"14px 16px",
+          cursor:"pointer", position:"relative",
+          transition:"box-shadow 0.15s",
+          breakInside:"avoid", marginBottom:12}}>
+        {/* Pin icon top-right */}
+        <div style={{position:"absolute",top:8,right:8,display:"flex",gap:4}}>
+          <button onClick={e=>togglePin(note,e)}
+            title={note.pinned?"Unpin":"Pin"}
+            style={{background:"none",border:"none",cursor:"pointer",
+              fontSize:14,opacity:note.pinned?1:0.3,padding:2,
+              color:note.color==="default"?C.white||C.textHi:"#fff",
+              lineHeight:1}}>📌</button>
+        </div>
+        {note.title&&<div style={{fontSize:13,fontWeight:700,marginBottom:6,paddingRight:28,
+          color:note.color==="default"?C.white||C.textHi:"#fff",lineHeight:1.3}}>
+          {note.title}
+        </div>}
+        {note.note_type==="text"&&note.content&&(
+          <div style={{fontSize:12,color:note.color==="default"?C.muted:"rgba(255,255,255,0.75)",
+            lineHeight:1.6,whiteSpace:"pre-wrap",
+            overflow:"hidden",display:"-webkit-box",WebkitLineClamp:8,
+            WebkitBoxOrient:"vertical"}}>
+            {note.content}
+          </div>
+        )}
+        {note.note_type==="checklist"&&checklist.length>0&&(
+          <div>
+            {checklist.slice(0,8).map((item,idx)=>(
+              <div key={idx} onClick={e=>{e.stopPropagation();toggleCheckItem(note,idx);}}
+                style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,cursor:"pointer"}}>
+                <input type="checkbox" checked={item.checked} readOnly
+                  style={{accentColor:note.color==="default"?C.accent:"#fff",
+                    width:14,height:14,flexShrink:0}}/>
+                <span style={{fontSize:12,
+                  color:note.color==="default"?C.text:"#fff",
+                  textDecoration:item.checked?"line-through":"none",
+                  opacity:item.checked?0.5:1,
+                  lineHeight:1.4}}>
+                  {item.text||<span style={{opacity:0.3}}>Empty item</span>}
+                </span>
+              </div>
+            ))}
+            {checklist.length>8&&(
+              <div style={{fontSize:11,opacity:0.6,
+                color:note.color==="default"?C.muted:"rgba(255,255,255,0.6)",marginTop:4}}>
+                +{checklist.length-8} more items
+              </div>
+            )}
+            {checklist.length>0&&(
+              <div style={{fontSize:10,marginTop:6,opacity:0.7,
+                color:note.color==="default"?C.muted:"rgba(255,255,255,0.6)"}}>
+                {done}/{checklist.length} done
+              </div>
+            )}
+          </div>
+        )}
+        {/* Tags */}
+        {(note.tags||[]).length>0&&(
+          <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:8}}>
+            {note.tags.map(t=>(
+              <span key={t} style={{fontSize:10,padding:"2px 7px",borderRadius:10,
+                background:note.color==="default"?C.accentDim:"rgba(255,255,255,0.15)",
+                color:note.color==="default"?C.accentText:"rgba(255,255,255,0.9)",
+                cursor:"pointer"}}
+                onClick={e=>{e.stopPropagation();setTagFilter(t);}}>
+                #{t}
+              </span>
+            ))}
+          </div>
+        )}
+        {/* Bottom actions — show on hover via opacity trick */}
+        <div style={{display:"flex",gap:4,marginTop:10}}>
+          <button onClick={e=>archiveNote(note,e)}
+            title="Archive"
+            style={{background:"none",border:"none",cursor:"pointer",
+              fontSize:13,opacity:0.4,padding:"2px 4px",
+              color:note.color==="default"?C.muted:"#fff",lineHeight:1}}>
+            📦
+          </button>
+          <button onClick={e=>deleteNote(note,e)}
+            title="Delete"
+            style={{background:"none",border:"none",cursor:"pointer",
+              fontSize:13,opacity:0.4,padding:"2px 4px",
+              color:note.color==="default"?C.muted:"#fff",lineHeight:1}}>
+            🗑
+          </button>
+          <span style={{fontSize:10,marginLeft:"auto",opacity:0.4,
+            color:note.color==="default"?C.muted:"#fff",alignSelf:"center"}}>
+            {note.updated_at?new Date(note.updated_at).toLocaleDateString():""}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // Edit / Create modal
+  function NoteEditor(){
+    if(!editingNote) return null;
+    const ns=getNoteStyle(draftColor,C);
+    return(
+      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",
+        zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+        onClick={closeEdit}>
+        <div onClick={e=>e.stopPropagation()}
+          style={{width:"100%",maxWidth:560,...ns,borderRadius:16,
+            boxShadow:"0 20px 60px rgba(0,0,0,0.5)",overflow:"hidden",
+            maxHeight:"85vh",display:"flex",flexDirection:"column"}}>
+
+          {/* Title */}
+          <input ref={titleRef} value={draftTitle}
+            onChange={e=>setDraftTitle(e.target.value)}
+            placeholder="Title"
+            style={{border:"none",outline:"none",padding:"16px 16px 0",
+              fontSize:16,fontWeight:700,background:"transparent",
+              color:draftColor==="default"?C.white||C.textHi:"#fff",
+              fontFamily:"inherit",width:"100%",boxSizing:"border-box"}}/>
+
+          {/* Content / Checklist */}
+          <div style={{flex:1,overflowY:"auto",padding:"8px 16px"}}>
+            {draftType==="text"&&(
+              <textarea value={draftContent}
+                onChange={e=>setDraftContent(e.target.value)}
+                placeholder="Take a note..."
+                rows={8}
+                style={{border:"none",outline:"none",width:"100%",
+                  background:"transparent",resize:"vertical",
+                  fontSize:13,lineHeight:1.7,
+                  color:draftColor==="default"?C.text:"rgba(255,255,255,0.9)",
+                  fontFamily:"inherit",boxSizing:"border-box"}}/>
+            )}
+            {draftType==="checklist"&&(
+              <div>
+                {draftChecklist.map((item,idx)=>(
+                  <div key={idx} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                    <input type="checkbox" checked={item.checked}
+                      onChange={()=>setDraftChecklist(p=>p.map((x,i)=>i===idx?{...x,checked:!x.checked}:x))}
+                      style={{accentColor:draftColor==="default"?C.accent:"#fff",
+                        width:15,height:15,flexShrink:0,cursor:"pointer"}}/>
+                    <input value={item.text}
+                      onChange={e=>setDraftChecklist(p=>p.map((x,i)=>i===idx?{...x,text:e.target.value}:x))}
+                      placeholder="List item"
+                      onKeyDown={e=>{
+                        if(e.key==="Enter"){e.preventDefault();addCheckItem();}
+                        if(e.key==="Backspace"&&!item.text&&draftChecklist.length>1){
+                          e.preventDefault();
+                          setDraftChecklist(p=>p.filter((_,i)=>i!==idx));
+                        }
+                      }}
+                      style={{flex:1,border:"none",outline:"none",background:"transparent",
+                        fontSize:13,fontFamily:"inherit",
+                        textDecoration:item.checked?"line-through":"none",
+                        opacity:item.checked?0.5:1,
+                        color:draftColor==="default"?C.text:"rgba(255,255,255,0.9)"}}/>
+                    <button onClick={()=>setDraftChecklist(p=>p.filter((_,i)=>i!==idx))}
+                      style={{background:"none",border:"none",cursor:"pointer",
+                        color:draftColor==="default"?C.muted:"rgba(255,255,255,0.5)",
+                        fontSize:16,lineHeight:1,padding:"0 4px"}}>×</button>
+                  </div>
+                ))}
+                <button onClick={addCheckItem}
+                  style={{background:"none",border:"none",cursor:"pointer",
+                    fontSize:12,color:draftColor==="default"?C.muted:"rgba(255,255,255,0.6)",
+                    padding:"4px 0",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
+                  + Add item
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Tags */}
+          {draftTags.length>0&&(
+            <div style={{display:"flex",gap:4,flexWrap:"wrap",padding:"0 16px 8px"}}>
+              {draftTags.map(t=>(
+                <span key={t} style={{fontSize:11,padding:"2px 8px",borderRadius:10,
+                  background:draftColor==="default"?C.accentDim:"rgba(255,255,255,0.15)",
+                  color:draftColor==="default"?C.accentText:"#fff",
+                  display:"flex",alignItems:"center",gap:4}}>
+                  #{t}
+                  <button onClick={()=>setDraftTags(p=>p.filter(x=>x!==t))}
+                    style={{background:"none",border:"none",cursor:"pointer",padding:0,
+                      color:"inherit",fontSize:14,lineHeight:1}}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Bottom toolbar */}
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"8px 12px",
+            borderTop:`1px solid rgba(255,255,255,0.1)`,flexWrap:"wrap"}}>
+
+            {/* Type toggle */}
+            <div style={{display:"flex",borderRadius:6,overflow:"hidden",border:`1px solid rgba(255,255,255,0.15)`}}>
+              {[["text","📝"],["checklist","☑️"]].map(([t,icon])=>(
+                <button key={t} onClick={()=>setDraftType(t)}
+                  style={{background:draftType===t?"rgba(255,255,255,0.2)":"transparent",
+                    border:"none",cursor:"pointer",padding:"4px 10px",
+                    fontSize:12,color:draftType===t?"#fff":"rgba(255,255,255,0.6)",
+                    fontFamily:"inherit"}}>
+                  {icon} {t.charAt(0).toUpperCase()+t.slice(1)}
+                </button>
+              ))}
+            </div>
+
+            {/* Color picker */}
+            <div style={{position:"relative"}}>
+              <button onClick={()=>setShowColorPicker(p=>!p)}
+                title="Change color"
+                style={{background:showColorPicker?"rgba(255,255,255,0.2)":"transparent",
+                  border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,cursor:"pointer",
+                  padding:"4px 10px",fontSize:12,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>
+                🎨 Color
+              </button>
+              {showColorPicker&&(
+                <div style={{position:"absolute",bottom:"calc(100% + 6px)",left:0,
+                  background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
+                  padding:10,display:"flex",flexWrap:"wrap",gap:6,width:200,zIndex:10,
+                  boxShadow:"0 8px 24px rgba(0,0,0,0.4)"}}>
+                  {NOTE_COLORS.map(nc=>(
+                    <button key={nc.id} title={nc.label}
+                      onClick={()=>{setDraftColor(nc.id);setShowColorPicker(false);}}
+                      style={{width:28,height:28,borderRadius:14,cursor:"pointer",
+                        background:nc.bg||C.surfaceHi,
+                        border:`2px solid ${draftColor===nc.id?"#fff":nc.border||C.border}`,
+                        boxShadow:draftColor===nc.id?"0 0 0 2px rgba(255,255,255,0.5)":"none"}}/>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Tag add */}
+            <div style={{display:"flex",gap:4}}>
+              <input value={tagInput} onChange={e=>setTagInput(e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addTag();}}}
+                placeholder="#tag"
+                style={{width:80,border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,
+                  background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.8)",
+                  padding:"4px 8px",fontSize:11,outline:"none",fontFamily:"inherit"}}/>
+              <button onClick={addTag}
+                style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",
+                  borderRadius:6,cursor:"pointer",padding:"4px 8px",
+                  fontSize:11,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>Add</button>
+            </div>
+
+            <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+              <button onClick={closeEdit}
+                style={{background:"transparent",border:"1px solid rgba(255,255,255,0.2)",
+                  borderRadius:6,cursor:"pointer",padding:"5px 14px",
+                  fontSize:12,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>
+                Discard
+              </button>
+              <button onClick={saveNote} disabled={saving}
+                style={{background:"rgba(255,255,255,0.9)",border:"none",borderRadius:6,
+                  cursor:"pointer",padding:"5px 14px",fontSize:12,fontWeight:700,
+                  color:"#1e293b",fontFamily:"inherit"}}>
+                {saving?"Saving...":"Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{maxWidth:1000}}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
+        <div style={{fontSize:18,fontWeight:700,color:C.white||C.textHi}}>
+          Workspace
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center",flex:1,maxWidth:400}}>
+          <div style={{flex:1,position:"relative"}}>
+            <input value={q} onChange={e=>setQ(e.target.value)}
+              placeholder="Search notes..."
+              style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                color:C.inputText,padding:"8px 12px 8px 32px",borderRadius:8,
+                fontSize:13,outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
+            <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",
+              color:C.muted,fontSize:14}}>🔍</span>
+          </div>
+          <button onClick={openNew}
+            style={{padding:"8px 18px",borderRadius:8,cursor:"pointer",fontFamily:"inherit",
+              fontSize:13,fontWeight:700,background:C.accent,border:"none",color:"#fff",
+              flexShrink:0}}>
+            + New Note
+          </button>
+        </div>
+      </div>
+
+      {/* Tag filter bar */}
+      {allTags.length>0&&(
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
+          <button onClick={()=>setTagFilter("")}
+            style={{fontSize:11,padding:"4px 10px",borderRadius:10,cursor:"pointer",
+              border:`1px solid ${!tagFilter?C.accent:C.border}`,
+              background:!tagFilter?C.accentDim:"transparent",
+              color:!tagFilter?C.accentText:C.muted,fontFamily:"inherit"}}>
+            All
+          </button>
+          {allTags.map(t=>(
+            <button key={t} onClick={()=>setTagFilter(t===tagFilter?"":t)}
+              style={{fontSize:11,padding:"4px 10px",borderRadius:10,cursor:"pointer",
+                border:`1px solid ${tagFilter===t?C.accent:C.border}`,
+                background:tagFilter===t?C.accentDim:"transparent",
+                color:tagFilter===t?C.accentText:C.muted,fontFamily:"inherit"}}>
+              #{t}
+            </button>
+          ))}
+          <button onClick={()=>setShowArchived(p=>!p)}
+            style={{fontSize:11,padding:"4px 10px",borderRadius:10,cursor:"pointer",
+              border:`1px solid ${showArchived?C.amber:C.border}`,
+              background:showArchived?C.amber+"15":"transparent",
+              color:showArchived?C.amber:C.muted,fontFamily:"inherit",marginLeft:"auto"}}>
+            {showArchived?"Hide archived":"Show archived"}
+          </button>
+        </div>
+      )}
+
+      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>Loading workspace...</div>}
+
+      {!loading&&notes.length===0&&(
+        <div style={{textAlign:"center",padding:64,color:C.muted}}>
+          <div style={{fontSize:40,marginBottom:12}}>📝</div>
+          <div style={{fontSize:14,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>
+            {q||tagFilter?"No notes match your search":"Your workspace is empty"}
+          </div>
+          <div style={{fontSize:12,marginBottom:20}}>
+            Notes, checklists, threat intel context — keep everything in one place.
+          </div>
+          {!q&&!tagFilter&&(
+            <button onClick={openNew}
+              style={{padding:"8px 20px",borderRadius:8,cursor:"pointer",fontFamily:"inherit",
+                fontSize:13,fontWeight:700,background:C.accent,border:"none",color:"#fff"}}>
+              Create your first note
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Pinned section */}
+      {pinned.length>0&&(
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.muted,textTransform:"uppercase",
+            letterSpacing:"0.08em",marginBottom:10}}>📌 Pinned</div>
+          <div style={{columns:"2 300px",columnGap:12}}>
+            {pinned.map(n=><NoteCard key={n.id} note={n}/>)}
+          </div>
+        </div>
+      )}
+
+      {/* Other notes */}
+      {unpinned.length>0&&(
+        <div>
+          {pinned.length>0&&<div style={{fontSize:10,fontWeight:700,color:C.muted,
+            textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:10}}>Other</div>}
+          <div style={{columns:"2 300px",columnGap:12}}>
+            {unpinned.map(n=><NoteCard key={n.id} note={n}/>)}
+          </div>
+        </div>
+      )}
+
+      <NoteEditor/>
+    </div>
+  );
+}
+
+
+
 function AdvisoryBuilder({token,C}){
   const [iocPool,setIocPool]=useState([]);
   const [poolLoading,setPoolLoading]=useState(true);
@@ -6186,6 +6705,7 @@ export default function App(){
           {view==="public"&&<PublicSearch C={C}/>}
           {view==="bulklookup"&&<BulkLookup token={token} C={C}/>}
           {view==="settings"&&<SettingsPage themeName={themeName} setThemeName={setThemeName} token={token} onLogout={logout} C={C} me={me} onOpenApiKeys={()=>setShowApiKeyModal(true)}/>}
+          {view==="workspace"&&me?.role==="admin"&&<WorkspacePage token={token} C={C}/>}
           {view==="health"&&me?.role==="admin"&&<HealthPage token={token} C={C}/>}
           {view==="advisory"&&<AdvisoryBuilder token={token} C={C}/>}
           {view==="connectors"&&me?.role==="admin"&&<ConnectorsPage token={token} C={C}/>}

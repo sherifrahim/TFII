@@ -353,6 +353,20 @@ async def startup():
             email VARCHAR(255) NOT NULL, message TEXT,
             status VARCHAR(20) DEFAULT 'pending', granted_role VARCHAR(20),
             requested_at TIMESTAMP DEFAULT NOW(), decided_at TIMESTAMP, decided_by VARCHAR(100))""",
+        """CREATE TABLE IF NOT EXISTS admin_notes (
+            id VARCHAR(100) PRIMARY KEY,
+            title TEXT DEFAULT '',
+            content TEXT DEFAULT '',
+            note_type VARCHAR(20) DEFAULT 'text',
+            color VARCHAR(30) DEFAULT 'default',
+            pinned BOOLEAN DEFAULT FALSE,
+            archived BOOLEAN DEFAULT FALSE,
+            tags TEXT[] DEFAULT '{}',
+            checklist JSONB DEFAULT '[]',
+            linked_iocs TEXT[] DEFAULT '{}',
+            linked_cves TEXT[] DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW())""",
         """CREATE TABLE IF NOT EXISTS invite_codes (
             code VARCHAR(64) PRIMARY KEY, role VARCHAR(20) DEFAULT 'analyst',
             created_by VARCHAR(100), used BOOLEAN DEFAULT FALSE,
@@ -905,6 +919,94 @@ async def preview_brief(type: str = "daily", admin=Depends(require_admin)):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 REPO_URL = "https://github.com/sherifrahim/TFII"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADMIN WORKSPACE — personal notes / checklists (admin-only, like Google Keep)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class NoteIn(BaseModel):
+    title:        Optional[str]   = ""
+    content:      Optional[str]   = ""
+    note_type:    Optional[str]   = "text"        # "text" | "checklist"
+    color:        Optional[str]   = "default"
+    pinned:       Optional[bool]  = False
+    archived:     Optional[bool]  = False
+    tags:         Optional[List[str]] = []
+    checklist:    Optional[list]  = []            # [{text, checked}]
+    linked_iocs:  Optional[List[str]] = []
+    linked_cves:  Optional[List[str]] = []
+
+@app.get("/workspace/notes")
+def list_notes(
+    q: str = "",
+    tag: str = "",
+    archived: bool = False,
+    note_type: str = "",
+    admin=Depends(require_admin), conn=Depends(get_db)
+):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    filters = ["archived = %s"]; params = [archived]
+    if q:
+        filters.append("(title ILIKE %s OR content ILIKE %s)")
+        params += [f"%{q}%", f"%{q}%"]
+    if tag:
+        filters.append("%s = ANY(tags)")
+        params.append(tag)
+    if note_type:
+        filters.append("note_type = %s")
+        params.append(note_type)
+    where = " AND ".join(filters)
+    cur.execute(f"""
+        SELECT * FROM admin_notes
+        WHERE {where}
+        ORDER BY pinned DESC, updated_at DESC
+    """, params)
+    return cur.fetchall()
+
+@app.post("/workspace/notes", status_code=201)
+def create_note(body: NoteIn, admin=Depends(require_admin), conn=Depends(get_db)):
+    note_id = f"note--{uuid.uuid4()}"
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO admin_notes
+            (id,title,content,note_type,color,pinned,archived,tags,checklist,linked_iocs,linked_cves)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    """, (note_id, body.title, body.content, body.note_type, body.color,
+          body.pinned, body.archived, body.tags or [],
+          psycopg2.extras.Json(body.checklist or []),
+          body.linked_iocs or [], body.linked_cves or []))
+    conn.commit()
+    cur2 = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur2.execute("SELECT * FROM admin_notes WHERE id = %s", (note_id,))
+    return cur2.fetchone()
+
+@app.patch("/workspace/notes/{note_id}")
+def update_note(note_id: str, body: NoteIn, admin=Depends(require_admin), conn=Depends(get_db)):
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE admin_notes SET
+            title=%s, content=%s, note_type=%s, color=%s,
+            pinned=%s, archived=%s, tags=%s, checklist=%s,
+            linked_iocs=%s, linked_cves=%s,
+            updated_at=NOW()
+        WHERE id=%s
+    """, (body.title, body.content, body.note_type, body.color,
+          body.pinned, body.archived, body.tags or [],
+          psycopg2.extras.Json(body.checklist or []),
+          body.linked_iocs or [], body.linked_cves or [], note_id))
+    conn.commit()
+    cur2 = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur2.execute("SELECT * FROM admin_notes WHERE id = %s", (note_id,))
+    return cur2.fetchone()
+
+@app.delete("/workspace/notes/{note_id}")
+def delete_note(note_id: str, admin=Depends(require_admin), conn=Depends(get_db)):
+    cur = conn.cursor()
+    cur.execute("DELETE FROM admin_notes WHERE id = %s", (note_id,))
+    conn.commit()
+    return {"deleted": True}
+
+
 
 async def send_welcome_email(to_email: str, username: str, conn) -> bool:
     """
