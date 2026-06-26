@@ -4643,6 +4643,276 @@ function ApiKeysSection({token,C}){
 const DAILY_FREE_QUOTA = 10;
 
 // ── CLIENT ADVISORY BUILDER ───────────────────────────────────────────────────
+
+function NoteCard({note,onEdit,onTogglePin,onArchive,onDelete,onToggleCheck,onTagFilter,C}){
+  const ns=getNoteStyle(note.color,C);
+  const checklist=(note.checklist||[]);
+  const done=checklist.filter(i=>i.checked).length;
+  return(
+    <div onClick={()=>onEdit(note)}
+      style={{...ns, borderRadius:12, padding:"14px 16px",
+        cursor:"pointer", position:"relative",
+        transition:"box-shadow 0.15s",
+        breakInside:"avoid", marginBottom:12}}>
+      {/* Pin icon top-right */}
+      <div style={{position:"absolute",top:8,right:8,display:"flex",gap:4}}>
+        <button onClick={e=>onTogglePin(note,e)}
+          title={note.pinned?"Unpin":"Pin"}
+          style={{background:"none",border:"none",cursor:"pointer",
+            fontSize:14,opacity:note.pinned?1:0.3,padding:2,
+            color:note.color==="default"?C.white||C.textHi:"#fff",
+            lineHeight:1}}>📌</button>
+      </div>
+      {note.title&&<div style={{fontSize:13,fontWeight:700,marginBottom:6,paddingRight:28,
+        color:note.color==="default"?C.white||C.textHi:"#fff",lineHeight:1.3}}>
+        {note.title}
+      </div>}
+      {note.note_type==="text"&&note.content&&(
+        <div style={{fontSize:12,color:note.color==="default"?C.muted:"rgba(255,255,255,0.75)",
+          lineHeight:1.6,whiteSpace:"pre-wrap",
+          overflow:"hidden",display:"-webkit-box",WebkitLineClamp:8,
+          WebkitBoxOrient:"vertical"}}>
+          {note.content}
+        </div>
+      )}
+      {note.note_type==="checklist"&&checklist.length>0&&(
+        <div>
+          {checklist.slice(0,8).map((item,idx)=>(
+            <div key={idx} onClick={e=>{e.stopPropagation();onToggleCheck(note,idx);}}
+              style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,cursor:"pointer"}}>
+              <input type="checkbox" checked={item.checked} readOnly
+                style={{accentColor:note.color==="default"?C.accent:"#fff",
+                  width:14,height:14,flexShrink:0}}/>
+              <span style={{fontSize:12,
+                color:note.color==="default"?C.text:"#fff",
+                textDecoration:item.checked?"line-through":"none",
+                opacity:item.checked?0.5:1,
+                lineHeight:1.4}}>
+                {item.text||<span style={{opacity:0.3}}>Empty item</span>}
+              </span>
+            </div>
+          ))}
+          {checklist.length>8&&(
+            <div style={{fontSize:11,opacity:0.6,
+              color:note.color==="default"?C.muted:"rgba(255,255,255,0.6)",marginTop:4}}>
+              +{checklist.length-8} more items
+            </div>
+          )}
+          {checklist.length>0&&(
+            <div style={{fontSize:10,marginTop:6,opacity:0.7,
+              color:note.color==="default"?C.muted:"rgba(255,255,255,0.6)"}}>
+              {done}/{checklist.length} done
+            </div>
+          )}
+        </div>
+      )}
+      {/* Tags */}
+      {(note.tags||[]).length>0&&(
+        <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:8}}>
+          {note.tags.map(t=>(
+            <span key={t} style={{fontSize:10,padding:"2px 7px",borderRadius:10,
+              background:note.color==="default"?C.accentDim:"rgba(255,255,255,0.15)",
+              color:note.color==="default"?C.accentText:"rgba(255,255,255,0.9)",
+              cursor:"pointer"}}
+              onClick={e=>{e.stopPropagation();onTagFilter(t);}}>
+              #{t}
+            </span>
+          ))}
+        </div>
+      )}
+      {/* Bottom actions — show on hover via opacity trick */}
+      <div style={{display:"flex",gap:4,marginTop:10}}>
+        <button onClick={e=>onArchive(note,e)}
+          title="Archive"
+          style={{background:"none",border:"none",cursor:"pointer",
+            fontSize:13,opacity:0.4,padding:"2px 4px",
+            color:note.color==="default"?C.muted:"#fff",lineHeight:1}}>
+          📦
+        </button>
+        <button onClick={e=>onDelete(note,e)}
+          title="Delete"
+          style={{background:"none",border:"none",cursor:"pointer",
+            fontSize:13,opacity:0.4,padding:"2px 4px",
+            color:note.color==="default"?C.muted:"#fff",lineHeight:1}}>
+          🗑
+        </button>
+        <span style={{fontSize:10,marginLeft:"auto",opacity:0.4,
+          color:note.color==="default"?C.muted:"#fff",alignSelf:"center"}}>
+          {note.updated_at?new Date(note.updated_at).toLocaleDateString():""}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+
+function NoteEditor({editingNote,draftTitle,setDraftTitle,draftContent,setDraftContent,draftType,setDraftType,draftColor,setDraftColor,draftTags,setDraftTags,draftChecklist,setDraftChecklist,tagInput,setTagInput,showColorPicker,setShowColorPicker,saving,titleRef,onClose,onSave,addCheckItem,addTag,C}){
+    const ns=getNoteStyle(draftColor,C);
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",
+      zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{width:"100%",maxWidth:560,...ns,borderRadius:16,
+          boxShadow:"0 20px 60px rgba(0,0,0,0.5)",overflow:"hidden",
+          maxHeight:"85vh",display:"flex",flexDirection:"column"}}>
+
+        {/* Title */}
+        <input ref={titleRef} value={draftTitle}
+          onChange={e=>setDraftTitle(e.target.value)}
+          placeholder="Title"
+          style={{border:"none",outline:"none",padding:"16px 16px 0",
+            fontSize:16,fontWeight:700,background:"transparent",
+            color:draftColor==="default"?C.white||C.textHi:"#fff",
+            fontFamily:"inherit",width:"100%",boxSizing:"border-box"}}/>
+
+        {/* Content / Checklist */}
+        <div style={{flex:1,overflowY:"auto",padding:"8px 16px"}}>
+          {draftType==="text"&&(
+            <textarea value={draftContent}
+              onChange={e=>setDraftContent(e.target.value)}
+              placeholder="Take a note..."
+              rows={8}
+              style={{border:"none",outline:"none",width:"100%",
+                background:"transparent",resize:"vertical",
+                fontSize:13,lineHeight:1.7,
+                color:draftColor==="default"?C.text:"rgba(255,255,255,0.9)",
+                fontFamily:"inherit",boxSizing:"border-box"}}/>
+          )}
+          {draftType==="checklist"&&(
+            <div>
+              {draftChecklist.map((item,idx)=>(
+                <div key={idx} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                  <input type="checkbox" checked={item.checked}
+                    onChange={()=>setDraftChecklist(p=>p.map((x,i)=>i===idx?{...x,checked:!x.checked}:x))}
+                    style={{accentColor:draftColor==="default"?C.accent:"#fff",
+                      width:15,height:15,flexShrink:0,cursor:"pointer"}}/>
+                  <input value={item.text}
+                    onChange={e=>setDraftChecklist(p=>p.map((x,i)=>i===idx?{...x,text:e.target.value}:x))}
+                    placeholder="List item"
+                    onKeyDown={e=>{
+                      if(e.key==="Enter"){e.preventDefault();addCheckItem();}
+                      if(e.key==="Backspace"&&!item.text&&draftChecklist.length>1){
+                        e.preventDefault();
+                        setDraftChecklist(p=>p.filter((_,i)=>i!==idx));
+                      }
+                    }}
+                    style={{flex:1,border:"none",outline:"none",background:"transparent",
+                      fontSize:13,fontFamily:"inherit",
+                      textDecoration:item.checked?"line-through":"none",
+                      opacity:item.checked?0.5:1,
+                      color:draftColor==="default"?C.text:"rgba(255,255,255,0.9)"}}/>
+                  <button onClick={()=>setDraftChecklist(p=>p.filter((_,i)=>i!==idx))}
+                    style={{background:"none",border:"none",cursor:"pointer",
+                      color:draftColor==="default"?C.muted:"rgba(255,255,255,0.5)",
+                      fontSize:16,lineHeight:1,padding:"0 4px"}}>×</button>
+                </div>
+              ))}
+              <button onClick={addCheckItem}
+                style={{background:"none",border:"none",cursor:"pointer",
+                  fontSize:12,color:draftColor==="default"?C.muted:"rgba(255,255,255,0.6)",
+                  padding:"4px 0",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
+                + Add item
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Tags */}
+        {draftTags.length>0&&(
+          <div style={{display:"flex",gap:4,flexWrap:"wrap",padding:"0 16px 8px"}}>
+            {draftTags.map(t=>(
+              <span key={t} style={{fontSize:11,padding:"2px 8px",borderRadius:10,
+                background:draftColor==="default"?C.accentDim:"rgba(255,255,255,0.15)",
+                color:draftColor==="default"?C.accentText:"#fff",
+                display:"flex",alignItems:"center",gap:4}}>
+                #{t}
+                <button onClick={()=>setDraftTags(p=>p.filter(x=>x!==t))}
+                  style={{background:"none",border:"none",cursor:"pointer",padding:0,
+                    color:"inherit",fontSize:14,lineHeight:1}}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Bottom toolbar */}
+        <div style={{display:"flex",alignItems:"center",gap:6,padding:"8px 12px",
+          borderTop:`1px solid rgba(255,255,255,0.1)`,flexWrap:"wrap"}}>
+
+          {/* Type toggle */}
+          <div style={{display:"flex",borderRadius:6,overflow:"hidden",border:`1px solid rgba(255,255,255,0.15)`}}>
+            {[["text","📝"],["checklist","☑️"]].map(([t,icon])=>(
+              <button key={t} onClick={()=>setDraftType(t)}
+                style={{background:draftType===t?"rgba(255,255,255,0.2)":"transparent",
+                  border:"none",cursor:"pointer",padding:"4px 10px",
+                  fontSize:12,color:draftType===t?"#fff":"rgba(255,255,255,0.6)",
+                  fontFamily:"inherit"}}>
+                {icon} {t.charAt(0).toUpperCase()+t.slice(1)}
+              </button>
+            ))}
+          </div>
+
+          {/* Color picker */}
+          <div style={{position:"relative"}}>
+            <button onClick={()=>setShowColorPicker(p=>!p)}
+              title="Change color"
+              style={{background:showColorPicker?"rgba(255,255,255,0.2)":"transparent",
+                border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,cursor:"pointer",
+                padding:"4px 10px",fontSize:12,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>
+              🎨 Color
+            </button>
+            {showColorPicker&&(
+              <div style={{position:"absolute",bottom:"calc(100% + 6px)",left:0,
+                background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
+                padding:10,display:"flex",flexWrap:"wrap",gap:6,width:200,zIndex:10,
+                boxShadow:"0 8px 24px rgba(0,0,0,0.4)"}}>
+                {NOTE_COLORS.map(nc=>(
+                  <button key={nc.id} title={nc.label}
+                    onClick={()=>{setDraftColor(nc.id);setShowColorPicker(false);}}
+                    style={{width:28,height:28,borderRadius:14,cursor:"pointer",
+                      background:nc.bg||C.surfaceHi,
+                      border:`2px solid ${draftColor===nc.id?"#fff":nc.border||C.border}`,
+                      boxShadow:draftColor===nc.id?"0 0 0 2px rgba(255,255,255,0.5)":"none"}}/>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Tag add */}
+          <div style={{display:"flex",gap:4}}>
+            <input value={tagInput} onChange={e=>setTagInput(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addTag();}}}
+              placeholder="#tag"
+              style={{width:80,border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,
+                background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.8)",
+                padding:"4px 8px",fontSize:11,outline:"none",fontFamily:"inherit"}}/>
+            <button onClick={addTag}
+              style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",
+                borderRadius:6,cursor:"pointer",padding:"4px 8px",
+                fontSize:11,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>Add</button>
+          </div>
+
+          <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+            <button onClick={onClose}
+              style={{background:"transparent",border:"1px solid rgba(255,255,255,0.2)",
+                borderRadius:6,cursor:"pointer",padding:"5px 14px",
+                fontSize:12,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>
+              Discard
+            </button>
+            <button onClick={onSave} disabled={saving}
+              style={{background:"rgba(255,255,255,0.9)",border:"none",borderRadius:6,
+                cursor:"pointer",padding:"5px 14px",fontSize:12,fontWeight:700,
+                color:"#1e293b",fontFamily:"inherit"}}>
+              {saving?"Saving...":"Save"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 // ── ADMIN WORKSPACE ───────────────────────────────────────────────────────────
 const NOTE_COLORS = [
   {id:"default", bg:"",       border:"",       label:"Default"},
@@ -4786,274 +5056,8 @@ function WorkspacePage({token,C}){
   const pinned=notes.filter(n=>n.pinned);
   const unpinned=notes.filter(n=>!n.pinned);
 
-  function NoteCard({note}){
-    const ns=getNoteStyle(note.color,C);
-    const checklist=(note.checklist||[]);
-    const done=checklist.filter(i=>i.checked).length;
-    return(
-      <div onClick={()=>openEdit(note)}
-        style={{...ns, borderRadius:12, padding:"14px 16px",
-          cursor:"pointer", position:"relative",
-          transition:"box-shadow 0.15s",
-          breakInside:"avoid", marginBottom:12}}>
-        {/* Pin icon top-right */}
-        <div style={{position:"absolute",top:8,right:8,display:"flex",gap:4}}>
-          <button onClick={e=>togglePin(note,e)}
-            title={note.pinned?"Unpin":"Pin"}
-            style={{background:"none",border:"none",cursor:"pointer",
-              fontSize:14,opacity:note.pinned?1:0.3,padding:2,
-              color:note.color==="default"?C.white||C.textHi:"#fff",
-              lineHeight:1}}>📌</button>
-        </div>
-        {note.title&&<div style={{fontSize:13,fontWeight:700,marginBottom:6,paddingRight:28,
-          color:note.color==="default"?C.white||C.textHi:"#fff",lineHeight:1.3}}>
-          {note.title}
-        </div>}
-        {note.note_type==="text"&&note.content&&(
-          <div style={{fontSize:12,color:note.color==="default"?C.muted:"rgba(255,255,255,0.75)",
-            lineHeight:1.6,whiteSpace:"pre-wrap",
-            overflow:"hidden",display:"-webkit-box",WebkitLineClamp:8,
-            WebkitBoxOrient:"vertical"}}>
-            {note.content}
-          </div>
-        )}
-        {note.note_type==="checklist"&&checklist.length>0&&(
-          <div>
-            {checklist.slice(0,8).map((item,idx)=>(
-              <div key={idx} onClick={e=>{e.stopPropagation();toggleCheckItem(note,idx);}}
-                style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,cursor:"pointer"}}>
-                <input type="checkbox" checked={item.checked} readOnly
-                  style={{accentColor:note.color==="default"?C.accent:"#fff",
-                    width:14,height:14,flexShrink:0}}/>
-                <span style={{fontSize:12,
-                  color:note.color==="default"?C.text:"#fff",
-                  textDecoration:item.checked?"line-through":"none",
-                  opacity:item.checked?0.5:1,
-                  lineHeight:1.4}}>
-                  {item.text||<span style={{opacity:0.3}}>Empty item</span>}
-                </span>
-              </div>
-            ))}
-            {checklist.length>8&&(
-              <div style={{fontSize:11,opacity:0.6,
-                color:note.color==="default"?C.muted:"rgba(255,255,255,0.6)",marginTop:4}}>
-                +{checklist.length-8} more items
-              </div>
-            )}
-            {checklist.length>0&&(
-              <div style={{fontSize:10,marginTop:6,opacity:0.7,
-                color:note.color==="default"?C.muted:"rgba(255,255,255,0.6)"}}>
-                {done}/{checklist.length} done
-              </div>
-            )}
-          </div>
-        )}
-        {/* Tags */}
-        {(note.tags||[]).length>0&&(
-          <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:8}}>
-            {note.tags.map(t=>(
-              <span key={t} style={{fontSize:10,padding:"2px 7px",borderRadius:10,
-                background:note.color==="default"?C.accentDim:"rgba(255,255,255,0.15)",
-                color:note.color==="default"?C.accentText:"rgba(255,255,255,0.9)",
-                cursor:"pointer"}}
-                onClick={e=>{e.stopPropagation();setTagFilter(t);}}>
-                #{t}
-              </span>
-            ))}
-          </div>
-        )}
-        {/* Bottom actions — show on hover via opacity trick */}
-        <div style={{display:"flex",gap:4,marginTop:10}}>
-          <button onClick={e=>archiveNote(note,e)}
-            title="Archive"
-            style={{background:"none",border:"none",cursor:"pointer",
-              fontSize:13,opacity:0.4,padding:"2px 4px",
-              color:note.color==="default"?C.muted:"#fff",lineHeight:1}}>
-            📦
-          </button>
-          <button onClick={e=>deleteNote(note,e)}
-            title="Delete"
-            style={{background:"none",border:"none",cursor:"pointer",
-              fontSize:13,opacity:0.4,padding:"2px 4px",
-              color:note.color==="default"?C.muted:"#fff",lineHeight:1}}>
-            🗑
-          </button>
-          <span style={{fontSize:10,marginLeft:"auto",opacity:0.4,
-            color:note.color==="default"?C.muted:"#fff",alignSelf:"center"}}>
-            {note.updated_at?new Date(note.updated_at).toLocaleDateString():""}
-          </span>
-        </div>
-      </div>
-    );
-  }
 
   // Edit / Create modal
-  function NoteEditor(){
-    if(!editingNote) return null;
-    const ns=getNoteStyle(draftColor,C);
-    return(
-      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",
-        zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
-        onClick={closeEdit}>
-        <div onClick={e=>e.stopPropagation()}
-          style={{width:"100%",maxWidth:560,...ns,borderRadius:16,
-            boxShadow:"0 20px 60px rgba(0,0,0,0.5)",overflow:"hidden",
-            maxHeight:"85vh",display:"flex",flexDirection:"column"}}>
-
-          {/* Title */}
-          <input ref={titleRef} value={draftTitle}
-            onChange={e=>setDraftTitle(e.target.value)}
-            placeholder="Title"
-            style={{border:"none",outline:"none",padding:"16px 16px 0",
-              fontSize:16,fontWeight:700,background:"transparent",
-              color:draftColor==="default"?C.white||C.textHi:"#fff",
-              fontFamily:"inherit",width:"100%",boxSizing:"border-box"}}/>
-
-          {/* Content / Checklist */}
-          <div style={{flex:1,overflowY:"auto",padding:"8px 16px"}}>
-            {draftType==="text"&&(
-              <textarea value={draftContent}
-                onChange={e=>setDraftContent(e.target.value)}
-                placeholder="Take a note..."
-                rows={8}
-                style={{border:"none",outline:"none",width:"100%",
-                  background:"transparent",resize:"vertical",
-                  fontSize:13,lineHeight:1.7,
-                  color:draftColor==="default"?C.text:"rgba(255,255,255,0.9)",
-                  fontFamily:"inherit",boxSizing:"border-box"}}/>
-            )}
-            {draftType==="checklist"&&(
-              <div>
-                {draftChecklist.map((item,idx)=>(
-                  <div key={idx} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-                    <input type="checkbox" checked={item.checked}
-                      onChange={()=>setDraftChecklist(p=>p.map((x,i)=>i===idx?{...x,checked:!x.checked}:x))}
-                      style={{accentColor:draftColor==="default"?C.accent:"#fff",
-                        width:15,height:15,flexShrink:0,cursor:"pointer"}}/>
-                    <input value={item.text}
-                      onChange={e=>setDraftChecklist(p=>p.map((x,i)=>i===idx?{...x,text:e.target.value}:x))}
-                      placeholder="List item"
-                      onKeyDown={e=>{
-                        if(e.key==="Enter"){e.preventDefault();addCheckItem();}
-                        if(e.key==="Backspace"&&!item.text&&draftChecklist.length>1){
-                          e.preventDefault();
-                          setDraftChecklist(p=>p.filter((_,i)=>i!==idx));
-                        }
-                      }}
-                      style={{flex:1,border:"none",outline:"none",background:"transparent",
-                        fontSize:13,fontFamily:"inherit",
-                        textDecoration:item.checked?"line-through":"none",
-                        opacity:item.checked?0.5:1,
-                        color:draftColor==="default"?C.text:"rgba(255,255,255,0.9)"}}/>
-                    <button onClick={()=>setDraftChecklist(p=>p.filter((_,i)=>i!==idx))}
-                      style={{background:"none",border:"none",cursor:"pointer",
-                        color:draftColor==="default"?C.muted:"rgba(255,255,255,0.5)",
-                        fontSize:16,lineHeight:1,padding:"0 4px"}}>×</button>
-                  </div>
-                ))}
-                <button onClick={addCheckItem}
-                  style={{background:"none",border:"none",cursor:"pointer",
-                    fontSize:12,color:draftColor==="default"?C.muted:"rgba(255,255,255,0.6)",
-                    padding:"4px 0",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
-                  + Add item
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Tags */}
-          {draftTags.length>0&&(
-            <div style={{display:"flex",gap:4,flexWrap:"wrap",padding:"0 16px 8px"}}>
-              {draftTags.map(t=>(
-                <span key={t} style={{fontSize:11,padding:"2px 8px",borderRadius:10,
-                  background:draftColor==="default"?C.accentDim:"rgba(255,255,255,0.15)",
-                  color:draftColor==="default"?C.accentText:"#fff",
-                  display:"flex",alignItems:"center",gap:4}}>
-                  #{t}
-                  <button onClick={()=>setDraftTags(p=>p.filter(x=>x!==t))}
-                    style={{background:"none",border:"none",cursor:"pointer",padding:0,
-                      color:"inherit",fontSize:14,lineHeight:1}}>×</button>
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Bottom toolbar */}
-          <div style={{display:"flex",alignItems:"center",gap:6,padding:"8px 12px",
-            borderTop:`1px solid rgba(255,255,255,0.1)`,flexWrap:"wrap"}}>
-
-            {/* Type toggle */}
-            <div style={{display:"flex",borderRadius:6,overflow:"hidden",border:`1px solid rgba(255,255,255,0.15)`}}>
-              {[["text","📝"],["checklist","☑️"]].map(([t,icon])=>(
-                <button key={t} onClick={()=>setDraftType(t)}
-                  style={{background:draftType===t?"rgba(255,255,255,0.2)":"transparent",
-                    border:"none",cursor:"pointer",padding:"4px 10px",
-                    fontSize:12,color:draftType===t?"#fff":"rgba(255,255,255,0.6)",
-                    fontFamily:"inherit"}}>
-                  {icon} {t.charAt(0).toUpperCase()+t.slice(1)}
-                </button>
-              ))}
-            </div>
-
-            {/* Color picker */}
-            <div style={{position:"relative"}}>
-              <button onClick={()=>setShowColorPicker(p=>!p)}
-                title="Change color"
-                style={{background:showColorPicker?"rgba(255,255,255,0.2)":"transparent",
-                  border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,cursor:"pointer",
-                  padding:"4px 10px",fontSize:12,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>
-                🎨 Color
-              </button>
-              {showColorPicker&&(
-                <div style={{position:"absolute",bottom:"calc(100% + 6px)",left:0,
-                  background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
-                  padding:10,display:"flex",flexWrap:"wrap",gap:6,width:200,zIndex:10,
-                  boxShadow:"0 8px 24px rgba(0,0,0,0.4)"}}>
-                  {NOTE_COLORS.map(nc=>(
-                    <button key={nc.id} title={nc.label}
-                      onClick={()=>{setDraftColor(nc.id);setShowColorPicker(false);}}
-                      style={{width:28,height:28,borderRadius:14,cursor:"pointer",
-                        background:nc.bg||C.surfaceHi,
-                        border:`2px solid ${draftColor===nc.id?"#fff":nc.border||C.border}`,
-                        boxShadow:draftColor===nc.id?"0 0 0 2px rgba(255,255,255,0.5)":"none"}}/>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Tag add */}
-            <div style={{display:"flex",gap:4}}>
-              <input value={tagInput} onChange={e=>setTagInput(e.target.value)}
-                onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addTag();}}}
-                placeholder="#tag"
-                style={{width:80,border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,
-                  background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.8)",
-                  padding:"4px 8px",fontSize:11,outline:"none",fontFamily:"inherit"}}/>
-              <button onClick={addTag}
-                style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",
-                  borderRadius:6,cursor:"pointer",padding:"4px 8px",
-                  fontSize:11,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>Add</button>
-            </div>
-
-            <div style={{marginLeft:"auto",display:"flex",gap:6}}>
-              <button onClick={closeEdit}
-                style={{background:"transparent",border:"1px solid rgba(255,255,255,0.2)",
-                  borderRadius:6,cursor:"pointer",padding:"5px 14px",
-                  fontSize:12,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>
-                Discard
-              </button>
-              <button onClick={saveNote} disabled={saving}
-                style={{background:"rgba(255,255,255,0.9)",border:"none",borderRadius:6,
-                  cursor:"pointer",padding:"5px 14px",fontSize:12,fontWeight:700,
-                  color:"#1e293b",fontFamily:"inherit"}}>
-                {saving?"Saving...":"Save"}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return(
     <div style={{maxWidth:1000}}>
@@ -5137,7 +5141,7 @@ function WorkspacePage({token,C}){
           <div style={{fontSize:10,fontWeight:700,color:C.muted,textTransform:"uppercase",
             letterSpacing:"0.08em",marginBottom:10}}>📌 Pinned</div>
           <div style={{columns:"2 300px",columnGap:12}}>
-            {pinned.map(n=><NoteCard key={n.id} note={n}/>)}
+            {pinned.map(n=><NoteCard key={n.id} note={n} onEdit={openEdit} onTogglePin={togglePin} onArchive={archiveNote} onDelete={deleteNote} onToggleCheck={toggleCheckItem} onTagFilter={setTagFilter} C={C}/>)}
           </div>
         </div>
       )}
@@ -5148,12 +5152,26 @@ function WorkspacePage({token,C}){
           {pinned.length>0&&<div style={{fontSize:10,fontWeight:700,color:C.muted,
             textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:10}}>Other</div>}
           <div style={{columns:"2 300px",columnGap:12}}>
-            {unpinned.map(n=><NoteCard key={n.id} note={n}/>)}
+            {unpinned.map(n=><NoteCard key={n.id} note={n} onEdit={openEdit} onTogglePin={togglePin} onArchive={archiveNote} onDelete={deleteNote} onToggleCheck={toggleCheckItem} onTagFilter={setTagFilter} C={C}/>)}
           </div>
         </div>
       )}
 
-      <NoteEditor/>
+      {editingNote&&<NoteEditor
+        editingNote={editingNote}
+        draftTitle={draftTitle} setDraftTitle={setDraftTitle}
+        draftContent={draftContent} setDraftContent={setDraftContent}
+        draftType={draftType} setDraftType={setDraftType}
+        draftColor={draftColor} setDraftColor={setDraftColor}
+        draftTags={draftTags} setDraftTags={setDraftTags}
+        draftChecklist={draftChecklist} setDraftChecklist={setDraftChecklist}
+        tagInput={tagInput} setTagInput={setTagInput}
+        showColorPicker={showColorPicker} setShowColorPicker={setShowColorPicker}
+        saving={saving} titleRef={titleRef}
+        onClose={closeEdit} onSave={saveNote}
+        addCheckItem={addCheckItem} addTag={addTag}
+        C={C}
+      />}
     </div>
   );
 }
