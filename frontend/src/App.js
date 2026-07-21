@@ -3732,8 +3732,428 @@ function OSINTTool({token,C}){
   );
 }
 
-// ── GLOBAL SEARCH ─────────────────────────────────────────────────────────────
-// ── SPL / KQL GENERATOR ───────────────────────────────────────────────────────
+// ── URL DECODER ────────────────────────────────────────────────────────────────
+function URLDecoder({C}){
+  const [input,setInput]=useState("");
+  const [iterations,setIterations]=useState(3);
+  const [steps,setSteps]=useState([]);
+  const [copied,setCopied]=useState(false);
+
+  function refangUrl(s){
+    return s.replace(/hxxps?/gi,m=>m.replace('xx','tt').replace('XX','TT'))
+             .replace(/\[\.\]/g,'.').replace(/\[:\]/g,':')
+             .replace(/\(dot\)/gi,'.').replace(/\(at\)/gi,'@');
+  }
+
+  function decode(){
+    if(!input.trim()){setSteps([]);return;}
+    const result=[];
+    let current=refangUrl(input.trim());
+    result.push({step:0,label:"Original (refanged)",value:current});
+    for(let i=1;i<=Math.min(iterations,10);i++){
+      try{
+        const next=decodeURIComponent(current);
+        if(next===current){
+          result.push({step:i,label:`Step ${i} — no change (fully decoded)`,value:next,done:true});
+          break;
+        }
+        result.push({step:i,label:`Step ${i}`,value:next});
+        current=next;
+      }catch(e){
+        result.push({step:i,label:`Step ${i} — decode error`,value:current,error:true});
+        break;
+      }
+    }
+    setSteps(result);
+  }
+
+  function copyFinal(){
+    const final=steps[steps.length-1]?.value||"";
+    navigator.clipboard.writeText(final);
+    setCopied(true); setTimeout(()=>setCopied(false),2000);
+  }
+
+  return(
+    <div style={{maxWidth:800}}>
+      <div style={{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.6}}>
+        Decodes URL-encoded strings iteratively — useful for multi-layer encoded malware URLs,
+        phishing links, and redirect chains. Handles defanged URLs (hxxps, [.]) automatically.
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"flex-end",flexWrap:"wrap"}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>Encoded / Defanged URL</div>
+          <textarea value={input} onChange={e=>setInput(e.target.value)}
+            placeholder="hxxps://evil[.]com%2Fpayload%2F%252Fnested%252Fpath"
+            rows={3}
+            style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+              color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:13,
+              outline:"none",fontFamily:"monospace",resize:"vertical",boxSizing:"border-box"}}/>
+        </div>
+        <div style={{flexShrink:0}}>
+          <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>Iterations</div>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <input type="number" min={1} max={10} value={iterations}
+              onChange={e=>setIterations(Math.max(1,Math.min(10,parseInt(e.target.value)||1)))}
+              style={{width:64,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                color:C.inputText,padding:"10px 10px",borderRadius:8,fontSize:14,
+                outline:"none",fontFamily:"inherit",textAlign:"center"}}/>
+            <Btn onClick={decode} C={C}>Decode</Btn>
+          </div>
+        </div>
+      </div>
+
+      {steps.length>0&&(
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {steps.map((s,idx)=>(
+            <div key={idx} style={{background:C.surface,border:`1px solid ${
+              s.done?C.green+"40":s.error?C.red+"40":C.border}`,
+              borderRadius:10,padding:"12px 14px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6,alignItems:"center"}}>
+                <span style={{fontSize:11,fontWeight:700,
+                  color:s.done?C.green:s.error?C.red:C.muted}}>
+                  {s.label}
+                  {s.done&&" ✓"}{s.error&&" ✗"}
+                </span>
+                {idx===steps.length-1&&!s.error&&(
+                  <button onClick={copyFinal}
+                    style={{fontSize:11,padding:"3px 10px",borderRadius:5,cursor:"pointer",
+                      background:copied?C.green+"20":C.accentDim,
+                      border:`1px solid ${copied?C.green:C.accent}40`,
+                      color:copied?C.green:C.accentText,fontFamily:"inherit",fontWeight:600}}>
+                    {copied?"Copied!":"Copy final"}
+                  </button>
+                )}
+              </div>
+              <div style={{fontSize:12,fontFamily:"monospace",color:C.white||C.textHi,
+                wordBreak:"break-all",lineHeight:1.6,background:C.surfaceHi,
+                padding:"8px 10px",borderRadius:6}}>
+                {s.value||<span style={{color:C.muted,fontStyle:"italic"}}>empty</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SAFE LINK EXTRACTOR ───────────────────────────────────────────────────────
+function SafeLinkExtractor({C}){
+  const [input,setInput]=useState("");
+  const [links,setLinks]=useState([]);
+  const [uniqueOnly,setUniqueOnly]=useState(true);
+  const [defang,setDefangOpt]=useState(true);
+  const [copied,setCopied]=useState(null);
+
+  const URL_REGEX=/(?:https?|ftp|ftps|sftp|ldap|smb):\/\/[^\s<>"')\]},;]+|(?:hxxps?|hxxp):\/\/[^\s<>"')\]},;]+|\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|gov|edu|mil|co|uk|de|fr|ru|cn|tk|top|xyz|info|biz|me|tv|cc|zip|mov|app|dev|ai|sh|gg)\b(?:\/[^\s<>"')\]},;]*)?/g;
+
+  function defangUrl(s){
+    return s.replace(/^hxxps?/i,m=>m.replace('tt','xx').replace('TT','XX'))
+             .replace(/\./g,'[.]').replace(/:/g,'[:]',).replace(/^http\[:\]/,'http:');
+  }
+
+  function extract(){
+    if(!input.trim()){setLinks([]);return;}
+    const raw=input.match(URL_REGEX)||[];
+    let found=raw.map(u=>u.replace(/[.,;)>\]"']+$/,""));
+    if(uniqueOnly) found=[...new Set(found)];
+    setLinks(found);
+  }
+
+  function copyLink(url,idx){
+    navigator.clipboard.writeText(defang?defangUrl(url):url);
+    setCopied(idx); setTimeout(()=>setCopied(null),1500);
+  }
+
+  function copyAll(){
+    const text=links.map(u=>defang?defangUrl(u):u).join('\n');
+    navigator.clipboard.writeText(text);
+    setCopied("all"); setTimeout(()=>setCopied(null),1500);
+  }
+
+  const displayLinks=links.map(u=>({raw:u,display:defang?defangUrl(u):u}));
+
+  return(
+    <div style={{maxWidth:800}}>
+      <div style={{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.6}}>
+        Extracts all URLs from pasted text — emails, documents, logs, HTML source.
+        Outputs them defanged for safe sharing and analysis.
+      </div>
+      <textarea value={input} onChange={e=>setInput(e.target.value)}
+        placeholder={"Paste email body, log file, HTML source, or any text here...\n\nAll URLs will be extracted and defanged automatically."}
+        rows={7}
+        style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+          color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:12,
+          outline:"none",fontFamily:"monospace",resize:"vertical",
+          marginBottom:10,boxSizing:"border-box"}}/>
+      <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
+        <Btn onClick={extract} C={C}>Extract Links</Btn>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.muted,cursor:"pointer"}}>
+          <input type="checkbox" checked={uniqueOnly} onChange={e=>setUniqueOnly(e.target.checked)}
+            style={{accentColor:C.accent}}/>
+          Unique only
+        </label>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.muted,cursor:"pointer"}}>
+          <input type="checkbox" checked={defang} onChange={e=>setDefangOpt(e.target.checked)}
+            style={{accentColor:C.accent}}/>
+          Output defanged
+        </label>
+        {links.length>0&&(
+          <button onClick={copyAll}
+            style={{marginLeft:"auto",fontSize:11,padding:"5px 12px",borderRadius:6,
+              cursor:"pointer",background:copied==="all"?C.green+"20":C.accentDim,
+              border:`1px solid ${copied==="all"?C.green:C.accent}40`,
+              color:copied==="all"?C.green:C.accentText,fontFamily:"inherit",fontWeight:600}}>
+            {copied==="all"?"Copied all!":"Copy all"}
+          </button>
+        )}
+      </div>
+
+      {links.length===0&&input.trim()&&(
+        <div style={{textAlign:"center",padding:24,color:C.muted,fontSize:13}}>
+          No URLs found. Click Extract Links.
+        </div>
+      )}
+
+      {displayLinks.length>0&&(
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+          <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,
+            fontSize:11,fontWeight:700,color:C.muted,display:"flex",justifyContent:"space-between"}}>
+            <span>{links.length} link{links.length!==1?"s":""} found</span>
+            <span>{defang?"defanged output":"live URLs — handle with care"}</span>
+          </div>
+          <div style={{maxHeight:360,overflowY:"auto"}}>
+            {displayLinks.map((item,idx)=>(
+              <div key={idx} style={{display:"flex",alignItems:"center",gap:8,
+                padding:"8px 14px",borderBottom:`1px solid ${C.border}20`,
+                background:idx%2===0?"transparent":C.surfaceHi+"50"}}>
+                <code style={{flex:1,fontSize:11,color:C.white||C.textHi,
+                  wordBreak:"break-all",lineHeight:1.5,fontFamily:"monospace"}}>
+                  {item.display}
+                </code>
+                <button onClick={()=>copyLink(item.raw,idx)}
+                  style={{fontSize:10,padding:"3px 8px",borderRadius:4,cursor:"pointer",
+                    flexShrink:0,background:copied===idx?C.green+"20":C.surfaceHi,
+                    border:`1px solid ${copied===idx?C.green:C.border}`,
+                    color:copied===idx?C.green:C.muted,fontFamily:"inherit"}}>
+                  {copied===idx?"✓":"Copy"}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── USER AGENT PARSER ─────────────────────────────────────────────────────────
+function UserAgentParser({C}){
+  const [ua,setUa]=useState("");
+  const [result,setResult]=useState(null);
+
+  function parseUA(str){
+    if(!str.trim()){setResult(null);return;}
+    const s=str.trim();
+    const r={raw:s,browser:{name:"Unknown",version:""},os:{name:"Unknown",version:""},
+      device:"Desktop",engine:"Unknown",bot:false,mobile:false,botName:""};
+
+    // ── Bot detection first ───────────────────────────────────────────────────
+    const bots=[
+      [/Googlebot\/([^\s;)]+)/i,"Googlebot"],
+      [/Bingbot\/([^\s;)]+)/i,"Bingbot"],
+      [/Slurp/i,"Yahoo Slurp"],
+      [/DuckDuckBot/i,"DuckDuckBot"],
+      [/Baiduspider/i,"Baiduspider"],
+      [/YandexBot/i,"YandexBot"],
+      [/Twitterbot/i,"Twitterbot"],
+      [/facebookexternalhit/i,"Facebook External"],
+      [/Semrush|AhrefsBot|MJ12bot|DotBot|BLEXBot/i,"SEO Bot"],
+      [/python-requests|python-urllib/i,"Python Script"],
+      [/curl\/([^\s]+)/i,"curl"],
+      [/wget\//i,"wget"],
+      [/axios|node-fetch/i,"Node.js Script"],
+    ];
+    for(const [re,name] of bots){
+      if(re.test(s)){r.bot=true;r.botName=name;r.device="Bot"; break;}
+    }
+
+    // ── Browser ───────────────────────────────────────────────────────────────
+    if(!r.bot){
+      const browsers=[
+        [/EdgA?\/([^\s]+)/i,"Edge"],
+        [/OPR\/([^\s]+)|Opera\/([^\s]+)/i,"Opera"],
+        [/SamsungBrowser\/([^\s]+)/i,"Samsung Browser"],
+        [/UCBrowser\/([^\s]+)/i,"UC Browser"],
+        [/YaBrowser\/([^\s]+)/i,"Yandex Browser"],
+        [/CriOS\/([^\s]+)/i,"Chrome (iOS)"],
+        [/FxiOS\/([^\s]+)/i,"Firefox (iOS)"],
+        [/Version\/([^\s]+).*Safari/i,"Safari"],
+        [/Chrome\/([^\s]+)/i,"Chrome"],
+        [/Firefox\/([^\s]+)/i,"Firefox"],
+        [/MSIE ([^\s;]+)|Trident.*rv:([^\s;)]+)/i,"Internet Explorer"],
+      ];
+      for(const [re,name] of browsers){
+        const m=s.match(re);
+        if(m){r.browser.name=name;r.browser.version=m[1]||m[2]||"";break;}
+      }
+    }
+
+    // ── Engine ────────────────────────────────────────────────────────────────
+    if(/AppleWebKit\/([^\s]+)/i.test(s)){
+      const m=s.match(/AppleWebKit\/([^\s]+)/i);
+      r.engine=`WebKit ${m?m[1]:""}`;
+    } else if(/Gecko\/([^\s]+)/i.test(s)){
+      r.engine="Gecko";
+    } else if(/Trident\/([^\s]+)/i.test(s)){
+      r.engine="Trident";
+    }
+
+    // ── OS ────────────────────────────────────────────────────────────────────
+    const osList=[
+      [/Windows NT 10\.0/i,"Windows","10 / 11"],
+      [/Windows NT 6\.3/i,"Windows","8.1"],
+      [/Windows NT 6\.2/i,"Windows","8"],
+      [/Windows NT 6\.1/i,"Windows","7"],
+      [/Windows NT 6\.0/i,"Windows","Vista"],
+      [/Windows NT 5\.1/i,"Windows","XP"],
+      [/Windows Phone ([^\s;)]+)/i,"Windows Phone",""],
+      [/Android ([^\s;)]+)/i,"Android",""],
+      [/iPhone OS ([^\s;)]+)/i,"iOS",""],
+      [/iPad.*OS ([^\s;)]+)/i,"iPadOS",""],
+      [/Mac OS X ([^\s;)]+)/i,"macOS",""],
+      [/CrOS [^\s]+ ([^\s;)]+)/i,"ChromeOS",""],
+      [/Linux/i,"Linux",""],
+      [/Ubuntu/i,"Ubuntu",""],
+      [/Fedora/i,"Fedora",""],
+      [/Debian/i,"Debian",""],
+    ];
+    for(const [re,name,ver] of osList){
+      const m=s.match(re);
+      if(m){
+        r.os.name=name;
+        r.os.version=(m[1]||ver||"").replace(/_/g,'.');
+        break;
+      }
+    }
+
+    // ── Device type ───────────────────────────────────────────────────────────
+    if(!r.bot){
+      if(/iPad/i.test(s)) r.device="Tablet";
+      else if(/iPhone|Android.*Mobile|Mobile.*Android|Windows Phone|BB10|BlackBerry|IEMobile/i.test(s)){
+        r.device="Mobile"; r.mobile=true;
+      } else if(/Android/i.test(s)) r.device="Tablet";
+      else r.device="Desktop";
+    }
+
+    setResult(r);
+  }
+
+  useEffect(()=>{parseUA(ua);},[ua]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  const Field2=({label,value,mono})=>(
+    <div style={{padding:"10px 14px",display:"flex",justifyContent:"space-between",
+      alignItems:"center",borderBottom:`1px solid ${C.border}20`}}>
+      <span style={{fontSize:11,color:C.muted,fontWeight:600,flexShrink:0,minWidth:120}}>{label}</span>
+      <span style={{fontSize:12,color:C.white||C.textHi,fontFamily:mono?"monospace":"inherit",
+        textAlign:"right",wordBreak:"break-all"}}>{value||"—"}</span>
+    </div>
+  );
+
+  const deviceIcon=result?(result.bot?"🤖":result.device==="Mobile"?"📱":result.device==="Tablet"?"📲":"🖥️"):"";
+
+  return(
+    <div style={{maxWidth:800}}>
+      <div style={{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.6}}>
+        Parse any User-Agent string — identify browser, OS, device type, and engine.
+        Useful for log analysis, phishing kit fingerprinting, and access log triage.
+      </div>
+      <textarea value={ua} onChange={e=>setUa(e.target.value)}
+        placeholder={"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        rows={3}
+        style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+          color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:12,
+          outline:"none",fontFamily:"monospace",resize:"vertical",
+          marginBottom:12,boxSizing:"border-box"}}/>
+      <button onClick={()=>setUa(navigator.userAgent)}
+        style={{fontSize:11,padding:"4px 12px",borderRadius:6,cursor:"pointer",
+          background:C.surfaceHi,border:`1px solid ${C.border}`,color:C.muted,
+          fontFamily:"inherit",marginBottom:16}}>
+        Use my browser's UA
+      </button>
+
+      {result&&(
+        <>
+          {/* Summary pill row */}
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+            {[
+              [deviceIcon,result.device],
+              result.bot?["⚠️","Bot / Crawler"]:null,
+              result.browser.name!=="Unknown"?["🌐",`${result.browser.name} ${result.browser.version}`.trim()]:null,
+              result.os.name!=="Unknown"?["💻",`${result.os.name} ${result.os.version}`.trim()]:null,
+            ].filter(Boolean).map(([icon,label],i)=>(
+              <span key={i} style={{fontSize:12,padding:"5px 12px",borderRadius:20,fontWeight:600,
+                background:result.bot&&label.includes("Bot")?C.amber+"15":C.accentDim,
+                border:`1px solid ${result.bot&&label.includes("Bot")?C.amber+"40":C.accent+"30"}`,
+                color:result.bot&&label.includes("Bot")?C.amber:C.accentText}}>
+                {icon} {label}
+              </span>
+            ))}
+          </div>
+
+          {/* Detail table */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+            {result.bot&&<Field2 label="Bot / Crawler" value={result.botName}/>}
+            <Field2 label="Browser" value={`${result.browser.name} ${result.browser.version}`.trim()}/>
+            <Field2 label="Engine" value={result.engine}/>
+            <Field2 label="Operating System" value={`${result.os.name} ${result.os.version}`.trim()}/>
+            <Field2 label="Device Type" value={result.device}/>
+            <Field2 label="Mobile" value={result.mobile?"Yes":"No"}/>
+            <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}20`}}>
+              <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:6}}>Raw UA String</div>
+              <code style={{fontSize:11,color:C.text,fontFamily:"monospace",lineHeight:1.6,
+                wordBreak:"break-all",display:"block"}}>{result.raw}</code>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── OSINT + TOOLS WRAPPER ─────────────────────────────────────────────────────
+function OSINTPage({token,C}){
+  const [tool,setTool]=useState("osint");
+  const TOOLS=[
+    {id:"osint",     label:"OSINT Lookup"},
+    {id:"urldecode", label:"URL Decoder"},
+    {id:"safelinks", label:"Safe Link Extractor"},
+    {id:"ua",        label:"User Agent Parser"},
+  ];
+  return(
+    <div>
+      {/* Tool picker */}
+      <div style={{display:"flex",gap:2,background:C.surfaceHi,borderRadius:10,
+        padding:4,marginBottom:22,width:"fit-content",flexWrap:"wrap"}}>
+        {TOOLS.map(t=>(
+          <button key={t.id} onClick={()=>setTool(t.id)}
+            style={{padding:"7px 16px",borderRadius:7,border:"none",cursor:"pointer",
+              fontSize:12,fontFamily:"inherit",fontWeight:600,
+              background:tool===t.id?C.accent:"transparent",
+              color:tool===t.id?"#fff":C.muted}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tool==="osint"     &&<OSINTTool token={token} C={C}/>}
+      {tool==="urldecode" &&<URLDecoder C={C}/>}
+      {tool==="safelinks" &&<SafeLinkExtractor C={C}/>}
+      {tool==="ua"        &&<UserAgentParser C={C}/>}
+    </div>
+  );
+}
+
+
 function QueryGenerator({token,C}){
   const [mode,setMode]=useState("builder"); // builder | explainer
   const [useCase,setUseCase]=useState("");
@@ -6824,7 +7244,7 @@ export default function App(){
           {view==="map"&&<GeoMap token={token} C={C}/>}
           {view==="intel"&&<IntelNews token={token} C={C}/>}
           {view==="actors"&&<ThreatActors token={token} C={C}/>}
-          {view==="osint"&&<OSINTTool token={token} C={C}/>}
+          {view==="osint"&&<OSINTPage token={token} C={C}/>}
           {view==="querygen"&&<QueryGenerator token={token} C={C}/>}
           {view==="public"&&<PublicSearch C={C}/>}
           {view==="bulklookup"&&<BulkLookup token={token} C={C}/>}
