@@ -3837,47 +3837,163 @@ function URLDecoder({C}){
   );
 }
 
+// ── LINK-WRAPPER UNWRAPPING ───────────────────────────────────────────────────
+// Mail gateways rewrite links so the click routes through them first. During
+// triage what matters is the real destination, not the gateway's wrapper.
+
+// Proofpoint URLDefense v2 substitutes - for % and _ for / before encoding.
+function ppDecodeV2(t){
+  try{ return decodeURIComponent(t.replace(/-/g,"%").replace(/_/g,"/")); }
+  catch(e){ return t; }
+}
+
+// URLDefense v3 replaces special chars with * and ships them base64'd after the
+// ; — a lone * consumes one char, ** followed by a base64 digit is a run.
+const B64_ALPHA="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+function ppDecodeV3(url,b64){
+  if(!url.includes("*")) return url;
+  let chars="";
+  try{ chars=atob(b64.replace(/-/g,"+").replace(/_/g,"/")); }catch(e){ return url; }
+  let i=0;
+  return url.replace(/\*\*(.)|\*/g,(m,run)=>{
+    if(run!==undefined){
+      const n=B64_ALPHA.indexOf(run)+2;
+      if(n<2) return m;
+      const out=chars.substr(i,n); i+=n; return out;
+    }
+    return i<chars.length?chars[i++]:m;
+  });
+}
+
+const REDIRECT_PARAMS=["url","u","q","target","redirect","redirecturl","dest","destination"];
+
+// One unwrap pass. Returns {url,via} on success, {via,opaque:true} when the
+// wrapper is known but its token can't be reversed, or null when not wrapped.
+function unwrapOnce(raw){
+  const s=raw.trim();
+  const abs=/^[a-z][a-z0-9+.-]*:\/\//i.test(s)?s:"https://"+s;
+  let U; try{ U=new URL(abs); }catch(e){ return null; }
+  const host=U.hostname.toLowerCase();
+
+  // Microsoft Defender for Office 365
+  if(host.endsWith("safelinks.protection.outlook.com")){
+    const t=U.searchParams.get("url");
+    if(t) return {url:t,via:"Microsoft SafeLinks"};
+  }
+
+  // Proofpoint URLDefense — v3 lives in the path, v1/v2 in the ?u= param
+  if(host.endsWith("urldefense.com")||host.endsWith("urldefense.proofpoint.com")){
+    const v3=abs.match(/\/v3\/__(.+?)__;([^!]*)!/);
+    if(v3) return {url:ppDecodeV3(v3[1],v3[2]),via:"Proofpoint URLDefense v3"};
+    const t=U.searchParams.get("u");
+    if(t){
+      const isV2=U.pathname.includes("/v2/");
+      return {url:isV2?ppDecodeV2(t):t,via:`Proofpoint URLDefense${isV2?" v2":""}`};
+    }
+  }
+
+  // Barracuda LinkProtect
+  if(host.endsWith("linkprotect.cudasvc.com")){
+    const t=U.searchParams.get("a")||U.searchParams.get("url");
+    if(t) return {url:t,via:"Barracuda LinkProtect"};
+  }
+
+  // Mimecast hands out an opaque token — the destination isn't in the link
+  if(/^protect(-[a-z0-9]+)?\.mimecast\.com$/i.test(host)&&U.pathname.startsWith("/s/"))
+    return {via:"Mimecast Attachment Protect",opaque:true};
+
+  // Generic redirector: any ?url=/?u=/?q= holding an absolute URL
+  for(const p of REDIRECT_PARAMS){
+    const t=U.searchParams.get(p);
+    if(t&&/^https?:\/\//i.test(t.trim()))
+      return {url:t.trim(),via:host.endsWith("google.com")?"Google redirect":"Redirect parameter"};
+  }
+  return null;
+}
+
+// Wrappers nest — SafeLinks around a Proofpoint link is common. Follow the chain.
+function unwrapChain(raw){
+  const chain=[]; let cur=raw;
+  for(let i=0;i<5;i++){
+    const r=unwrapOnce(cur);
+    if(!r) break;
+    if(r.opaque){ chain.push({via:r.via,opaque:true}); break; }
+    if(!r.url||r.url===cur) break;
+    chain.push({via:r.via,url:r.url});
+    cur=r.url;
+  }
+  return chain;
+}
+
 // ── SAFE LINK EXTRACTOR ───────────────────────────────────────────────────────
 function SafeLinkExtractor({C}){
   const [input,setInput]=useState("");
   const [links,setLinks]=useState([]);
   const [uniqueOnly,setUniqueOnly]=useState(true);
   const [defang,setDefangOpt]=useState(true);
+  const [unwrap,setUnwrap]=useState(true);
   const [copied,setCopied]=useState(null);
 
   const URL_REGEX=/(?:https?|ftp|ftps|sftp|ldap|smb):\/\/[^\s<>"')\]},;]+|(?:hxxps?|hxxp):\/\/[^\s<>"')\]},;]+|\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|gov|edu|mil|co|uk|de|fr|ru|cn|tk|top|xyz|info|biz|me|tv|cc|zip|mov|app|dev|ai|sh|gg)\b(?:\/[^\s<>"')\]},;]*)?/g;
 
+  // hxxp[:]//evil[.]com — the convention the URL Decoder's refang step reverses.
   function defangUrl(s){
-    return s.replace(/^hxxps?/i,m=>m.replace('tt','xx').replace('TT','XX'))
-             .replace(/\./g,'[.]').replace(/:/g,'[:]',).replace(/^http\[:\]/,'http:');
+    return s.replace(/^https?(?=:\/\/)/i,m=>m.replace(/t/g,"x").replace(/T/g,"X"))
+             .replace(/:/g,'[:]').replace(/\./g,'[.]');
   }
 
   function extract(){
     if(!input.trim()){setLinks([]);return;}
-    const raw=input.match(URL_REGEX)||[];
+    // HTML source escapes query separators — un-escape so wrapper params survive
+    const text=input.replace(/&amp;/g,"&");
+    const raw=text.match(URL_REGEX)||[];
     let found=raw.map(u=>u.replace(/[.,;)>\]"']+$/,""));
     if(uniqueOnly) found=[...new Set(found)];
-    setLinks(found);
+    setLinks(found.map(u=>({raw:u,chain:unwrapChain(u)})));
   }
 
-  function copyLink(url,idx){
-    navigator.clipboard.writeText(defang?defangUrl(url):url);
+  // What an analyst actually wants on the clipboard: the final destination.
+  function targetOf(item){
+    const hops=item.chain.filter(h=>h.url);
+    return hops.length?hops[hops.length-1].url:item.raw;
+  }
+
+  function copyLink(item,idx){
+    const u=unwrap?targetOf(item):item.raw;
+    navigator.clipboard.writeText(defang?defangUrl(u):u);
     setCopied(idx); setTimeout(()=>setCopied(null),1500);
   }
 
   function copyAll(){
-    const text=links.map(u=>defang?defangUrl(u):u).join('\n');
+    const text=links.map(item=>{
+      const u=unwrap?targetOf(item):item.raw;
+      return defang?defangUrl(u):u;
+    }).join('\n');
     navigator.clipboard.writeText(text);
     setCopied("all"); setTimeout(()=>setCopied(null),1500);
   }
 
-  const displayLinks=links.map(u=>({raw:u,display:defang?defangUrl(u):u}));
+  const displayLinks=links.map(item=>{
+    const target=unwrap?targetOf(item):item.raw;
+    const hops=unwrap?item.chain:[];
+    return {
+      item,
+      wrapped:hops.length>0,
+      via:hops.map(h=>h.via).join(" → "),
+      opaque:hops.some(h=>h.opaque),
+      original:defang?defangUrl(item.raw):item.raw,
+      display:defang?defangUrl(target):target,
+    };
+  });
+  const wrappedCount=displayLinks.filter(l=>l.wrapped).length;
 
   return(
     <div style={{maxWidth:800}}>
       <div style={{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.6}}>
         Extracts all URLs from pasted text — emails, documents, logs, HTML source.
-        Outputs them defanged for safe sharing and analysis.
+        Unwraps mail-gateway rewrites (Microsoft SafeLinks, Proofpoint URLDefense,
+        Barracuda) back to the real destination, and outputs them defanged for
+        safe sharing and analysis.
       </div>
       <textarea value={input} onChange={e=>setInput(e.target.value)}
         placeholder={"Paste email body, log file, HTML source, or any text here...\n\nAll URLs will be extracted and defanged automatically."}
@@ -3897,6 +4013,11 @@ function SafeLinkExtractor({C}){
           <input type="checkbox" checked={defang} onChange={e=>setDefangOpt(e.target.checked)}
             style={{accentColor:C.accent}}/>
           Output defanged
+        </label>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.muted,cursor:"pointer"}}>
+          <input type="checkbox" checked={unwrap} onChange={e=>setUnwrap(e.target.checked)}
+            style={{accentColor:C.accent}}/>
+          Unwrap SafeLinks
         </label>
         {links.length>0&&(
           <button onClick={copyAll}
@@ -3919,7 +4040,10 @@ function SafeLinkExtractor({C}){
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
           <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,
             fontSize:11,fontWeight:700,color:C.muted,display:"flex",justifyContent:"space-between"}}>
-            <span>{links.length} link{links.length!==1?"s":""} found</span>
+            <span>
+              {links.length} link{links.length!==1?"s":""} found
+              {wrappedCount>0&&` · ${wrappedCount} unwrapped`}
+            </span>
             <span>{defang?"defanged output":"live URLs — handle with care"}</span>
           </div>
           <div style={{maxHeight:360,overflowY:"auto"}}>
@@ -3927,11 +4051,33 @@ function SafeLinkExtractor({C}){
               <div key={idx} style={{display:"flex",alignItems:"center",gap:8,
                 padding:"8px 14px",borderBottom:`1px solid ${C.border}20`,
                 background:idx%2===0?"transparent":C.surfaceHi+"50"}}>
-                <code style={{flex:1,fontSize:11,color:C.white||C.textHi,
-                  wordBreak:"break-all",lineHeight:1.5,fontFamily:"monospace"}}>
-                  {item.display}
-                </code>
-                <button onClick={()=>copyLink(item.raw,idx)}
+                <div style={{flex:1,minWidth:0}}>
+                  {item.wrapped&&(
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
+                      <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:20,
+                        background:item.opaque?C.amber+"15":C.accentDim,
+                        border:`1px solid ${item.opaque?C.amber+"40":C.accent+"30"}`,
+                        color:item.opaque?C.amber:C.accentText,flexShrink:0}}>
+                        {item.via}
+                      </span>
+                      <code style={{fontSize:9.5,color:C.muted,wordBreak:"break-all",
+                        lineHeight:1.4,fontFamily:"monospace",textDecoration:"line-through",
+                        opacity:0.7}}>
+                        {item.original}
+                      </code>
+                    </div>
+                  )}
+                  <code style={{fontSize:11,color:C.white||C.textHi,
+                    wordBreak:"break-all",lineHeight:1.5,fontFamily:"monospace",display:"block"}}>
+                    {item.display}
+                  </code>
+                  {item.opaque&&(
+                    <div style={{fontSize:10,color:C.amber,marginTop:3}}>
+                      Opaque token — destination is not recoverable from the link
+                    </div>
+                  )}
+                </div>
+                <button onClick={()=>copyLink(item.item,idx)}
                   style={{fontSize:10,padding:"3px 8px",borderRadius:4,cursor:"pointer",
                     flexShrink:0,background:copied===idx?C.green+"20":C.surfaceHi,
                     border:`1px solid ${copied===idx?C.green:C.border}`,
