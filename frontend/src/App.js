@@ -3837,6 +3837,13 @@ function URLDecoder({C}){
   );
 }
 
+// hxxp[:]//evil[.]com — the convention the URL Decoder's refang step reverses.
+// Shared by the Safe Link Extractor and the Redirect Tracer.
+function defangUrl(s){
+  return String(s||"").replace(/^https?(?=:\/\/)/i,m=>m.replace(/t/g,"x").replace(/T/g,"X"))
+           .replace(/:/g,'[:]').replace(/\./g,'[.]');
+}
+
 // ── LINK-WRAPPER UNWRAPPING ───────────────────────────────────────────────────
 // Mail gateways rewrite links so the click routes through them first. During
 // triage what matters is the real destination, not the gateway's wrapper.
@@ -3935,12 +3942,6 @@ function SafeLinkExtractor({C}){
   const [copied,setCopied]=useState(null);
 
   const URL_REGEX=/(?:https?|ftp|ftps|sftp|ldap|smb):\/\/[^\s<>"')\]},;]+|(?:hxxps?|hxxp):\/\/[^\s<>"')\]},;]+|\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|gov|edu|mil|co|uk|de|fr|ru|cn|tk|top|xyz|info|biz|me|tv|cc|zip|mov|app|dev|ai|sh|gg)\b(?:\/[^\s<>"')\]},;]*)?/g;
-
-  // hxxp[:]//evil[.]com — the convention the URL Decoder's refang step reverses.
-  function defangUrl(s){
-    return s.replace(/^https?(?=:\/\/)/i,m=>m.replace(/t/g,"x").replace(/T/g,"X"))
-             .replace(/:/g,'[:]').replace(/\./g,'[.]');
-  }
 
   function extract(){
     if(!input.trim()){setLinks([]);return;}
@@ -4267,6 +4268,212 @@ function UserAgentParser({C}){
   );
 }
 
+// ── REDIRECT TRACER ───────────────────────────────────────────────────────────
+function RedirectTracer({token,C}){
+  const [url,setUrl]=useState("");
+  const [ua,setUa]=useState("desktop");
+  const [maxHops,setMaxHops]=useState(20);
+  const [followMeta,setFollowMeta]=useState(true);
+  const [res,setRes]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+  const [copied,setCopied]=useState(false);
+
+  const UAS=[
+    {id:"desktop",label:"Desktop"},{id:"mobile",label:"Mobile"},
+    {id:"bot",label:"Googlebot"},{id:"curl",label:"curl"},
+  ];
+
+  async function trace(){
+    if(!url.trim())return;
+    setLoading(true); setRes(null); setErr("");
+    try{
+      const r=await api("/tools/trace-redirects",{method:"POST",body:JSON.stringify({
+        url:url.trim(),user_agent:ua,max_hops:Number(maxHops)||20,follow_meta:followMeta,
+      })},token);
+      if(r.ok) setRes(await r.json());
+      else{ const d=await r.json().catch(()=>({})); setErr(d.detail||`Request failed (${r.status})`); }
+    }catch(e){ setErr(String(e.message||e)); }
+    setLoading(false);
+  }
+
+  function copyChain(){
+    if(!res)return;
+    const lines=res.hops.map(h=>`${h.hop}. [${h.status||h.error?"ERR":"?"}${h.status?"":""}] ${defangUrl(h.url)}`+
+      (h.redirect_type?`  (${h.redirect_type})`:""));
+    navigator.clipboard.writeText(
+      `Redirect trace — ${defangUrl(res.start_url)}\n`+
+      `Final: ${defangUrl(res.final_url)}\nStop: ${res.stop_reason}\n\n`+lines.join("\n"));
+    setCopied(true); setTimeout(()=>setCopied(false),2000);
+  }
+
+  const statusColor=h=>{
+    if(h.blocked||h.error) return C.red;
+    if(h.status>=200&&h.status<300) return C.green;
+    if(h.status>=300&&h.status<400) return C.amber;
+    if(h.status>=400) return C.red;
+    return C.muted;
+  };
+
+  return(
+    <div style={{maxWidth:900}}>
+      <div style={{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.6}}>
+        Follows a link hop by hop and shows what happens at every step — status codes,
+        resolved IPs, cookies dropped, TLS state and meta-refresh bounces — so you can see
+        where a shortened or gateway-wrapped link actually lands without clicking it.
+        Requests run from the server, never your browser.
+      </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+        <div style={{flex:"1 1 380px"}}>
+          <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>URL (defanged is fine)</div>
+          <input value={url} onChange={e=>setUrl(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&trace()}
+            placeholder="hxxps://bit[.]ly/3xAmPle"
+            style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+              color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:13,
+              outline:"none",fontFamily:"monospace",boxSizing:"border-box"}}/>
+        </div>
+        <div>
+          <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>Max hops</div>
+          <input type="number" min={1} max={20} value={maxHops}
+            onChange={e=>setMaxHops(Math.max(1,Math.min(20,parseInt(e.target.value)||1)))}
+            style={{width:64,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+              color:C.inputText,padding:"10px",borderRadius:8,fontSize:14,
+              outline:"none",fontFamily:"inherit",textAlign:"center"}}/>
+        </div>
+        <Btn onClick={trace} disabled={loading} C={C}>{loading?"Tracing…":"Trace"}</Btn>
+      </div>
+
+      <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:18,flexWrap:"wrap"}}>
+        <span style={{fontSize:11,color:C.muted,fontWeight:600}}>User-Agent</span>
+        <div style={{display:"flex",gap:2,background:C.surfaceHi,borderRadius:8,padding:3}}>
+          {UAS.map(u=>(
+            <button key={u.id} onClick={()=>setUa(u.id)}
+              style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:"pointer",
+                fontSize:11,fontFamily:"inherit",fontWeight:600,
+                background:ua===u.id?C.accent:"transparent",color:ua===u.id?"#fff":C.muted}}>
+              {u.label}
+            </button>
+          ))}
+        </div>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.muted,cursor:"pointer"}}>
+          <input type="checkbox" checked={followMeta} onChange={e=>setFollowMeta(e.target.checked)}
+            style={{accentColor:C.accent}}/>
+          Follow meta refresh
+        </label>
+        <span style={{fontSize:10.5,color:C.muted,opacity:.75}}>
+          Kits cloak on UA — a link can go somewhere harmless for Googlebot and elsewhere for a phone.
+        </span>
+      </div>
+
+      {err&&(
+        <div style={{background:C.red+"12",border:`1px solid ${C.red}40`,borderRadius:8,
+          padding:"10px 14px",fontSize:12,color:C.red,marginBottom:14}}>{err}</div>
+      )}
+
+      {res&&(
+        <>
+          {/* Summary */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
+            padding:"14px 16px",marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+              marginBottom:10,flexWrap:"wrap",gap:8}}>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <span style={{fontSize:12,padding:"4px 12px",borderRadius:20,fontWeight:600,
+                  background:C.accentDim,border:`1px solid ${C.accent}30`,color:C.accentText}}>
+                  {res.hop_count} hop{res.hop_count!==1?"s":""}
+                </span>
+                <span style={{fontSize:12,padding:"4px 12px",borderRadius:20,fontWeight:600,
+                  background:res.crossed_domains?C.amber+"15":C.surfaceHi,
+                  border:`1px solid ${res.crossed_domains?C.amber+"40":C.border}`,
+                  color:res.crossed_domains?C.amber:C.muted}}>
+                  {res.domains.length} domain{res.domains.length!==1?"s":""}
+                </span>
+              </div>
+              <button onClick={copyChain}
+                style={{fontSize:11,padding:"4px 12px",borderRadius:6,cursor:"pointer",
+                  background:copied?C.green+"20":C.surfaceHi,
+                  border:`1px solid ${copied?C.green:C.border}`,
+                  color:copied?C.green:C.muted,fontFamily:"inherit",fontWeight:600}}>
+                {copied?"Copied!":"Copy chain"}
+              </button>
+            </div>
+            <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:3}}>Final destination</div>
+            <code style={{fontSize:12,color:C.white||C.textHi,fontFamily:"monospace",
+              wordBreak:"break-all",lineHeight:1.5,display:"block",marginBottom:8}}>
+              {res.final_url}
+            </code>
+            <div style={{fontSize:11,color:C.muted}}>{res.stop_reason}</div>
+          </div>
+
+          {/* Hop timeline */}
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {res.hops.map((h,i)=>(
+              <div key={i} style={{background:C.surface,
+                border:`1px solid ${h.blocked||h.error?C.red+"40":C.border}`,
+                borderRadius:10,padding:"12px 14px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7,flexWrap:"wrap"}}>
+                  <span style={{fontSize:10,fontWeight:700,width:22,height:22,borderRadius:11,
+                    background:C.surfaceHi,color:C.muted,display:"inline-flex",
+                    alignItems:"center",justifyContent:"center",flexShrink:0}}>{h.hop}</span>
+                  <span style={{fontSize:12,fontWeight:700,color:statusColor(h)}}>
+                    {h.blocked?"BLOCKED":h.error&&!h.status?"ERROR":`${h.status} ${h.reason||""}`.trim()}
+                  </span>
+                  {h.redirect_type&&(
+                    <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,fontWeight:600,
+                      background:h.js_only?C.amber+"15":C.surfaceHi,
+                      border:`1px solid ${h.js_only?C.amber+"40":C.border}`,
+                      color:h.js_only?C.amber:C.muted}}>{h.redirect_type}</span>
+                  )}
+                  {h.tls&&h.tls!=="valid"&&(
+                    <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,fontWeight:600,
+                      background:C.red+"12",border:`1px solid ${C.red}35`,color:C.red}}>{h.tls}</span>
+                  )}
+                  {typeof h.elapsed_ms==="number"&&(
+                    <span style={{fontSize:10,color:C.muted,marginLeft:"auto"}}>{h.elapsed_ms} ms</span>
+                  )}
+                </div>
+
+                <code style={{fontSize:11.5,color:C.white||C.textHi,fontFamily:"monospace",
+                  wordBreak:"break-all",lineHeight:1.55,display:"block",
+                  background:C.surfaceHi,padding:"7px 9px",borderRadius:6}}>{h.url}</code>
+
+                {h.error&&(
+                  <div style={{fontSize:11,color:C.red,marginTop:6,lineHeight:1.5}}>{h.error}</div>
+                )}
+                {h.title&&(
+                  <div style={{fontSize:11,color:C.muted,marginTop:6}}>
+                    <span style={{fontWeight:600}}>Title: </span>{h.title}
+                  </div>
+                )}
+
+                <div style={{display:"flex",gap:14,flexWrap:"wrap",marginTop:7,fontSize:10.5,color:C.muted}}>
+                  {h.ips?.length>0&&<span><b style={{fontWeight:600}}>IP</b> {h.ips.join(", ")}</span>}
+                  {h.server&&<span><b style={{fontWeight:600}}>Server</b> {h.server}</span>}
+                  {h.content_type&&<span><b style={{fontWeight:600}}>Type</b> {h.content_type.split(";")[0]}</span>}
+                </div>
+
+                {h.cookies?.length>0&&(
+                  <div style={{marginTop:7,fontSize:10.5,color:C.muted}}>
+                    <b style={{fontWeight:600}}>Cookies set</b>{" "}
+                    {h.cookies.map((c,ci)=>(
+                      <span key={ci} style={{display:"inline-block",marginRight:6,padding:"1px 7px",
+                        borderRadius:20,background:C.surfaceHi,border:`1px solid ${C.border}`}}>
+                        {c.name}{c.flags.length>0&&<span style={{opacity:.65}}> · {c.flags.join(" ")}</span>}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── OSINT + TOOLS WRAPPER ─────────────────────────────────────────────────────
 function OSINTPage({token,C}){
   const [tool,setTool]=useState("osint");
@@ -4275,6 +4482,7 @@ function OSINTPage({token,C}){
     {id:"urldecode", label:"URL Decoder"},
     {id:"safelinks", label:"Safe Link Extractor"},
     {id:"ua",        label:"User Agent Parser"},
+    {id:"trace",     label:"Redirect Tracer"},
   ];
   return(
     <div>
@@ -4295,6 +4503,7 @@ function OSINTPage({token,C}){
       {tool==="urldecode" &&<URLDecoder C={C}/>}
       {tool==="safelinks" &&<SafeLinkExtractor C={C}/>}
       {tool==="ua"        &&<UserAgentParser C={C}/>}
+      {tool==="trace"     &&<RedirectTracer token={token} C={C}/>}
     </div>
   );
 }

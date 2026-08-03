@@ -1,8 +1,9 @@
-import os, uuid, httpx, asyncio, base64, csv, io, re, json, socket
+import os, uuid, httpx, asyncio, base64, csv, io, re, json, socket, ipaddress
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from typing import List, Optional
+from urllib.parse import urlparse, urljoin
 
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -3772,6 +3773,242 @@ async def osint_lookup(body: OSINTRequest, user=Depends(get_current_user)):
         results["error"] = str(e)
     results["queried_at"] = datetime.now(timezone.utc).isoformat()
     return results
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REDIRECT TRACER
+# ═══════════════════════════════════════════════════════════════════════════════
+# Follows a link hop by hop and reports what happens at each step. The question
+# behind a shortened or gateway-wrapped phishing link is "where does this
+# actually land, and what does it do on the way" — one hop at a time is the only
+# way to see cloaking, cookie drops and meta/JS bounces.
+#
+# SECURITY: this fetches attacker-supplied URLs from inside the server, which is
+# textbook SSRF. Every hop is re-validated, not just the first — a redirect to
+# 169.254.169.254 (cloud metadata) or 127.0.0.1:8000 (this very API) IS the
+# attack, and validating only the submitted URL would miss all of it.
+
+TRACE_UA = {
+    "desktop": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "mobile":  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) "
+               "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
+    "bot":     "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "curl":    "curl/8.4.0",
+}
+
+# Real web ports only. Without this the tracer doubles as a port scanner that
+# runs from our IP and burns our reputation.
+TRACE_PORTS = {80, 443, 8080, 8443}
+
+# The lookahead pins this to a refresh meta tag without caring where the
+# http-equiv attribute sits — kits reorder attributes, and requiring
+# http-equiv before content silently misses half of them.
+META_REFRESH_RE = re.compile(
+    r"""<meta(?=[^>]*?http-equiv\s*=\s*['"]?refresh)[^>]*?url\s*=\s*['"]?([^'"\s>;]+)""",
+    re.I)
+JS_REDIRECT_RE = re.compile(
+    r"""(?:window\s*\.)?location(?:\s*\.\s*href|\s*\.\s*replace\s*\(|\s*\.\s*assign\s*\(|\s*)\s*=?\s*['"]([^'"]{3,})['"]""",
+    re.I)
+TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+async def _trace_guard(url: str):
+    """Resolve and vet one URL. Returns (host, port, ips); raises ValueError if unsafe."""
+    p = urlparse(url)
+    if p.scheme not in ("http", "https"):
+        raise ValueError(f"scheme '{p.scheme or 'none'}' not allowed (http/https only)")
+    host = p.hostname
+    if not host:
+        raise ValueError("no host in URL")
+    try:
+        port = p.port or (443 if p.scheme == "https" else 80)
+    except ValueError:
+        raise ValueError("invalid port")
+    if port not in TRACE_PORTS:
+        raise ValueError(f"port {port} not allowed (80/443/8080/8443 only)")
+
+    # An attacker controls this hostname, so resolve it ourselves and judge the
+    # answer rather than trusting the name.
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM)
+    except Exception as e:
+        raise ValueError(f"DNS resolution failed: {e}")
+    ips = sorted({i[4][0] for i in infos})
+    if not ips:
+        raise ValueError("hostname did not resolve")
+    for ip in ips:
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            raise ValueError(f"unparseable address {ip}")
+        # is_link_local covers 169.254.0.0/16, i.e. the cloud metadata endpoint
+        if (a.is_private or a.is_loopback or a.is_link_local or a.is_reserved
+                or a.is_multicast or a.is_unspecified):
+            raise ValueError(f"host resolves to non-public address {ip} — blocked (SSRF guard)")
+    return host, port, ips
+
+
+def _cookie_summary(resp):
+    """Cookie names plus the flags that matter for tracking/session analysis."""
+    out = []
+    for raw in resp.headers.get_list("set-cookie"):
+        name = raw.split("=", 1)[0].strip()
+        low = raw.lower()
+        flags = [f for f, present in (
+            ("Secure", "secure" in low), ("HttpOnly", "httponly" in low),
+            ("SameSite=None", "samesite=none" in low)) if present]
+        out.append({"name": name[:64], "flags": flags})
+    return out[:12]
+
+
+class RedirectTraceRequest(BaseModel):
+    url: str
+    user_agent: Optional[str] = "desktop"
+    max_hops: Optional[int] = 20
+    follow_meta: Optional[bool] = True
+
+
+@app.post("/tools/trace-redirects")
+@limiter.limit("20/minute")
+async def trace_redirects(request: Request, body: RedirectTraceRequest,
+                          user=Depends(get_current_user)):
+    # Analysts paste defanged URLs straight out of tickets and mail headers.
+    raw = (body.url or "").strip()
+    raw = re.sub(r"hxxp", "http", raw, flags=re.I)
+    raw = raw.replace("[.]", ".").replace("[:]", ":").replace("(dot)", ".")
+    if not raw:
+        raise HTTPException(status_code=400, detail="No URL supplied")
+    if not re.match(r"^[a-z][a-z0-9+.-]*://", raw, re.I):
+        raw = "https://" + raw
+
+    max_hops = max(1, min(int(body.max_hops or 20), 20))
+    ua = TRACE_UA.get((body.user_agent or "desktop").lower(), TRACE_UA["desktop"])
+    hdrs = {"User-Agent": ua, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9"}
+
+    hops, seen = [], []
+    current, stop_reason = raw, "reached final destination"
+
+    # Two clients: hostile hosts routinely have broken certificates, and refusing
+    # to look at them would make the tool useless exactly when it matters. We try
+    # strict first purely so we can *report* whether the cert was valid.
+    async with httpx.AsyncClient(follow_redirects=False, timeout=12.0) as strict, \
+               httpx.AsyncClient(follow_redirects=False, timeout=12.0, verify=False) as loose:
+
+        for n in range(1, max_hops + 1):
+            if current in seen:
+                hops.append({"hop": n, "url": current, "error": "redirect loop — already visited",
+                             "loop": True})
+                stop_reason = "redirect loop detected"
+                break
+            seen.append(current)
+
+            hop = {"hop": n, "url": current}
+            try:
+                host, port, ips = await _trace_guard(current)
+                hop.update({"host": host, "port": port, "ips": ips})
+            except ValueError as e:
+                hop.update({"error": str(e), "blocked": True})
+                hops.append(hop)
+                stop_reason = "blocked by SSRF guard"
+                break
+
+            started = datetime.now(timezone.utc)
+            resp, tls = None, "valid"
+            for client, is_strict in ((strict, True), (loose, False)):
+                try:
+                    resp = await client.get(current, headers=hdrs)
+                    if not is_strict:
+                        tls = "invalid certificate"
+                    break
+                except Exception as e:
+                    msg = str(e)
+                    tls_problem = any(k in msg.upper() for k in ("SSL", "CERTIFICATE", "TLSV"))
+                    if is_strict and tls_problem and current.lower().startswith("https"):
+                        continue          # retry without verification, and say so
+                    hop["error"] = f"{type(e).__name__}: {msg[:200]}"
+                    break
+
+            if resp is None:
+                hops.append(hop)
+                stop_reason = "request failed"
+                break
+
+            hop["elapsed_ms"] = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+            hop["status"] = resp.status_code
+            hop["reason"] = resp.reason_phrase
+            hop["tls"] = tls if current.lower().startswith("https") else "none (plaintext http)"
+            hop["server"] = resp.headers.get("server", "")
+            hop["content_type"] = resp.headers.get("content-type", "")
+            hop["cookies"] = _cookie_summary(resp)
+
+            # ── HTTP-level redirect ────────────────────────────────────────────
+            loc = resp.headers.get("location")
+            if 300 <= resp.status_code < 400 and loc:
+                nxt = urljoin(current, loc.strip())
+                hop["redirect_type"] = f"HTTP {resp.status_code}"
+                hop["location"] = loc.strip()
+                hop["next"] = nxt
+                hops.append(hop)
+                current = nxt
+                continue
+
+            # ── Body-level redirect (meta refresh / JS) ────────────────────────
+            body_txt = ""
+            if "text" in hop["content_type"] or "html" in hop["content_type"] or not hop["content_type"]:
+                body_txt = resp.text[:200_000]
+
+            title = TITLE_RE.search(body_txt)
+            if title:
+                hop["title"] = re.sub(r"\s+", " ", title.group(1)).strip()[:200]
+
+            meta = META_REFRESH_RE.search(body_txt)
+            js = JS_REDIRECT_RE.search(body_txt)
+
+            if meta and body.follow_meta:
+                nxt = urljoin(current, meta.group(1).strip().strip("'\""))
+                hop["redirect_type"] = "meta refresh"
+                hop["location"] = meta.group(1).strip()
+                hop["next"] = nxt
+                hops.append(hop)
+                current = nxt
+                continue
+
+            # A JS redirect is reported but never followed — executing attacker
+            # script server-side is a different and much worse problem. The
+            # analyst sees the target and can trace it deliberately.
+            if js:
+                hop["redirect_type"] = "javascript (detected, not followed)"
+                hop["location"] = js.group(1).strip()[:300]
+                hop["js_only"] = True
+                stop_reason = "stopped at a JavaScript redirect — not executed server-side"
+            else:
+                hop["redirect_type"] = "final"
+
+            hops.append(hop)
+            break
+        else:
+            stop_reason = f"hop limit ({max_hops}) reached"
+
+    domains = []
+    for h in hops:
+        d = h.get("host")
+        if d and d not in domains:
+            domains.append(d)
+    final = hops[-1] if hops else {}
+
+    return {
+        "start_url": raw,
+        "final_url": final.get("url", raw),
+        "final_status": final.get("status"),
+        "hop_count": len(hops),
+        "domains": domains,
+        "crossed_domains": len(domains) > 1,
+        "stop_reason": stop_reason,
+        "hops": hops,
+        "user_agent": ua,
+        "traced_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # RULE-BASED PRE-FILL
