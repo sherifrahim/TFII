@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 const API_BASE = "https://YOUR_DOMAIN";
 const INDUSTRIES = ["Fintech","Medical","Gaming","Retail","Energy","Government","Telecom"];
@@ -4474,6 +4474,341 @@ function RedirectTracer({token,C}){
   );
 }
 
+// ── DIFF ENGINE ───────────────────────────────────────────────────────────────
+// Myers O(ND) diff, the same shape of algorithm git uses. Common prefix and
+// suffix are trimmed first: for the usual case (two near-identical files) that
+// collapses the problem to a handful of lines and keeps the quadratic worst
+// case out of reach entirely.
+function myersOps(a,b,budget){
+  const N=a.length,M=b.length;
+  if(N===0&&M===0) return [];
+  const max=Math.min(budget===undefined?N+M:budget,N+M);
+  const v=new Map([[1,0]]); const trace=[];
+  for(let d=0;d<=max;d++){
+    trace.push(new Map(v));
+    for(let k=-d;k<=d;k+=2){
+      const down=(k===-d)||(k!==d&&(v.get(k-1)??-1)<(v.get(k+1)??-1));
+      let x=down?(v.get(k+1)??0):(v.get(k-1)??0)+1;
+      let y=x-k;
+      while(x<N&&y<M&&a[x]===b[y]){x++;y++;}
+      v.set(k,x);
+      if(x>=N&&y>=M) return diffBacktrack(trace,d,N,M);
+    }
+  }
+  return null; // over budget — caller degrades gracefully
+}
+
+function diffBacktrack(trace,D,N,M){
+  const ops=[]; let x=N,y=M;
+  for(let d=D;d>0;d--){
+    const v=trace[d]; const k=x-y;
+    const down=(k===-d)||(k!==d&&(v.get(k-1)??-1)<(v.get(k+1)??-1));
+    const prevK=down?k+1:k-1;
+    const prevX=v.get(prevK)??0; const prevY=prevX-prevK;
+    while(x>prevX&&y>prevY){x--;y--;ops.push({t:"eq",a:x,b:y});}
+    if(down){y--;ops.push({t:"ins",b:y});}
+    else{x--;ops.push({t:"del",a:x});}
+  }
+  while(x>0&&y>0){x--;y--;ops.push({t:"eq",a:x,b:y});}
+  while(y>0){y--;ops.push({t:"ins",b:y});}
+  while(x>0){x--;ops.push({t:"del",a:x});}
+  return ops.reverse();
+}
+
+function diffSequences(a,b,budget){
+  let pre=0;
+  while(pre<a.length&&pre<b.length&&a[pre]===b[pre]) pre++;
+  let suf=0;
+  while(suf<a.length-pre&&suf<b.length-pre&&
+        a[a.length-1-suf]===b[b.length-1-suf]) suf++;
+  const midA=a.slice(pre,a.length-suf), midB=b.slice(pre,b.length-suf);
+  let mid=myersOps(midA,midB,budget), degraded=false;
+  if(mid===null){
+    // Too dissimilar to diff within budget — report a wholesale replace rather
+    // than locking up the tab.
+    degraded=true; mid=[];
+    for(let i=0;i<midA.length;i++) mid.push({t:"del",a:i});
+    for(let j=0;j<midB.length;j++) mid.push({t:"ins",b:j});
+  }
+  const ops=[];
+  for(let i=0;i<pre;i++) ops.push({t:"eq",a:i,b:i});
+  for(const o of mid) ops.push({t:o.t,
+    a:o.a===undefined?undefined:o.a+pre, b:o.b===undefined?undefined:o.b+pre});
+  for(let i=0;i<suf;i++) ops.push({t:"eq",a:a.length-suf+i,b:b.length-suf+i});
+  return {ops,degraded};
+}
+
+// Word-level diff so a changed line shows *what* changed inside it, not just
+// that the whole line differs.
+function diffWords(aStr,bStr){
+  const tok=s=>s.match(/\s+|[^\s]+/g)||[];
+  const at=tok(aStr),bt=tok(bStr);
+  const {ops}=diffSequences(at,bt,2000);
+  const left=[],right=[];
+  for(const o of ops){
+    if(o.t==="eq"){left.push({s:at[o.a],c:0});right.push({s:bt[o.b],c:0});}
+    else if(o.t==="del") left.push({s:at[o.a],c:1});
+    else right.push({s:bt[o.b],c:1});
+  }
+  return {left,right};
+}
+
+// ── DIFF CHECKER ──────────────────────────────────────────────────────────────
+function DiffChecker({C}){
+  const [left,setLeft]=useState("");
+  const [right,setRight]=useState("");
+  const [view,setView]=useState("split");      // split | unified
+  const [ignoreWs,setIgnoreWs]=useState(false);
+  const [ignoreCase,setIgnoreCase]=useState(false);
+  const [collapse,setCollapse]=useState(true);
+  const [copied,setCopied]=useState(false);
+  const [ran,setRan]=useState(false);
+
+  const aLines=left.length?left.replace(/\r\n?/g,"\n").split("\n"):[];
+  const bLines=right.length?right.replace(/\r\n?/g,"\n").split("\n"):[];
+
+  const norm=s=>{
+    let t=s;
+    if(ignoreCase) t=t.toLowerCase();
+    if(ignoreWs)   t=t.replace(/\s+/g," ").trim();
+    return t;
+  };
+
+  const {ops,degraded}=useMemo(
+    ()=>diffSequences(aLines.map(norm),bLines.map(norm),4000),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [left,right,ignoreWs,ignoreCase]);
+
+  // Pair each run of deletions with the insertions beside it so a changed line
+  // sits opposite its replacement instead of drifting down the page.
+  const rows=useMemo(()=>{
+    const out=[]; let i=0;
+    while(i<ops.length){
+      if(ops[i].t==="eq"){
+        out.push({type:"eq",aNum:ops[i].a+1,bNum:ops[i].b+1,
+                  a:aLines[ops[i].a],b:bLines[ops[i].b]});
+        i++; continue;
+      }
+      const dels=[],inss=[];
+      while(i<ops.length&&ops[i].t!=="eq"){
+        (ops[i].t==="del"?dels:inss).push(ops[i]); i++;
+      }
+      for(let j=0;j<Math.max(dels.length,inss.length);j++){
+        const d=dels[j],s=inss[j];
+        out.push({type:d&&s?"mod":d?"del":"ins",
+          aNum:d?d.a+1:null,bNum:s?s.b+1:null,
+          a:d?aLines[d.a]:null,b:s?bLines[s.b]:null});
+      }
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[ops]);
+
+  const stats=useMemo(()=>({
+    add:rows.filter(r=>r.type==="ins").length,
+    del:rows.filter(r=>r.type==="del").length,
+    mod:rows.filter(r=>r.type==="mod").length,
+    same:rows.filter(r=>r.type==="eq").length,
+  }),[rows]);
+
+  // Collapse long unchanged stretches — on a big file the interesting part is
+  // otherwise buried under hundreds of identical lines.
+  const display=useMemo(()=>{
+    if(!collapse) return rows.map(r=>({r}));
+    const out=[]; let i=0; const CTX=3;
+    while(i<rows.length){
+      if(rows[i].type!=="eq"){ out.push({r:rows[i]}); i++; continue; }
+      let j=i; while(j<rows.length&&rows[j].type==="eq") j++;
+      const run=j-i;
+      if(run>CTX*2+2){
+        for(let k=i;k<i+CTX;k++) out.push({r:rows[k]});
+        out.push({gap:run-CTX*2});
+        for(let k=j-CTX;k<j;k++) out.push({r:rows[k]});
+      } else for(let k=i;k<j;k++) out.push({r:rows[k]});
+      i=j;
+    }
+    return out;
+  },[rows,collapse]);
+
+  function loadFile(e,setter){
+    const f=e.target.files?.[0]; if(!f) return;
+    if(f.size>4*1024*1024){ alert("File is larger than 4MB — paste a section instead."); return; }
+    const rd=new FileReader();
+    rd.onload=ev=>{setter(String(ev.target.result||""));setRan(true);};
+    rd.readAsText(f);
+    e.target.value="";
+  }
+
+  function copyUnified(){
+    const out=["--- original","+++ changed"];
+    for(const r of rows){
+      if(r.type==="eq")       out.push(" "+r.a);
+      else if(r.type==="del") out.push("-"+r.a);
+      else if(r.type==="ins") out.push("+"+r.b);
+      else { out.push("-"+r.a); out.push("+"+r.b); }
+    }
+    navigator.clipboard.writeText(out.join("\n"));
+    setCopied(true); setTimeout(()=>setCopied(false),2000);
+  }
+
+  function swap(){ const l=left; setLeft(right); setRight(l); }
+  function clearAll(){ setLeft(""); setRight(""); setRan(false); }
+
+  const BG={eq:"transparent",del:C.red+"12",ins:C.green+"12",mod:C.amber+"12"};
+  const NUMCOL={width:44,textAlign:"right",padding:"1px 8px 1px 0",color:C.muted,
+    fontSize:10.5,userSelect:"none",verticalAlign:"top",fontFamily:"monospace"};
+  const CELL={padding:"1px 8px",fontSize:11.5,fontFamily:"monospace",lineHeight:1.6,
+    whiteSpace:"pre-wrap",wordBreak:"break-word",verticalAlign:"top"};
+
+  const WordSpan=({parts,kind})=>(
+    <>{parts.map((p,i)=>(
+      <span key={i} style={p.c?{background:kind==="del"?C.red+"33":C.green+"33",
+        borderRadius:2}:undefined}>{p.s}</span>
+    ))}</>
+  );
+
+  const Pane=({label,val,set,lines})=>(
+    <div style={{flex:1,minWidth:260}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+        <span style={{fontSize:11,color:C.muted,fontWeight:600}}>{label}</span>
+        <label style={{fontSize:10.5,color:C.accentText,cursor:"pointer"}}>
+          <input type="file" onChange={e=>loadFile(e,set)} style={{display:"none"}}/>
+          load file
+        </label>
+      </div>
+      <textarea value={val} onChange={e=>{set(e.target.value);setRan(true);}} rows={9}
+        placeholder="Paste text, config, IOC list, log…"
+        style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+          color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:12,
+          outline:"none",fontFamily:"monospace",resize:"vertical",boxSizing:"border-box"}}/>
+      <div style={{fontSize:10,color:C.muted,marginTop:3}}>
+        {lines.length} line{lines.length!==1?"s":""}
+      </div>
+    </div>
+  );
+
+  return(
+    <div>
+      <div style={{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.6,maxWidth:820}}>
+        Line-by-line comparison with word-level highlighting inside changed lines.
+        Useful for diffing IOC lists between feed pulls, config or rule changes,
+        two versions of a phishing kit, or advisory text. Runs entirely in your
+        browser — nothing is uploaded.
+      </div>
+
+      <div style={{display:"flex",gap:14,marginBottom:12,flexWrap:"wrap"}}>
+        <Pane label="Original" val={left}  set={setLeft}  lines={aLines}/>
+        <Pane label="Changed"  val={right} set={setRight} lines={bLines}/>
+      </div>
+
+      <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:16,flexWrap:"wrap"}}>
+        <div style={{display:"flex",gap:2,background:C.surfaceHi,borderRadius:8,padding:3}}>
+          {[["split","Side by side"],["unified","Unified"]].map(([id,lbl])=>(
+            <button key={id} onClick={()=>setView(id)}
+              style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:"pointer",
+                fontSize:11,fontFamily:"inherit",fontWeight:600,
+                background:view===id?C.accent:"transparent",color:view===id?"#fff":C.muted}}>
+              {lbl}
+            </button>
+          ))}
+        </div>
+        {[["Ignore whitespace",ignoreWs,setIgnoreWs],
+          ["Ignore case",ignoreCase,setIgnoreCase],
+          ["Collapse unchanged",collapse,setCollapse]].map(([lbl,val,set])=>(
+          <label key={lbl} style={{display:"flex",alignItems:"center",gap:6,fontSize:12,
+            color:C.muted,cursor:"pointer"}}>
+            <input type="checkbox" checked={val} onChange={e=>set(e.target.checked)}
+              style={{accentColor:C.accent}}/>
+            {lbl}
+          </label>
+        ))}
+        <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+          <Btn onClick={swap} variant="ghost" sm C={C}>Swap</Btn>
+          <Btn onClick={clearAll} variant="ghost" sm C={C}>Clear</Btn>
+          <Btn onClick={copyUnified} variant="dim" sm C={C}>{copied?"Copied!":"Copy diff"}</Btn>
+        </div>
+      </div>
+
+      {degraded&&(
+        <div style={{background:C.amber+"12",border:`1px solid ${C.amber}40`,borderRadius:8,
+          padding:"10px 14px",fontSize:11.5,color:C.amber,marginBottom:12}}>
+          These inputs are too dissimilar to align line by line within the time budget —
+          showing them as a wholesale replacement rather than freezing the page.
+        </div>
+      )}
+
+      {ran&&(aLines.length>0||bLines.length>0)&&(
+        <>
+          <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+            {[[`+${stats.add}`,"added",C.green],[`−${stats.del}`,"removed",C.red],
+              [`±${stats.mod}`,"changed",C.amber],[`${stats.same}`,"unchanged",C.muted]].map(([n,l,col],i)=>(
+              <span key={i} style={{fontSize:12,padding:"4px 12px",borderRadius:20,fontWeight:600,
+                background:col+"15",border:`1px solid ${col}35`,color:col}}>{n} {l}</span>
+            ))}
+            {stats.add===0&&stats.del===0&&stats.mod===0&&(
+              <span style={{fontSize:12,padding:"4px 12px",borderRadius:20,fontWeight:600,
+                background:C.green+"15",border:`1px solid ${C.green}35`,color:C.green}}>
+                identical
+              </span>
+            )}
+          </div>
+
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
+            overflow:"auto",maxHeight:560}}>
+            <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed"}}>
+              <tbody>
+                {display.map((d,i)=>{
+                  if(d.gap) return(
+                    <tr key={i}><td colSpan={view==="split"?4:2}
+                      style={{padding:"4px 12px",fontSize:10.5,color:C.muted,
+                        background:C.surfaceHi+"60",textAlign:"center",
+                        borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`}}>
+                      ⋯ {d.gap} unchanged line{d.gap!==1?"s":""}
+                    </td></tr>
+                  );
+                  const r=d.r;
+                  const words=r.type==="mod"?diffWords(r.a,r.b):null;
+                  if(view==="split") return(
+                    <tr key={i} style={{background:BG[r.type]}}>
+                      <td style={NUMCOL}>{r.aNum||""}</td>
+                      <td style={{...CELL,width:"50%",color:r.a==null?C.muted:C.white||C.textHi,
+                        borderRight:`1px solid ${C.border}`}}>
+                        {r.a==null?"":words?<WordSpan parts={words.left} kind="del"/>:r.a}
+                      </td>
+                      <td style={NUMCOL}>{r.bNum||""}</td>
+                      <td style={{...CELL,width:"50%",color:r.b==null?C.muted:C.white||C.textHi}}>
+                        {r.b==null?"":words?<WordSpan parts={words.right} kind="ins"/>:r.b}
+                      </td>
+                    </tr>
+                  );
+                  // Unified: a modified line becomes a - row then a + row.
+                  const uni=[];
+                  if(r.type==="eq")       uni.push([" ",r.aNum,r.bNum,r.a,"eq"]);
+                  else if(r.type==="del") uni.push(["−",r.aNum,null,r.a,"del"]);
+                  else if(r.type==="ins") uni.push(["+",null,r.bNum,r.b,"ins"]);
+                  else { uni.push(["−",r.aNum,null,r.a,"del"]); uni.push(["+",null,r.bNum,r.b,"ins"]); }
+                  return uni.map((u,ui)=>(
+                    <tr key={i+"-"+ui} style={{background:BG[u[4]]}}>
+                      <td style={NUMCOL}>{u[1]||u[2]||""}</td>
+                      <td style={{...CELL,color:C.white||C.textHi}}>
+                        <span style={{color:u[4]==="del"?C.red:u[4]==="ins"?C.green:C.muted,
+                          fontWeight:700,marginRight:8}}>{u[0]}</span>
+                        {u[4]==="del"&&words?<WordSpan parts={words.left} kind="del"/>
+                         :u[4]==="ins"&&words?<WordSpan parts={words.right} kind="ins"/>
+                         :u[3]}
+                      </td>
+                    </tr>
+                  ));
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── OSINT + TOOLS WRAPPER ─────────────────────────────────────────────────────
 function OSINTPage({token,C}){
   const [tool,setTool]=useState("osint");
@@ -4483,6 +4818,7 @@ function OSINTPage({token,C}){
     {id:"safelinks", label:"Safe Link Extractor"},
     {id:"ua",        label:"User Agent Parser"},
     {id:"trace",     label:"Redirect Tracer"},
+    {id:"diff",      label:"Diff Checker"},
   ];
   return(
     <div>
@@ -4504,6 +4840,7 @@ function OSINTPage({token,C}){
       {tool==="safelinks" &&<SafeLinkExtractor C={C}/>}
       {tool==="ua"        &&<UserAgentParser C={C}/>}
       {tool==="trace"     &&<RedirectTracer token={token} C={C}/>}
+      {tool==="diff"      &&<DiffChecker C={C}/>}
     </div>
   );
 }
