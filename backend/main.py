@@ -5862,3 +5862,93 @@ async def explain_query(body: QueryExplainRequest, user=Depends(get_current_user
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# DIFF EXPLANATION
+# ═══════════════════════════════════════════════════════════════════════════════
+# The diff checker itself is entirely client-side. This endpoint is opt-in: it
+# only runs when the analyst presses the button, because using it means the diff
+# leaves the browser and goes to Groq. The client sends a context-limited diff
+# rather than both documents in full, so unchanged bulk never leaves the machine.
+
+SYSTEM_PROMPT_DIFF_EXPLAIN = """You are a security analyst reviewing a change between two versions of a file. The audience is a threat intelligence analyst who wants to know what changed and whether it matters — not a line-by-line restatement of the diff they are already looking at.
+
+The content could be anything: detection rules (Suricata/Sigma/YARA), IOC lists, firewall or server configuration, a phishing kit's source, an advisory draft, or ordinary prose. Work out what it is from the content and adapt.
+
+Prioritise, in this order:
+1. Changes with a security consequence — a controls weakened, authentication or TLS altered, a rule's scope narrowed so it now misses things, an IOC added or removed, a new outbound destination, a widened CIDR, a raised timeout, a disabled check.
+2. Changes in behaviour that are not obviously security related but alter what the system does.
+3. Cosmetic changes — grouped and summarised in one line, never enumerated.
+
+Be specific and concrete. "The C2 IP changed from 185.220.101.45 to 185.220.101.99, so any blocklist built from the old value is now stale" is useful. "An IP address was modified" is not. Reference actual values from the diff.
+
+If a change looks risky, say so plainly. If the change set is benign, say that too — do not manufacture concern. If the content is truncated or you cannot determine intent, say so rather than guessing.
+
+RESPOND WITH VALID JSON ONLY (no markdown, no backticks around JSON):
+{
+  "summary": "2-3 sentences: what changed overall and the practical effect. Plain English.",
+  "content_type": "What this file appears to be, e.g. 'Suricata IDS rules' or 'nginx configuration'",
+  "risk": "none|low|medium|high",
+  "risk_reason": "One sentence justifying the risk level. If 'none', say why the changes are safe.",
+  "changes": [
+    {
+      "what": "Concrete description citing real values from the diff",
+      "impact": "Why it matters operationally, or 'No functional impact' when cosmetic",
+      "severity": "info|low|medium|high"
+    }
+  ],
+  "watch_for": [
+    "Specific follow-up actions, e.g. 'Update blocklists still referencing 185.220.101.45'"
+  ]
+}
+
+Keep "changes" to the 8 most significant entries. Leave "watch_for" as an empty array when there is genuinely nothing to follow up."""
+
+
+class DiffExplainRequest(BaseModel):
+    diff: str
+    context: Optional[str] = ""
+    stats: Optional[str] = ""
+
+
+@app.post("/diff/explain")
+@limiter.limit("15/minute")
+async def explain_diff(request: Request, body: DiffExplainRequest,
+                       user=Depends(get_current_user)):
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=503,
+            detail="GROQ_API_KEY not configured. Add it in Settings → API Keys.")
+
+    diff = (body.diff or "").strip()
+    if not diff:
+        raise HTTPException(status_code=400, detail="No diff supplied")
+    if diff.count("\n") < 1 and len(diff) < 8:
+        raise HTTPException(status_code=400, detail="Diff too small to explain")
+
+    # Hard cap regardless of what the client sent. Groq has a context limit and
+    # an analyst pasting a 5MB log should get a truncation notice, not a 502.
+    MAX = 48_000
+    truncated = len(diff) > MAX
+    if truncated:
+        diff = diff[:MAX]
+
+    user_msg = ""
+    if body.context:
+        user_msg += f"Analyst-supplied context: {body.context[:500]}\n\n"
+    if body.stats:
+        user_msg += f"Change counts: {body.stats[:200]}\n\n"
+    if truncated:
+        user_msg += ("NOTE: this diff was truncated at 48000 characters. Say so in your "
+                     "summary and scope your conclusions to what you can see.\n\n")
+    user_msg += f"Unified diff (- removed, + added):\n\n{diff}"
+
+    try:
+        raw = await call_groq(SYSTEM_PROMPT_DIFF_EXPLAIN, user_msg, max_tokens=2500)
+        import json as _json
+        data = _json.loads(raw)
+        data["truncated"] = truncated
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
+

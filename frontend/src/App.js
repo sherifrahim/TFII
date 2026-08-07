@@ -4560,7 +4560,7 @@ function diffWords(aStr,bStr){
 }
 
 // ── DIFF CHECKER ──────────────────────────────────────────────────────────────
-function DiffChecker({C}){
+function DiffChecker({C,token}){
   const [left,setLeft]=useState("");
   const [right,setRight]=useState("");
   const [view,setView]=useState("split");      // split | unified
@@ -4569,6 +4569,10 @@ function DiffChecker({C}){
   const [collapse,setCollapse]=useState(true);
   const [copied,setCopied]=useState(false);
   const [ran,setRan]=useState(false);
+  const [ai,setAi]=useState(null);
+  const [aiLoading,setAiLoading]=useState(false);
+  const [aiErr,setAiErr]=useState("");
+  const [aiContext,setAiContext]=useState("");
 
   const aLines=left.length?left.replace(/\r\n?/g,"\n").split("\n"):[];
   const bLines=right.length?right.replace(/\r\n?/g,"\n").split("\n"):[];
@@ -4657,8 +4661,47 @@ function DiffChecker({C}){
     setCopied(true); setTimeout(()=>setCopied(false),2000);
   }
 
-  function swap(){ const l=left; setLeft(right); setRight(l); }
-  function clearAll(){ setLeft(""); setRight(""); setRan(false); }
+  // Only the changed lines plus a little surrounding context are sent for AI
+  // explanation — unchanged bulk stays on this machine and stays out of the
+  // model's context window.
+  function buildAiDiff(){
+    const out=[]; const CTX=3; let i=0;
+    while(i<rows.length){
+      if(rows[i].type==="eq"){
+        let j=i; while(j<rows.length&&rows[j].type==="eq") j++;
+        const run=j-i;
+        if(run>CTX*2){
+          for(let k=i;k<i+CTX;k++) out.push(" "+rows[k].a);
+          out.push(`@@ ${run-CTX*2} unchanged lines omitted @@`);
+          for(let k=j-CTX;k<j;k++) out.push(" "+rows[k].a);
+        } else for(let k=i;k<j;k++) out.push(" "+rows[k].a);
+        i=j; continue;
+      }
+      const r=rows[i];
+      if(r.type==="del")      out.push("-"+r.a);
+      else if(r.type==="ins") out.push("+"+r.b);
+      else { out.push("-"+r.a); out.push("+"+r.b); }
+      i++;
+    }
+    return out.join("\n");
+  }
+
+  async function explainWithAi(){
+    setAiLoading(true); setAi(null); setAiErr("");
+    try{
+      const r=await api("/diff/explain",{method:"POST",body:JSON.stringify({
+        diff:buildAiDiff(),
+        context:aiContext.trim(),
+        stats:`${stats.add} added, ${stats.del} removed, ${stats.mod} changed, ${stats.same} unchanged`,
+      })},token);
+      if(r.ok) setAi(await r.json());
+      else{ const d=await r.json().catch(()=>({})); setAiErr(d.detail||`Request failed (${r.status})`); }
+    }catch(e){ setAiErr(String(e.message||e)); }
+    setAiLoading(false);
+  }
+
+  function swap(){ const l=left; setLeft(right); setRight(l); setAi(null); setAiErr(""); }
+  function clearAll(){ setLeft(""); setRight(""); setRan(false); setAi(null); setAiErr(""); }
 
   const BG={eq:"transparent",del:C.red+"12",ins:C.green+"12",mod:C.amber+"12"};
   const NUMCOL={width:44,textAlign:"right",padding:"1px 8px 1px 0",color:C.muted,
@@ -4698,8 +4741,10 @@ function DiffChecker({C}){
       <div style={{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.6,maxWidth:820}}>
         Line-by-line comparison with word-level highlighting inside changed lines.
         Useful for diffing IOC lists between feed pulls, config or rule changes,
-        two versions of a phishing kit, or advisory text. Runs entirely in your
-        browser — nothing is uploaded.
+        two versions of a phishing kit, or advisory text. The comparison runs
+        entirely in your browser — nothing is uploaded unless you press
+        <b style={{color:C.accentText}}> Explain with AI</b>, which sends the
+        changed lines to Groq.
       </div>
 
       <div style={{display:"flex",gap:14,marginBottom:12,flexWrap:"wrap"}}>
@@ -4758,6 +4803,103 @@ function DiffChecker({C}){
               </span>
             )}
           </div>
+
+          {/* AI explanation — opt-in, because pressing it sends the changed
+              lines off this machine. */}
+          {(stats.add>0||stats.del>0||stats.mod>0)&&(
+            <div style={{marginBottom:14}}>
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                <Btn onClick={explainWithAi} disabled={aiLoading} variant="dim" sm C={C}>
+                  {aiLoading?"Analysing…":"Explain with AI"}
+                </Btn>
+                <input value={aiContext} onChange={e=>setAiContext(e.target.value)}
+                  placeholder="optional: what is this file? e.g. 'Suricata rules for prod edge'"
+                  style={{flex:"1 1 320px",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
+                    color:C.inputText,padding:"6px 10px",borderRadius:6,fontSize:11.5,
+                    outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
+              </div>
+              <div style={{fontSize:10,color:C.muted,marginTop:5,opacity:.8}}>
+                Sends the changed lines (plus 3 lines of context each side) to Groq. Unchanged
+                bulk is not sent. Avoid on client-confidential material.
+              </div>
+            </div>
+          )}
+
+          {aiErr&&(
+            <div style={{background:C.red+"12",border:`1px solid ${C.red}40`,borderRadius:8,
+              padding:"10px 14px",fontSize:11.5,color:C.red,marginBottom:14}}>{aiErr}</div>
+          )}
+
+          {ai&&(
+            <div style={{background:C.surface,border:`1px solid ${C.accent}35`,borderRadius:10,
+              padding:"14px 16px",marginBottom:14}}>
+              <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:9,flexWrap:"wrap"}}>
+                <span style={{fontSize:11,fontWeight:700,color:C.accentText}}>AI ANALYSIS</span>
+                {ai.content_type&&(
+                  <span style={{fontSize:10.5,padding:"2px 9px",borderRadius:20,fontWeight:600,
+                    background:C.surfaceHi,border:`1px solid ${C.border}`,color:C.muted}}>
+                    {ai.content_type}
+                  </span>
+                )}
+                {ai.risk&&(()=>{
+                  const col=ai.risk==="high"?C.red:ai.risk==="medium"?C.amber:
+                            ai.risk==="low"?C.accent:C.green;
+                  return(
+                    <span style={{fontSize:10.5,padding:"2px 9px",borderRadius:20,fontWeight:700,
+                      background:col+"15",border:`1px solid ${col}40`,color:col}}>
+                      risk: {ai.risk}
+                    </span>
+                  );
+                })()}
+                {ai.truncated&&(
+                  <span style={{fontSize:10.5,padding:"2px 9px",borderRadius:20,fontWeight:600,
+                    background:C.amber+"15",border:`1px solid ${C.amber}40`,color:C.amber}}>
+                    truncated
+                  </span>
+                )}
+              </div>
+
+              {ai.summary&&(
+                <div style={{fontSize:12.5,color:C.white||C.textHi,lineHeight:1.65,marginBottom:8}}>
+                  {ai.summary}
+                </div>
+              )}
+              {ai.risk_reason&&(
+                <div style={{fontSize:11.5,color:C.muted,lineHeight:1.6,marginBottom:12}}>
+                  {ai.risk_reason}
+                </div>
+              )}
+
+              {ai.changes?.length>0&&(
+                <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:12}}>
+                  {ai.changes.map((c,i)=>{
+                    const col=c.severity==="high"?C.red:c.severity==="medium"?C.amber:
+                              c.severity==="low"?C.accent:C.muted;
+                    return(
+                      <div key={i} style={{borderLeft:`2px solid ${col}`,paddingLeft:10}}>
+                        <div style={{fontSize:12,color:C.white||C.textHi,lineHeight:1.55}}>{c.what}</div>
+                        {c.impact&&(
+                          <div style={{fontSize:11,color:C.muted,lineHeight:1.5,marginTop:2}}>{c.impact}</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {ai.watch_for?.length>0&&(
+                <div style={{borderTop:`1px solid ${C.border}`,paddingTop:10}}>
+                  <div style={{fontSize:10.5,fontWeight:700,color:C.muted,marginBottom:5}}>FOLLOW UP</div>
+                  {ai.watch_for.map((w,i)=>(
+                    <div key={i} style={{fontSize:11.5,color:C.white||C.textHi,lineHeight:1.6,
+                      display:"flex",gap:7}}>
+                      <span style={{color:C.accent}}>→</span><span>{w}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
             overflow:"auto",maxHeight:560}}>
@@ -4846,7 +4988,7 @@ function OSINTPage({token,C}){
       {tool==="safelinks" &&<SafeLinkExtractor C={C}/>}
       {tool==="ua"        &&<UserAgentParser C={C}/>}
       {tool==="trace"     &&<RedirectTracer token={token} C={C}/>}
-      {tool==="diff"      &&<DiffChecker C={C}/>}
+      {tool==="diff"      &&<DiffChecker token={token} C={C}/>}
     </div>
   );
 }
