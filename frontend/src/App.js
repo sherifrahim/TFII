@@ -153,8 +153,14 @@ const CVE_NAV=[
   {id:"cvewall",  label:"CVE Wall",      icon:"rss"},
   {id:"intel",    label:"Intel Wall",    icon:"rss"},
   {id:"actors",   label:"Threat Actors", icon:"users"},
-  {id:"osint",    label:"OSINT",         icon:"radar"},
   {id:"querygen", label:"Query Builder", icon:"code"},
+];
+// Analyst utilities that belong to neither mode — OSINT lookup, URL decoding,
+// link unwrapping, UA parsing, redirect tracing, diffing. These used to live in
+// CVE_NAV only, which made them invisible from IOC mode and effectively
+// undiscoverable unless you already knew where to look.
+const SHARED_NAV=[
+  {id:"osint",    label:"OSINT & Tools", icon:"radar"},
 ];
 const ADMIN_NAV=[
   {id:"settings",    label:"Settings",    icon:"settings"},
@@ -7588,7 +7594,12 @@ export default function App(){
   const [themeName,setThemeName]=useState(()=>localStorage.getItem("tf_theme")||"light");
   const C=THEMES[themeName]||THEMES.dark;
   const [mode,setMode]=useState(()=>localStorage.getItem("tf_mode")||"ioc");
-  function switchMode(m){setMode(m);localStorage.setItem("tf_mode",m);setView("dashboard");}
+  function switchMode(m){
+    setMode(m); localStorage.setItem("tf_mode",m);
+    // Shared views exist in both modes, so there's no reason to bounce someone
+    // back to the dashboard when the page they're on is still right there.
+    if(!SHARED_NAV.some(n=>n.id===view)) setView("dashboard");
+  }
   const [showApiKeyModal,setShowApiKeyModal]=useState(false);
   const [cvelookupId,setCvelookupId]=useState("");
   const [session,setSession]=useState(()=>{const t=localStorage.getItem("tf_token");return t?{token:t}:null;});
@@ -7708,6 +7719,7 @@ export default function App(){
 
   const NAV=[
     ...(mode==="ioc"?IOC_NAV:CVE_NAV),
+    ...SHARED_NAV,
     ...(me?.role==="admin"?ADMIN_NAV:USER_NAV),
   ];
   const currentNavLocked = NAV.find(n=>n.id===view)?.locked;
