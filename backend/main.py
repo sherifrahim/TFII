@@ -1,4 +1,4 @@
-import os, uuid, httpx, asyncio, base64, csv, io, re, json, socket, ipaddress
+import os, uuid, httpx, asyncio, base64, csv, io, re, json, socket, ipaddress, hashlib, secrets, shutil
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
@@ -7,7 +7,7 @@ from urllib.parse import urlparse, urljoin
 
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -349,6 +349,17 @@ async def startup():
             id VARCHAR(100) PRIMARY KEY, username VARCHAR(50) UNIQUE NOT NULL,
             password TEXT NOT NULL, role VARCHAR(20) DEFAULT 'analyst',
             email VARCHAR(255), active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT NOW())""",
+        """CREATE TABLE IF NOT EXISTS stored_files (
+            id VARCHAR(100) PRIMARY KEY,
+            filename VARCHAR(300) NOT NULL,
+            stored_name VARCHAR(100) NOT NULL,
+            size_bytes BIGINT NOT NULL DEFAULT 0,
+            content_type VARCHAR(150),
+            sha256 VARCHAR(64),
+            share_token VARCHAR(64) UNIQUE,
+            uploaded_by VARCHAR(100),
+            download_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW())""",
         """CREATE TABLE IF NOT EXISTS access_requests (
             id VARCHAR(100) PRIMARY KEY, user_id VARCHAR(100) NOT NULL,
             email VARCHAR(255) NOT NULL, message TEXT,
@@ -759,6 +770,16 @@ def get_current_user(token: str = Depends(oauth2), conn=Depends(get_db)):
 def require_admin(user=Depends(get_current_user)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+# The file store is deliberately narrower than the admin role: it is restricted
+# to the single named owner account, so promoting someone to admin does not hand
+# them the ability to publish files from this domain.
+ROOT_ADMIN_USERNAME = os.getenv("ROOT_ADMIN_USERNAME", "admin")
+
+def require_root_admin(user=Depends(get_current_user)):
+    if user["username"] != ROOT_ADMIN_USERNAME:
+        raise HTTPException(status_code=403, detail="Not permitted")
     return user
 
 def require_full_access(user=Depends(get_current_user)):
@@ -5861,6 +5882,222 @@ async def explain_query(body: QueryExplainRequest, user=Depends(get_current_user
         return _json.loads(raw)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FILE STORE
+# ═══════════════════════════════════════════════════════════════════════════════
+# Restricted to the single named owner account (see require_root_admin), not to
+# the admin role generally.
+#
+# The dangerous part of any file store is serving what was uploaded. This API and
+# the UI share an origin and the session JWT lives in localStorage, so an
+# uploaded .html or .svg served inline would run in the app's origin and could
+# read that token. Every download — public or authenticated — is therefore forced
+# to application/octet-stream + Content-Disposition: attachment + nosniff. The
+# browser never renders these files, so an uploaded page cannot become stored XSS.
+#
+# Files land on disk under a generated UUID and the original name is kept only as
+# a database column, which makes path traversal via the filename impossible
+# rather than merely filtered.
+
+UPLOAD_DIR      = os.path.abspath(os.getenv("UPLOAD_DIR", "uploads"))
+MAX_FILE_BYTES  = int(os.getenv("MAX_FILE_MB", "100")) * 1024 * 1024
+MAX_TOTAL_BYTES = int(os.getenv("MAX_STORE_GB", "5")) * 1024 * 1024 * 1024
+CHUNK           = 1024 * 1024
+
+
+def _safe_display_name(name: str) -> str:
+    """Keep a human-readable name that is safe in a header and on a listing."""
+    name = (name or "").replace("\\", "/").split("/")[-1]
+    name = re.sub(r"[\r\n\t\x00-\x1f\x7f]", "", name).strip()
+    name = name.lstrip(".") or "unnamed"
+    return name[:200]
+
+
+def _content_disposition(filename: str) -> str:
+    # RFC 5987. ASCII fallback plus a UTF-8 form so non-Latin names survive.
+    from urllib.parse import quote
+    ascii_name = re.sub(r'[^\x20-\x7e]', "_", filename).replace('"', "'")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
+DOWNLOAD_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+    "Cache-Control": "private, no-store",
+}
+
+
+def _store_usage(cur) -> int:
+    cur.execute("SELECT COALESCE(SUM(size_bytes),0) AS total FROM stored_files")
+    row = cur.fetchone()
+    return int(row["total"] if isinstance(row, dict) else row[0])
+
+
+class FileUpdate(BaseModel):
+    filename: Optional[str] = None
+    shared: Optional[bool] = None
+
+
+@app.post("/files/upload")
+@limiter.limit("30/hour")
+async def upload_file(request: Request, file: UploadFile = File(...),
+                      user=Depends(require_root_admin), conn=Depends(get_db)):
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    used = _store_usage(cur)
+    if used >= MAX_TOTAL_BYTES:
+        raise HTTPException(status_code=507,
+            detail=f"Store full ({used // (1024*1024)}MB used of "
+                   f"{MAX_TOTAL_BYTES // (1024*1024*1024)}GB).")
+
+    display = _safe_display_name(file.filename)
+    stored_name = uuid.uuid4().hex
+    dest = os.path.join(UPLOAD_DIR, stored_name)
+
+    # Stream to disk. Content-Length is attacker-controlled and this host has
+    # under 1GB of RAM, so the limit is enforced as bytes actually arrive and
+    # nothing is buffered whole.
+    sha = hashlib.sha256()
+    size = 0
+    try:
+        with open(dest, "wb") as out:
+            while True:
+                chunk = await file.read(CHUNK)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_FILE_BYTES:
+                    raise HTTPException(status_code=413,
+                        detail=f"File exceeds {MAX_FILE_BYTES // (1024*1024)}MB limit")
+                if used + size > MAX_TOTAL_BYTES:
+                    raise HTTPException(status_code=507, detail="Upload would exceed store quota")
+                sha.update(chunk)
+                out.write(chunk)
+    except HTTPException:
+        if os.path.exists(dest):
+            os.remove(dest)
+        raise
+    except Exception as e:
+        if os.path.exists(dest):
+            os.remove(dest)
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+
+    if size == 0:
+        os.remove(dest)
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    fid = str(uuid.uuid4())
+    cur.execute(
+        """INSERT INTO stored_files (id, filename, stored_name, size_bytes,
+               content_type, sha256, uploaded_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+        (fid, display, stored_name, size, file.content_type or "application/octet-stream",
+         sha.hexdigest(), user["username"]))
+    row = cur.fetchone()
+    conn.commit()
+    return dict(row)
+
+
+@app.get("/files")
+async def list_files(user=Depends(require_root_admin), conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM stored_files ORDER BY created_at DESC")
+    files = [dict(r) for r in cur.fetchall()]
+    return {
+        "files": files,
+        "used_bytes": _store_usage(cur),
+        "quota_bytes": MAX_TOTAL_BYTES,
+        "max_file_bytes": MAX_FILE_BYTES,
+    }
+
+
+@app.patch("/files/{file_id}")
+async def update_file(file_id: str, body: FileUpdate,
+                      user=Depends(require_root_admin), conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM stored_files WHERE id = %s", (file_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if body.filename is not None:
+        new_name = _safe_display_name(body.filename)
+        if not new_name:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        cur.execute("UPDATE stored_files SET filename = %s WHERE id = %s", (new_name, file_id))
+
+    if body.shared is not None:
+        # Revoking and re-sharing mints a fresh token, so an old link that leaked
+        # stays dead rather than springing back to life.
+        token = secrets.token_urlsafe(24) if body.shared else None
+        cur.execute("UPDATE stored_files SET share_token = %s WHERE id = %s", (token, file_id))
+
+    cur.execute("SELECT * FROM stored_files WHERE id = %s", (file_id,))
+    out = dict(cur.fetchone())
+    conn.commit()
+    return out
+
+
+@app.delete("/files/{file_id}")
+async def delete_file(file_id: str, user=Depends(require_root_admin), conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM stored_files WHERE id = %s", (file_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    path = os.path.join(UPLOAD_DIR, row["stored_name"])
+    # Remove the row regardless — a missing blob should not leave an
+    # undeletable ghost entry in the listing.
+    if os.path.exists(path):
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+    cur.execute("DELETE FROM stored_files WHERE id = %s", (file_id,))
+    conn.commit()
+    return {"deleted": file_id}
+
+
+def _serve(row):
+    path = os.path.join(UPLOAD_DIR, row["stored_name"])
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="File data missing on disk")
+    headers = dict(DOWNLOAD_HEADERS)
+    headers["Content-Disposition"] = _content_disposition(row["filename"])
+    # Always octet-stream: never hand the browser a type it would render.
+    return FileResponse(path, media_type="application/octet-stream", headers=headers)
+
+
+@app.get("/files/{file_id}/download")
+async def download_file(file_id: str, user=Depends(require_root_admin), conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM stored_files WHERE id = %s", (file_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="File not found")
+    return _serve(row)
+
+
+@app.get("/f/{token}")
+@limiter.limit("120/minute")
+async def public_download(request: Request, token: str, conn=Depends(get_db)):
+    """Unauthenticated download of an explicitly shared file."""
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    # Length check first so this cannot be used to probe with trivial tokens.
+    if not token or len(token) < 20:
+        raise HTTPException(status_code=404, detail="Not found")
+    cur.execute("SELECT * FROM stored_files WHERE share_token = %s", (token,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Not found")
+    cur.execute("UPDATE stored_files SET download_count = download_count + 1 WHERE id = %s",
+                (row["id"],))
+    conn.commit()
+    return _serve(row)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DIFF EXPLANATION

@@ -162,6 +162,12 @@ const CVE_NAV=[
 const SHARED_NAV=[
   {id:"osint",    label:"OSINT & Tools", icon:"radar"},
 ];
+// Owner-only. This gating is cosmetic — every /files endpoint independently
+// enforces the same restriction server-side, so hiding the nav is convenience,
+// not the security boundary.
+const OWNER_NAV=[
+  {id:"files",    label:"Files",         icon:"folder"},
+];
 const ADMIN_NAV=[
   {id:"settings",    label:"Settings",    icon:"settings"},
   {id:"workspace",   label:"Workspace",   icon:"edit"},
@@ -4480,6 +4486,245 @@ function RedirectTracer({token,C}){
   );
 }
 
+// ── FILE STORE ────────────────────────────────────────────────────────────────
+function fmtBytes(n){
+  if(n===0||n==null) return "0 B";
+  const u=["B","KB","MB","GB"]; let i=0; let v=Number(n);
+  while(v>=1024&&i<u.length-1){v/=1024;i++;}
+  return `${v>=10||i===0?Math.round(v):v.toFixed(1)} ${u[i]}`;
+}
+
+function FilesPage({token,C}){
+  const [files,setFiles]=useState([]);
+  const [usage,setUsage]=useState({used:0,quota:0,maxFile:0});
+  const [loading,setLoading]=useState(true);
+  const [busy,setBusy]=useState("");
+  const [err,setErr]=useState("");
+  const [drag,setDrag]=useState(false);
+  const [copied,setCopied]=useState(null);
+  const [renaming,setRenaming]=useState(null);
+  const [renameVal,setRenameVal]=useState("");
+  const fileInput=useRef(null);
+
+  const load=useCallback(async()=>{
+    setLoading(true); setErr("");
+    try{
+      const r=await api("/files",{},token);
+      if(r.ok){
+        const d=await r.json();
+        setFiles(d.files||[]);
+        setUsage({used:d.used_bytes||0,quota:d.quota_bytes||0,maxFile:d.max_file_bytes||0});
+      } else setErr(`Could not load files (${r.status})`);
+    }catch(e){ setErr(String(e.message||e)); }
+    setLoading(false);
+  },[token]);
+
+  useEffect(()=>{load();},[load]);
+
+  async function upload(fileList){
+    const list=[...(fileList||[])];
+    if(!list.length) return;
+    setErr("");
+    for(const f of list){
+      if(usage.maxFile&&f.size>usage.maxFile){
+        setErr(`"${f.name}" is ${fmtBytes(f.size)} — over the ${fmtBytes(usage.maxFile)} limit.`);
+        continue;
+      }
+      setBusy(`Uploading ${f.name}…`);
+      try{
+        const fd=new FormData(); fd.append("file",f);
+        // No Content-Type header: the browser must set the multipart boundary.
+        const r=await fetch(`${API_BASE}/files/upload`,{
+          method:"POST",headers:{Authorization:`Bearer ${token}`},body:fd});
+        if(!r.ok){
+          const d=await r.json().catch(()=>({}));
+          setErr(d.detail||`Upload of "${f.name}" failed (${r.status})`);
+        }
+      }catch(e){ setErr(String(e.message||e)); }
+    }
+    setBusy(""); load();
+  }
+
+  async function patch(id,body){
+    setBusy("Saving…");
+    try{
+      const r=await api(`/files/${id}`,{method:"PATCH",body:JSON.stringify(body)},token);
+      if(!r.ok){ const d=await r.json().catch(()=>({})); setErr(d.detail||`Update failed (${r.status})`); }
+    }catch(e){ setErr(String(e.message||e)); }
+    setBusy(""); load();
+  }
+
+  async function remove(f){
+    if(!window.confirm(`Delete "${f.filename}"? This removes the file from disk and cannot be undone.`)) return;
+    setBusy("Deleting…");
+    try{
+      const r=await api(`/files/${f.id}`,{method:"DELETE"},token);
+      if(!r.ok){ const d=await r.json().catch(()=>({})); setErr(d.detail||`Delete failed (${r.status})`); }
+    }catch(e){ setErr(String(e.message||e)); }
+    setBusy(""); load();
+  }
+
+  // The authenticated download needs an Authorization header, which a plain
+  // <a href> cannot send — fetch it and hand the browser a blob instead.
+  async function download(f){
+    setBusy(`Downloading ${f.filename}…`);
+    try{
+      const r=await fetch(`${API_BASE}/files/${f.id}/download`,
+        {headers:{Authorization:`Bearer ${token}`}});
+      if(!r.ok){ setErr(`Download failed (${r.status})`); setBusy(""); return; }
+      const blob=await r.blob();
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=url; a.download=f.filename; document.body.appendChild(a); a.click();
+      a.remove(); URL.revokeObjectURL(url);
+    }catch(e){ setErr(String(e.message||e)); }
+    setBusy("");
+  }
+
+  function shareUrl(f){ return `${API_BASE}/f/${f.share_token}`; }
+
+  function copy(text,key){
+    navigator.clipboard.writeText(text);
+    setCopied(key); setTimeout(()=>setCopied(null),1800);
+  }
+
+  const pct=usage.quota?Math.min(100,(usage.used/usage.quota)*100):0;
+
+  return(
+    <div>
+      <div style={{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.6,maxWidth:820}}>
+        Private file store for the owner account. Files are served as downloads only —
+        never rendered in the browser — so an uploaded page or script cannot run against
+        this domain. Share links are unguessable and can be revoked; revoking and
+        re-sharing issues a new link, so an old one stays dead.
+      </div>
+
+      {/* Drop zone */}
+      <div
+        onDragOver={e=>{e.preventDefault();setDrag(true);}}
+        onDragLeave={()=>setDrag(false)}
+        onDrop={e=>{e.preventDefault();setDrag(false);upload(e.dataTransfer.files);}}
+        onClick={()=>fileInput.current?.click()}
+        style={{border:`2px dashed ${drag?C.accent:C.border}`,borderRadius:12,
+          background:drag?C.accentDim:C.surface,padding:"26px 20px",textAlign:"center",
+          cursor:"pointer",marginBottom:14,transition:"all .15s"}}>
+        <input ref={fileInput} type="file" multiple style={{display:"none"}}
+          onChange={e=>{upload(e.target.files);e.target.value="";}}/>
+        <div style={{fontSize:13,color:C.white||C.textHi,fontWeight:600,marginBottom:4}}>
+          {busy||"Drop files here, or click to choose"}
+        </div>
+        <div style={{fontSize:11,color:C.muted}}>
+          Up to {fmtBytes(usage.maxFile)} per file · {fmtBytes(usage.used)} of {fmtBytes(usage.quota)} used
+        </div>
+        <div style={{height:4,background:C.surfaceHi,borderRadius:4,marginTop:12,
+          maxWidth:420,marginLeft:"auto",marginRight:"auto",overflow:"hidden"}}>
+          <div style={{width:`${pct}%`,height:"100%",borderRadius:4,
+            background:pct>85?C.red:pct>60?C.amber:C.accent,transition:"width .3s"}}/>
+        </div>
+      </div>
+
+      {err&&(
+        <div style={{background:C.red+"12",border:`1px solid ${C.red}40`,borderRadius:8,
+          padding:"10px 14px",fontSize:12,color:C.red,marginBottom:14,
+          display:"flex",justifyContent:"space-between",gap:10}}>
+          <span>{err}</span>
+          <button onClick={()=>setErr("")} style={{background:"none",border:"none",
+            color:C.red,cursor:"pointer",fontFamily:"inherit",fontSize:12}}>dismiss</button>
+        </div>
+      )}
+
+      {loading?(
+        <div style={{textAlign:"center",padding:30,color:C.muted,fontSize:13}}>Loading…</div>
+      ):files.length===0?(
+        <div style={{textAlign:"center",padding:36,color:C.muted,fontSize:13}}>
+          No files yet.
+        </div>
+      ):(
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+          <div style={{padding:"10px 16px",borderBottom:`1px solid ${C.border}`,
+            fontSize:11,fontWeight:700,color:C.muted,display:"flex",justifyContent:"space-between"}}>
+            <span>{files.length} file{files.length!==1?"s":""}</span>
+            <span>{files.filter(f=>f.share_token).length} shared publicly</span>
+          </div>
+          {files.map((f,idx)=>(
+            <div key={f.id} style={{padding:"12px 16px",
+              borderBottom:idx<files.length-1?`1px solid ${C.border}40`:"none",
+              background:idx%2===0?"transparent":C.surfaceHi+"40"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                {renaming===f.id?(
+                  <>
+                    <input value={renameVal} autoFocus
+                      onChange={e=>setRenameVal(e.target.value)}
+                      onKeyDown={e=>{
+                        if(e.key==="Enter"){patch(f.id,{filename:renameVal});setRenaming(null);}
+                        if(e.key==="Escape") setRenaming(null);
+                      }}
+                      style={{flex:"1 1 240px",background:C.inputBg,border:`1px solid ${C.accent}`,
+                        color:C.inputText,padding:"5px 9px",borderRadius:6,fontSize:12.5,
+                        outline:"none",fontFamily:"inherit"}}/>
+                    <Btn sm variant="dim" C={C}
+                      onClick={()=>{patch(f.id,{filename:renameVal});setRenaming(null);}}>Save</Btn>
+                    <Btn sm variant="ghost" C={C} onClick={()=>setRenaming(null)}>Cancel</Btn>
+                  </>
+                ):(
+                  <>
+                    <span style={{flex:"1 1 240px",fontSize:13,color:C.white||C.textHi,
+                      fontWeight:600,wordBreak:"break-all"}}>{f.filename}</span>
+                    <span style={{fontSize:11,color:C.muted,flexShrink:0}}>{fmtBytes(f.size_bytes)}</span>
+                    {f.share_token&&(
+                      <span style={{fontSize:9.5,padding:"2px 8px",borderRadius:20,fontWeight:700,
+                        background:C.amber+"15",border:`1px solid ${C.amber}40`,color:C.amber}}>
+                        PUBLIC · {f.download_count||0} ↓
+                      </span>
+                    )}
+                    <div style={{display:"flex",gap:5,flexShrink:0}}>
+                      <Btn sm variant="ghost" C={C} onClick={()=>download(f)}>Download</Btn>
+                      <Btn sm variant="ghost" C={C}
+                        onClick={()=>{setRenaming(f.id);setRenameVal(f.filename);}}>Rename</Btn>
+                      <Btn sm variant={f.share_token?"success":"ghost"} C={C}
+                        onClick={()=>patch(f.id,{shared:!f.share_token})}>
+                        {f.share_token?"Unshare":"Share"}
+                      </Btn>
+                      <Btn sm variant="danger" C={C} onClick={()=>remove(f)}>Delete</Btn>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {f.share_token&&(
+                <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8}}>
+                  <code style={{flex:1,fontSize:10.5,color:C.accentText,fontFamily:"monospace",
+                    background:C.surfaceHi,padding:"5px 9px",borderRadius:6,
+                    wordBreak:"break-all"}}>{shareUrl(f)}</code>
+                  <button onClick={()=>copy(shareUrl(f),f.id)}
+                    style={{fontSize:10.5,padding:"4px 10px",borderRadius:6,cursor:"pointer",
+                      flexShrink:0,background:copied===f.id?C.green+"20":C.accentDim,
+                      border:`1px solid ${copied===f.id?C.green:C.accent}40`,
+                      color:copied===f.id?C.green:C.accentText,fontFamily:"inherit",fontWeight:600}}>
+                    {copied===f.id?"Copied!":"Copy link"}
+                  </button>
+                </div>
+              )}
+
+              <div style={{display:"flex",gap:14,flexWrap:"wrap",marginTop:6,
+                fontSize:10,color:C.muted}}>
+                <span>{new Date(f.created_at).toLocaleString()}</span>
+                {f.content_type&&<span>{f.content_type}</span>}
+                {f.sha256&&(
+                  <span style={{cursor:"pointer"}} onClick={()=>copy(f.sha256,f.id+"-h")}
+                    title="Click to copy full SHA-256">
+                    sha256 {f.sha256.slice(0,16)}…{copied===f.id+"-h"&&" ✓"}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── DIFF ENGINE ───────────────────────────────────────────────────────────────
 // Myers O(ND) diff, the same shape of algorithm git uses. Common prefix and
 // suffix are trimmed first: for the usual case (two near-identical files) that
@@ -7862,6 +8107,7 @@ export default function App(){
   const NAV=[
     ...(mode==="ioc"?IOC_NAV:CVE_NAV),
     ...SHARED_NAV,
+    ...(me?.username==="admin"?OWNER_NAV:[]),
     ...(me?.role==="admin"?ADMIN_NAV:USER_NAV),
   ];
   const currentNavLocked = NAV.find(n=>n.id===view)?.locked;
@@ -8091,6 +8337,7 @@ export default function App(){
           {view==="intel"&&<IntelNews token={token} C={C}/>}
           {view==="actors"&&<ThreatActors token={token} C={C}/>}
           {view==="osint"&&<OSINTPage token={token} C={C}/>}
+          {view==="files"&&<FilesPage token={token} C={C}/>}
           {view==="querygen"&&<QueryGenerator token={token} C={C}/>}
           {view==="public"&&<PublicSearch C={C}/>}
           {view==="bulklookup"&&<BulkLookup token={token} C={C}/>}
