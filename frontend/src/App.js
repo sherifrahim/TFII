@@ -315,6 +315,31 @@ function Btn({onClick,disabled,children,variant="primary",C,full,sm}){
 function Card({C,children,style={}}){
   return <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:20,boxShadow:C.shadow,...style}}>{children}</div>;
 }
+// Some operations legitimately take 5-20s (KEV+EPSS cross-referencing, pulling
+// six feeds). Static text over that long is indistinguishable from a hang, so
+// count the seconds — a number that moves is the cheapest possible proof that
+// the request is still alive.
+function SlowLoader({C,message,hint,pad=32}){
+  const [secs,setSecs]=useState(0);
+  useEffect(()=>{
+    const t=setInterval(()=>setSecs(s=>s+1),1000);
+    return ()=>clearInterval(t);
+  },[]);
+  return(
+    <div style={{textAlign:"center",padding:pad,color:C.muted}}>
+      <div style={{display:"inline-flex",alignItems:"center",gap:9,fontSize:13}}>
+        <span style={{width:11,height:11,borderRadius:"50%",flexShrink:0,
+          border:`2px solid ${C.accent}`,borderTopColor:"transparent",
+          display:"inline-block",animation:"tfspin .8s linear infinite"}}/>
+        <span>{message}</span>
+        <span style={{fontVariantNumeric:"tabular-nums",opacity:.7,fontSize:12}}>{secs}s</span>
+      </div>
+      {hint&&secs>=8&&(
+        <div style={{fontSize:11,color:C.muted,opacity:.8,marginTop:8}}>{hint}</div>
+      )}
+    </div>
+  );
+}
 function StatCard({label,value,color,C,sublabel}){
   return(
     <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
@@ -3146,7 +3171,9 @@ function CVEWall({token,C}){
       </div>
 
       {err&&<div style={{padding:14,background:C.red+"10",border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
-      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>Fetching vulnerability advisories from distro, vendor and research feeds...</div>}
+      {loading&&<SlowLoader C={C} pad={48}
+        message="Fetching advisories from distro, vendor and research feeds"
+        hint="Six feeds are queried in parallel; a slow upstream can take a few more seconds."/>}
 
       {/* Feed health. Failed feeds used to be swallowed silently, which is how
           five sources stayed dead without anyone noticing. */}
@@ -6889,7 +6916,9 @@ function AdvisoryBuilder({token,C}){
             </div>
           )}
           <div style={{flex:1,overflowY:"auto",maxHeight:300}}>
-            {cveLoading&&<div style={{textAlign:"center",padding:16,color:C.muted,fontSize:12}}>Checking CISA KEV + EPSS for critical actively exploited CVEs...</div>}
+            {cveLoading&&<SlowLoader C={C} pad={16}
+              message="Cross-referencing CISA KEV and EPSS"
+              hint="This checks every recent KEV entry against exploit-probability scores — it usually takes 10-20 seconds."/>}
             {!cveLoading&&suggestedCves.length===0&&<div style={{textAlign:"center",padding:16,color:C.muted,fontSize:12}}>No recent KEV matches. Use the search box above.</div>}
             {!cveLoading&&suggestedCves.map(cve=>{
               const already=selectedCves.some(s=>s.id===cve.id);
@@ -8008,7 +8037,9 @@ export default function App(){
   if(!session){
     return(
       <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:C.bg,padding:16,fontFamily:C.font||"inherit"}}>
-        <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');*{box-sizing:border-box;}input::placeholder{color:${C.muted};}select option{background:${C.surface};color:${C.text};}`}</style>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');*{box-sizing:border-box;}input::placeholder{color:${C.muted};}select option{background:${C.surface};color:${C.text};}
+        @keyframes tfspin{to{transform:rotate(360deg)}}
+        @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}`}</style>
         <div style={{width:"100%",maxWidth:440}}>
           <div style={{textAlign:"center",marginBottom:32}}><div style={{fontSize:24,fontWeight:700,letterSpacing:2,color:C.accentText,marginBottom:4}}>TFII</div><div style={{fontSize:12,color:C.muted,letterSpacing:1}}>THREATFEED INTELLIGENCE</div></div>
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:36,boxShadow:C.shadow}}>
@@ -8426,6 +8457,18 @@ export default function App(){
                 <Btn onClick={async()=>{const r=await api("/campaigns",{method:"POST",body:JSON.stringify(newCampaign)},token);if(r.ok){setCampaignMsg("Campaign created.");setNewCampaign({name:"",description:"",threat_actor:""});fetchCampaigns();}}} disabled={!newCampaign.name} C={C}>Create Campaign</Btn>
               </Card>
               <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",marginBottom:12}}>Active Campaigns ({campaigns.length})</div>
+              {campaigns.length===0&&(
+                <Card C={C} style={{textAlign:"center",padding:"32px 24px"}}>
+                  <div style={{fontSize:13,color:C.white||C.textHi,fontWeight:600,marginBottom:6}}>
+                    No campaigns yet
+                  </div>
+                  <div style={{fontSize:12,color:C.muted,lineHeight:1.6,maxWidth:420,margin:"0 auto"}}>
+                    A campaign groups related indicators under one intrusion set, so you can
+                    track an actor across separate IOCs. Create one above, then assign IOCs to
+                    it from the feed.
+                  </div>
+                </Card>
+              )}
               {campaigns.map(c=>(
                 <Card key={c.id} C={C} style={{marginBottom:12}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
