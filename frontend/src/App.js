@@ -18,16 +18,38 @@ const TLP_COLORS = {
   WHITE:{color:"#9ca3af",bg:"#9ca3af15"},GREEN:{color:"#16a34a",bg:"#16a34a15"},
   AMBER:{color:"#d97706",bg:"#d9770615"},RED:{color:"#dc2626",bg:"#dc262615"},
 };
+// Any code missing here renders as a globe icon and its bare two-letter code on
+// the Geo Map, which is how SA and TW showed up once /stats/geo started
+// returning data. Extended to cover the hosting and telecom regions that
+// actually appear in this feed.
 const COUNTRY_NAMES = {
   US:"United States",CN:"China",RU:"Russia",DE:"Germany",GB:"United Kingdom",
   FR:"France",NL:"Netherlands",UA:"Ukraine",BR:"Brazil",IN:"India",
   KR:"South Korea",JP:"Japan",CA:"Canada",AU:"Australia",IT:"Italy",
   RO:"Romania",TR:"Turkey",IR:"Iran",KP:"North Korea",SG:"Singapore",
+  SA:"Saudi Arabia",TW:"Taiwan",VN:"Vietnam",HK:"Hong Kong",AE:"UAE",
+  ES:"Spain",PL:"Poland",SE:"Sweden",CH:"Switzerland",ID:"Indonesia",
+  TH:"Thailand",PK:"Pakistan",BD:"Bangladesh",NG:"Nigeria",ZA:"South Africa",
+  MX:"Mexico",AR:"Argentina",IL:"Israel",EG:"Egypt",MY:"Malaysia",
+  PH:"Philippines",BG:"Bulgaria",CZ:"Czechia",FI:"Finland",NO:"Norway",
+  DK:"Denmark",AT:"Austria",BE:"Belgium",IE:"Ireland",PT:"Portugal",
+  HU:"Hungary",GR:"Greece",LT:"Lithuania",LV:"Latvia",EE:"Estonia",
+  MD:"Moldova",RS:"Serbia",KZ:"Kazakhstan",BY:"Belarus",CL:"Chile",
+  CO:"Colombia",PE:"Peru",NZ:"New Zealand",SC:"Seychelles",PA:"Panama",
 };
 const COUNTRY_FLAGS = {
   US:"🇺🇸",CN:"🇨🇳",RU:"🇷🇺",DE:"🇩🇪",GB:"🇬🇧",FR:"🇫🇷",NL:"🇳🇱",UA:"🇺🇦",
   BR:"🇧🇷",IN:"🇮🇳",KR:"🇰🇷",JP:"🇯🇵",CA:"🇨🇦",AU:"🇦🇺",IT:"🇮🇹",
   RO:"🇷🇴",TR:"🇹🇷",IR:"🇮🇷",KP:"🇰🇵",SG:"🇸🇬",
+  SA:"🇸🇦",TW:"🇹🇼",VN:"🇻🇳",HK:"🇭🇰",AE:"🇦🇪",
+  ES:"🇪🇸",PL:"🇵🇱",SE:"🇸🇪",CH:"🇨🇭",ID:"🇮🇩",
+  TH:"🇹🇭",PK:"🇵🇰",BD:"🇧🇩",NG:"🇳🇬",ZA:"🇿🇦",
+  MX:"🇲🇽",AR:"🇦🇷",IL:"🇮🇱",EG:"🇪🇬",MY:"🇲🇾",
+  PH:"🇵🇭",BG:"🇧🇬",CZ:"🇨🇿",FI:"🇫🇮",NO:"🇳🇴",
+  DK:"🇩🇰",AT:"🇦🇹",BE:"🇧🇪",IE:"🇮🇪",PT:"🇵🇹",
+  HU:"🇭🇺",GR:"🇬🇷",LT:"🇱🇹",LV:"🇱🇻",EE:"🇪🇪",
+  MD:"🇲🇩",RS:"🇷🇸",KZ:"🇰🇿",BY:"🇧🇾",CL:"🇨🇱",
+  CO:"🇨🇴",PE:"🇵🇪",NZ:"🇳🇿",SC:"🇸🇨",PA:"🇵🇦",
 };
 
 const THEMES = {
@@ -2743,7 +2765,15 @@ function GeoMap({token,C}){
   const max=geo.countries[0]?.count||1;
   return(
     <div>
-      <div style={{marginBottom:20,padding:14,background:C.accentDim,border:`1px solid ${C.accent}28`,borderRadius:10,fontSize:13,color:C.accentText}}>Geographic origin of IP IOCs based on AbuseIPDB and VirusTotal enrichment data.</div>
+      <div style={{marginBottom:20,padding:14,background:C.accentDim,border:`1px solid ${C.accent}28`,borderRadius:10,fontSize:13,color:C.accentText}}>
+        Geographic origin of IP IOCs, from AbuseIPDB and VirusTotal enrichment.
+        {typeof geo.total_ips==="number"&&(
+          <span style={{display:"block",marginTop:4,color:C.muted,fontSize:12}}>
+            {geo.located} of {geo.total_ips} IP IOCs carry country data
+            {geo.unlocated>0&&` — the remaining ${geo.unlocated} came from feeds that supply no geo (mostly ThreatFox), so this is a partial view`}.
+          </span>
+        )}
+      </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(270px,1fr))",gap:12}}>
         {geo.countries.map(c=>{
           const flag=COUNTRY_FLAGS[c.code]||"🌐";const name=COUNTRY_NAMES[c.code]||c.code;const pct=Math.round((c.count/max)*100);
