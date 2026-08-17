@@ -827,7 +827,11 @@ class CampaignIn(BaseModel):
     name: str; description: Optional[str] = ""
     threat_actor: Optional[str] = ""; industry_targets: Optional[List[str]] = []
 
-class NoteIn(BaseModel):
+# Named IocNoteIn, not NoteIn: a second, unrelated NoteIn (the workspace note
+# model) is declared later in this file and silently shadowed this one, so
+# add_note received the workspace model and raised AttributeError on body.note.
+# Adding a note to an IOC returned 500 for as long as both names collided.
+class IocNoteIn(BaseModel):
     note: str
 
 class FPUpdate(BaseModel):
@@ -2932,14 +2936,16 @@ def get_notes(ioc_id: str, user=Depends(require_full_access), conn=Depends(get_d
     return cur.fetchall()
 
 @app.post("/iocs/{ioc_id}/notes", status_code=201)
-def add_note(ioc_id: str, body: NoteIn, user=Depends(require_full_access), conn=Depends(get_db)):
+def add_note(ioc_id: str, body: IocNoteIn, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor()
     cur.execute("INSERT INTO ioc_notes (ioc_id,note,username,user_id) VALUES (%s,%s,%s,%s)",
         (ioc_id,body.note,user["username"],user["id"]))
     conn.commit(); return {"status":"created"}
 
 @app.delete("/iocs/{ioc_id}/notes/{note_id}")
-def delete_note(ioc_id: str, note_id: int, user=Depends(require_full_access), conn=Depends(get_db)):
+# Named distinctly from the workspace delete_note above — same name for two
+# unrelated routes is what let the NoteIn model collision hide in this file.
+def delete_ioc_note(ioc_id: str, note_id: int, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT user_id FROM ioc_notes WHERE id = %s AND ioc_id = %s", (note_id,ioc_id))
     note = cur.fetchone()
@@ -3750,28 +3756,6 @@ async def health_detailed(admin=Depends(require_admin), conn=Depends(get_db)):
     report["overall"] = "ok" if overall_ok else "degraded"
     return report
 
-
-def geo_stats(user=Depends(get_current_user), conn=Depends(get_db)):
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT enrichment FROM iocs WHERE type IN ('IPv4','IPv6') AND enrichment IS NOT NULL")
-    rows = cur.fetchall(); country_counts = {}
-    for row in rows:
-        e = row.get("enrichment") or {}
-        # AbuseIPDB uses 'country' (2-letter code), VT uses 'country'
-        # Try all possible field locations
-        country = (
-            e.get("abuseipdb",{}).get("country") or
-            e.get("abuseipdb",{}).get("countryCode") or
-            e.get("virustotal",{}).get("country") or
-            e.get("country")
-        )
-        if country and country not in ("?", "Unknown", ""):
-            # Normalise to uppercase 2-letter code
-            country = str(country).strip().upper()[:2]
-            if len(country) == 2:
-                country_counts[country] = country_counts.get(country,0) + 1
-    sorted_countries = sorted(country_counts.items(), key=lambda x: x[1], reverse=True)
-    return {"countries":[{"code":k,"count":v} for k,v in sorted_countries[:30]]}
 
 @app.get("/audit")
 def get_audit(limit: int=100, admin=Depends(require_admin), conn=Depends(get_db)):

@@ -4012,7 +4012,7 @@ function SafeLinkExtractor({C}){
   const [unwrap,setUnwrap]=useState(true);
   const [copied,setCopied]=useState(null);
 
-  const URL_REGEX=/(?:https?|ftp|ftps|sftp|ldap|smb):\/\/[^\s<>"')\]},;]+|(?:hxxps?|hxxp):\/\/[^\s<>"')\]},;]+|\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|gov|edu|mil|co|uk|de|fr|ru|cn|tk|top|xyz|info|biz|me|tv|cc|zip|mov|app|dev|ai|sh|gg)\b(?:\/[^\s<>"')\]},;]*)?/g;
+  const URL_REGEX=/(?:https?|ftp|ftps|sftp|ldap|smb):\/\/[^\s<>"')\]},;]+|(?:hxxps?|hxxp):\/\/[^\s<>"')\]},;]+|\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|gov|edu|mil|co|uk|de|fr|ru|cn|tk|top|xyz|info|biz|me|tv|cc|zip|mov|app|dev|ai|sh|gg)\b(?:\/[^\s<>"')\]},;]*)?/g;
 
   function extract(){
     if(!input.trim()){setLinks([]);return;}
@@ -5321,7 +5321,6 @@ function QueryGenerator({token,C}){
     "Collection","Exfiltration","Command & Control","Impact"];
 
   const SEV_COLORS={Critical:C.red,High:C.amber,Medium:C.purple,Low:C.green};
-  const CONF_COLORS={85:C.green,70:C.amber,50:C.muted};
 
   async function generate(){
     if(!useCase.trim()) return;
@@ -6096,171 +6095,6 @@ function ApiKeyModal({token, C, onClose}){
 }
 
 // ── API KEYS SECTION IN SETTINGS ──────────────────────────────────────────────
-const STATIC_SERVICES=[
-  {service:"virustotal", name:"VirusTotal",    url:"https://www.virustotal.com/gui/my-apikey",          placeholder:"Enter your VT API key",    desc:"IOC enrichment — malware & IP reputation"},
-  {service:"abuseipdb",  name:"AbuseIPDB",     url:"https://www.abuseipdb.com/account/api",             placeholder:"Enter your AbuseIPDB key",  desc:"IP abuse confidence scoring"},
-  {service:"urlhaus",    name:"URLhaus",       url:"https://auth.abuse.ch/",                             placeholder:"Enter your abuse.ch Auth-Key", desc:"Malware URL/host database — free, required since Jun 2025"},
-  {service:"groq",       name:"Groq",          url:"https://console.groq.com/keys",                     placeholder:"gsk_xxxxxxxxxxxx",           desc:"SPL/KQL query generation (free)"},
-  {service:"shodan",     name:"Shodan",        url:"https://account.shodan.io/",                        placeholder:"Enter your Shodan key",     desc:"Port scan & OSINT host lookup"},
-  {service:"hibp",       name:"HaveIBeenPwned",url:"https://haveibeenpwned.com/API/Key",                placeholder:"Enter your HIBP key",       desc:"Email breach lookup in OSINT"},
-  {service:"nvd",        name:"NVD",           url:"https://nvd.nist.gov/developers/request-an-api-key",placeholder:"Enter your NVD key",        desc:"CVE monitoring (higher rate limit)"},
-];
-
-function ApiKeysSection({token,C}){
-  const [keyData,setKeyData]=useState(null); // null = loading, [] = failed/empty
-  const [editing,setEditing]=useState({});
-  const [saving,setSaving]=useState({});
-  const [msg,setMsg]=useState({});
-  const [err,setErr]=useState({});
-
-  const load=()=>{
-    api("/users/me/api-keys",{},token)
-      .then(r=>r.ok?r.json():null)
-      .then(d=>setKeyData(Array.isArray(d)?d:null))
-      .catch(()=>setKeyData(null));
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(()=>{load();},[token]);
-
-  async function saveKey(svc){
-    const k=(editing[svc]||"").trim();
-    if(!k)return;
-    setSaving(p=>({...p,[svc]:true}));
-    setErr(p=>({...p,[svc]:""}));
-    try{
-      const r=await api(`/users/me/api-keys/${svc}`,{method:"POST",body:JSON.stringify({api_key:k})},token);
-      if(r.ok){
-        setMsg(p=>({...p,[svc]:"✓ Saved"}));
-        setEditing(p=>({...p,[svc]:""}));
-        load();
-      }else{
-        const e=await r.json();
-        setErr(p=>({...p,[svc]:e.detail||"Failed to save"}));
-      }
-    }catch{
-      setErr(p=>({...p,[svc]:"Cannot reach server — deploy the backend first"}));
-    }
-    setSaving(p=>({...p,[svc]:false}));
-    setTimeout(()=>setMsg(p=>({...p,[svc]:""})),3000);
-  }
-
-  async function removeKey(svc){
-    try{
-      await api(`/users/me/api-keys/${svc}`,{method:"DELETE"},token);
-      setMsg(p=>({...p,[svc]:"✓ Removed"}));
-      load();
-      setTimeout(()=>setMsg(p=>({...p,[svc]:""})),3000);
-    }catch{
-      setErr(p=>({...p,[svc]:"Cannot reach server"}));
-    }
-  }
-
-  // Merge static list with live data from backend
-  const services = STATIC_SERVICES.map(s=>{
-    const live = keyData?.find(k=>k.service===s.service);
-    return {...s, ...live};
-  });
-
-  const backendDown = keyData === null;
-
-  return(
-    <div style={{marginBottom:28}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-        <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase"}}>
-          My API Keys
-        </div>
-        {backendDown&&(
-          <span style={{fontSize:11,color:C.amber,fontWeight:600}}>
-            ⚠ Backend offline — keys shown below won't save until server is running
-          </span>
-        )}
-      </div>
-      <div style={{fontSize:12,color:C.muted,marginBottom:14,lineHeight:1.6}}>
-        Add your personal API keys to remove the {DAILY_FREE_QUOTA} free checks/day limit.
-        Keys are encrypted at rest and only used for your account's queries.
-      </div>
-
-      {services.map(k=>(
-        <div key={k.service} style={{background:C.surface,
-          border:`1px solid ${k.has_key?C.green+"50":C.border}`,
-          borderRadius:10,padding:"14px 16px",marginBottom:10,boxShadow:C.shadow}}>
-
-          {/* Header row */}
-          <div style={{display:"flex",justifyContent:"space-between",
-            alignItems:"flex-start",marginBottom:10,flexWrap:"wrap",gap:8}}>
-            <div>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
-                <span style={{fontSize:13,fontWeight:700,color:C.white}}>{k.name}</span>
-                {k.has_key
-                  ? <span style={{fontSize:11,color:C.green,fontWeight:700}}>✓ Personal key active</span>
-                  : <span style={{fontSize:11,padding:"1px 7px",borderRadius:3,
-                      background:C.accentDim,color:C.accentText,fontWeight:600}}>
-                      {k.unlimited?"Unlimited":
-                       k.quota_remaining!=null?`${k.quota_remaining}/${k.quota_total} free today`:
-                       `${DAILY_FREE_QUOTA} free/day`}
-                    </span>
-                }
-              </div>
-              <div style={{fontSize:11,color:C.muted}}>{k.desc}</div>
-              {k.has_key&&k.masked&&(
-                <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginTop:3}}>{k.masked}</div>
-              )}
-              {k.updated_at&&(
-                <div style={{fontSize:10,color:C.muted}}>Updated: {new Date(k.updated_at).toLocaleDateString()}</div>
-              )}
-            </div>
-            <div style={{display:"flex",gap:8,alignItems:"center"}}>
-              <a href={k.url} target="_blank" rel="noreferrer"
-                style={{fontSize:11,color:C.accentText,fontWeight:600,whiteSpace:"nowrap"}}>
-                Get free key →
-              </a>
-              {k.has_key&&(
-                <button onClick={()=>removeKey(k.service)}
-                  style={{fontSize:11,padding:"3px 10px",background:"none",
-                    border:`1px solid ${C.red}40`,color:C.red,borderRadius:5,
-                    cursor:"pointer",fontFamily:"inherit"}}>
-                  Remove
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Input row */}
-          <div style={{display:"flex",gap:8}}>
-            <input
-              value={editing[k.service]||""}
-              onChange={e=>setEditing(p=>({...p,[k.service]:e.target.value}))}
-              onKeyDown={e=>{if(e.key==="Enter")saveKey(k.service);}}
-              placeholder={k.has_key?"Paste new key to replace...":k.placeholder}
-              style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-                color:C.inputText,padding:"8px 12px",borderRadius:7,fontSize:12,
-                outline:"none",fontFamily:"monospace"}}/>
-            <button onClick={()=>saveKey(k.service)}
-              disabled={saving[k.service]||!editing[k.service]?.trim()}
-              style={{padding:"8px 16px",background:C.accent,border:"none",color:"#fff",
-                borderRadius:7,cursor:"pointer",fontSize:12,fontFamily:"inherit",
-                fontWeight:600,opacity:saving[k.service]||!editing[k.service]?.trim()?0.4:1}}>
-              {saving[k.service]?"Saving...":(k.has_key?"Update":"Save")}
-            </button>
-          </div>
-
-          {/* Feedback */}
-          {msg[k.service]&&(
-            <div style={{fontSize:12,color:C.green,marginTop:6,fontWeight:600}}>
-              {msg[k.service]}
-            </div>
-          )}
-          {err[k.service]&&(
-            <div style={{fontSize:12,color:C.red,marginTop:6}}>{err[k.service]}</div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const DAILY_FREE_QUOTA = 10;
-
 // ── CLIENT ADVISORY BUILDER ───────────────────────────────────────────────────
 
 function NoteCard({note,onEdit,onTogglePin,onArchive,onDelete,onToggleCheck,onTagFilter,C}){
@@ -6916,7 +6750,6 @@ function AdvisoryBuilder({token,C}){
   }
 
   const TLP_COLORS={RED:"#dc2626",AMBER:"#d97706",GREEN:"#16a34a",WHITE:"#6b7280"};
-  const selectedIocs=iocPool.filter(i=>selectedIocIds.has(i.id));
 
   if(result){
     return(
