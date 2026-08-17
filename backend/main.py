@@ -633,6 +633,24 @@ def format_brief_message(cve_items: list, is_weekly: bool = False) -> dict:
 
     return {"title": title, "body": body.strip(), "html": html}
 
+def _ntfy_header(value: str) -> str:
+    """Make a string safe to put in an HTTP header.
+
+    HTTP headers are latin-1 only, so a title containing an em dash or an emoji
+    made httpx raise UnicodeEncodeError and every notification failed with
+    "ntfy error: 'ascii' codec can't encode character". ntfy understands RFC 2047
+    encoded-words, so non-ASCII titles are sent base64-wrapped rather than
+    stripped, and plain ASCII titles are left exactly as they were.
+    """
+    if not value:
+        return ""
+    try:
+        value.encode("ascii")
+        return value
+    except UnicodeEncodeError:
+        return "=?UTF-8?B?" + base64.b64encode(value.encode("utf-8")).decode("ascii") + "?="
+
+
 async def send_notification(title: str, body: str, html: str, settings: dict):
     """Send notification via configured channel(s)."""
     errors = []
@@ -647,7 +665,7 @@ async def send_notification(title: str, body: str, html: str, settings: dict):
                 r = await c.post(f"{server}/{topic}",
                     content=body.encode("utf-8"),
                     headers={
-                        "Title":    title,
+                        "Title":    _ntfy_header(title),
                         "Priority": priority,
                         "Tags":     "warning,shield",
                         "Markdown": "yes",
@@ -2377,7 +2395,7 @@ def purge_old_cves(before_year: int = 2023, admin=Depends(require_admin), conn=D
     return {"removed": count, "message": f"Removed {count} CVEs published before {before_year}"}
 
 @app.post("/admin/cleanup-advisory-iocs")
-def cleanup_advisory_iocs(admin=Depends(require_admin), conn=Depends(get_db)):
+def cleanup_advisory_iocs(dry_run: bool = False, admin=Depends(require_admin), conn=Depends(get_db)):
     """
     Purge IOCs that were auto-extracted from CVE advisory references.
     
@@ -2409,19 +2427,24 @@ def cleanup_advisory_iocs(admin=Depends(require_admin), conn=Depends(get_db)):
         )
     """)
     rows = cur.fetchall()
+    n_tagged = len(rows)
     for (ioc_id,) in rows:
-        cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
-        cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
+        if not dry_run:
+            cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
+            cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
         removed += 1
 
     # 2. Any URL/Domain that matches known advisory/vendor/news domains,
     #    regardless of how it was tagged (catches ones that slipped through
     #    without the auto-extracted tag via other paths).
+    n_trusted = 0
     cur.execute("SELECT id, value FROM iocs WHERE type IN ('URL', 'Domain')")
     for ioc_id, value in cur.fetchall():
         if any(td in (value or "").lower() for td in TRUSTED_DOMAINS):
-            cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
-            cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
+            if not dry_run:
+                cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
+                cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
+            n_trusted += 1
             removed += 1
 
     # 3. Anything with no created_by (system-generated, never manually added).
@@ -2431,15 +2454,28 @@ def cleanup_advisory_iocs(admin=Depends(require_admin), conn=Depends(get_db)):
         WHERE type IN ('URL', 'Domain')
         AND (created_by IS NULL OR created_by = '')
     """)
-    for (ioc_id,) in cur.fetchall():
-        cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
-        cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
+    orphans = cur.fetchall()
+    n_orphan = len(orphans)
+    for (ioc_id,) in orphans:
+        if not dry_run:
+            cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
+            cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
         removed += 1
 
-    conn.commit()
-    return {"status": "done", "removed": removed,
+    if dry_run:
+        conn.rollback()
+    else:
+        conn.commit()
+    verb = "Would remove" if dry_run else "Removed"
+    return {"status": "preview" if dry_run else "done",
+            "dry_run": dry_run,
+            "removed": 0 if dry_run else removed,
+            "would_remove": removed,
+            "breakdown": {"auto_tagged": n_tagged,
+                          "trusted_domain": n_trusted,
+                          "no_created_by": n_orphan},
             "message": (
-                f"Removed {removed} false-positive IOCs from the feed. "
+                f"{verb} {removed} false-positive IOCs from the feed. "
                 f"These were reference links and advisory URLs from CVE records — "
                 f"never actual threat indicators."
             )}
@@ -5169,11 +5205,26 @@ async def poll_taxii(body: TAXIIPoll, user=Depends(require_full_access), conn=De
     if body.token:   headers["Authorization"] = f"Bearer {body.token}"
     if body.api_key: headers["x-api-key"] = body.api_key
     url = f"{body.server_url.rstrip('/')}/collections/{body.collection_id}/objects/?match[type]=indicator"
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(url, headers=headers)
+    # An unreachable host raised straight out of here as a bare 500 "Internal
+    # Server Error", which tells the analyst nothing about a server address they
+    # typed themselves.
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.get(url, headers=headers)
+    except Exception as e:
+        raise HTTPException(status_code=502,
+            detail=f"Could not reach the TAXII server at {body.server_url} — "
+                   f"{type(e).__name__}: {str(e)[:160]}")
     if r.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"TAXII server returned HTTP {r.status_code}")
-    objects = r.json().get("objects",[])
+        raise HTTPException(status_code=502,
+            detail=f"TAXII server returned HTTP {r.status_code}. "
+                   f"Check the collection ID and credentials.")
+    try:
+        payload = r.json()
+    except Exception:
+        raise HTTPException(status_code=502,
+            detail="TAXII server did not return JSON — check the server URL points at a TAXII 2.1 API root.")
+    objects = payload.get("objects",[])
     result = await import_stix(STIXImport(bundle={"objects":objects}), user=user, conn=conn)
     return {"taxii_url":url,"objects_received":len(objects),**result}
 
@@ -5182,10 +5233,25 @@ async def misp_pull(body: MISPPull, user=Depends(require_full_access), conn=Depe
     headers = {"Authorization":body.misp_key,"Accept":"application/json","Content-Type":"application/json"}
     url = f"{body.misp_url.rstrip('/')}/attributes/restSearch"
     payload = {"returnFormat":"json","limit":body.limit,"type":["ip-dst","ip-src","domain","url","md5","sha1","sha256"]}
-    async with httpx.AsyncClient(timeout=30, verify=False) as c:
-        r = await c.post(url, headers=headers, json=payload)
-    if r.status_code != 200: raise HTTPException(status_code=502, detail=f"MISP returned HTTP {r.status_code}")
-    attrs = r.json().get("response",{}).get("Attribute",[])
+    # Same failure as the TAXII importer had: an unreachable or mistyped MISP
+    # host escaped as a bare 500 with no explanation.
+    try:
+        async with httpx.AsyncClient(timeout=30, verify=False) as c:
+            r = await c.post(url, headers=headers, json=payload)
+    except Exception as e:
+        raise HTTPException(status_code=502,
+            detail=f"Could not reach the MISP instance at {body.misp_url} — "
+                   f"{type(e).__name__}: {str(e)[:160]}")
+    if r.status_code == 401 or r.status_code == 403:
+        raise HTTPException(status_code=502, detail="MISP rejected the API key (HTTP "
+                            f"{r.status_code}). Check the key and its permissions.")
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"MISP returned HTTP {r.status_code}")
+    try:
+        attrs = r.json().get("response",{}).get("Attribute",[])
+    except Exception:
+        raise HTTPException(status_code=502,
+            detail="MISP did not return JSON — check the URL points at a MISP instance.")
     MISP_TYPE_MAP = {"ip-dst":"IPv4","ip-src":"IPv4","domain":"Domain","url":"URL","md5":"MD5","sha1":"SHA1","sha256":"SHA256"}
     results = {"imported":0,"skipped":0,"errors":[]}; cur = conn.cursor()
     for attr in attrs:
