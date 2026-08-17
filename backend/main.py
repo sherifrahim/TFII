@@ -39,6 +39,12 @@ HIBP_API_KEY       = os.getenv("HIBP_API_KEY", "")
 SHODAN_API_KEY     = os.getenv("SHODAN_API_KEY", "")
 NVD_API_KEY        = os.getenv("NVD_API_KEY", "")
 GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
+# Groq retires models without notice and the call then fails with a bare 404.
+# llama-3.3-70b-versatile was decommissioned and silently broke five features
+# (query builder, query explainer, diff explanation, advisory generator, CVE
+# report). Keep this in one place so the next retirement is a config change,
+# and check https://api.groq.com/openai/v1/models when AI features start 502ing.
+GROQ_MODEL         = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 URLHAUS_AUTH_KEY   = os.getenv("URLHAUS_AUTH_KEY", "")  # required since abuse.ch mandated auth (30 Jun 2025) — free at https://auth.abuse.ch/
 ENCRYPTION_KEY     = os.getenv("ENCRYPTION_KEY", "")  # generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 DAILY_FREE_QUOTA   = 10   # free platform-key checks per user per day (no personal key)
@@ -1355,7 +1361,10 @@ async def run_urlhaus_connector(conn, auth_key: str, limit: int = 100) -> dict:
     added = 0; skipped = 0; errors = []
     try:
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post("https://urlhaus-api.abuse.ch/v1/urls/recent/",
+            # abuse.ch requires GET here — a POST is answered with
+            # {"query_status": "http_get_expected"} and no data, which the
+            # connector then reported as a successful pull of zero URLs.
+            r = await c.get("https://urlhaus-api.abuse.ch/v1/urls/recent/",
                 headers={"Auth-Key": auth_key})
         if r.status_code == 401:
             return {"ok": False, "error": "Invalid Auth-Key"}
@@ -3448,6 +3457,58 @@ def cve_summary(user=Depends(require_full_access), conn=Depends(get_db)):
             "critical_unpatched":critical_unpatched,"by_severity":by_severity,"by_asset":by_asset,
             "last_poll":last_poll["polled_at"].isoformat() if last_poll else None}
 
+# NOTE: must stay ABOVE /cves/{cve_id}. FastAPI matches routes in registration
+# order, so a path-parameter route declared first swallows every literal
+# sibling — this endpoint was unreachable for that reason, answering
+# "CVE not found" to every search including one with no parameters at all.
+@app.get("/cves/search")
+async def search_cves(
+    q: str = "",
+    severity: str = "",
+    kev_only: bool = False,
+    unpatched_only: bool = False,
+    min_epss: float = 0,
+    asset_id: str = "",
+    year: int = 0,
+    limit: int = 50,
+    offset: int = 0,
+    user=Depends(require_full_access),
+    conn=Depends(get_db)
+):
+    """Full CVE search with filters — OpenCVE-parity search endpoint."""
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    where = ["1=1"]; params = []
+    if q:
+        where.append("(cf.cve_id ILIKE %s OR cf.title ILIKE %s OR cf.description ILIKE %s)")
+        params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
+    if severity:
+        # Stored values are upper case ("CRITICAL", "HIGH") from the NVD poller,
+        # so .capitalize() produced "Critical" and matched nothing — the severity
+        # filter silently returned zero rows for every value.
+        where.append("UPPER(cf.cvss_severity) = %s"); params.append(severity.upper())
+    if kev_only:
+        where.append("cf.kev_listed = TRUE")
+    if unpatched_only:
+        where.append("(cf.patch_available = FALSE OR cf.patch_available IS NULL)")
+    if min_epss > 0:
+        where.append("cf.epss_score >= %s"); params.append(min_epss)
+    if asset_id:
+        where.append("cf.asset_id = %s"); params.append(asset_id)
+    if year:
+        where.append("cf.published_date LIKE %s"); params.append(f"{year}%")
+    query = f"""SELECT cf.*, a.name as asset_name, a.vendor as asset_vendor
+        FROM cve_findings cf LEFT JOIN assets a ON cf.asset_id = a.id
+        WHERE {' AND '.join(where)}
+        ORDER BY cf.kev_listed DESC, cf.cvss_score DESC NULLS LAST, cf.published_date DESC
+        LIMIT %s OFFSET %s"""
+    params.extend([limit, offset])
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    # Total count
+    cur.execute(f"SELECT COUNT(*) FROM cve_findings cf WHERE {' AND '.join(where)}", params[:-2])
+    total = cur.fetchone()["count"]
+    return {"cves": rows, "total": total, "limit": limit, "offset": offset}
+
 @app.get("/cves/{cve_id}")
 def get_cve(cve_id: str, user=Depends(require_full_access), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -3462,6 +3523,49 @@ def get_cve(cve_id: str, user=Depends(require_full_access), conn=Depends(get_db)
 # ═══════════════════════════════════════════════════════════════════════════════
 # DASHBOARD + GEO
 # ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/stats/geo")
+def geo_stats(user=Depends(require_full_access), conn=Depends(get_db)):
+    """Country breakdown of IP-type IOCs, for the Geo Map page.
+
+    The frontend has always called this; it was never implemented, so the page
+    sat on its loading state with a 404 in the console. There is no country
+    column — geo lives inside the enrichment JSONB written by AbuseIPDB and
+    VirusTotal, so read it from there. IOCs pulled in by the ThreatFox connector
+    carry no geo at all, which is why coverage is partial rather than absent.
+    """
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT code, COUNT(*)::int AS count FROM (
+            SELECT COALESCE(
+                       enrichment->'abuseipdb'->>'country',
+                       enrichment->'abuseipdb'->>'countryCode',
+                       enrichment->'virustotal'->>'country'
+                   ) AS code
+            FROM iocs
+            WHERE type IN ('IPv4','IPv6')
+              AND enrichment IS NOT NULL
+              AND (false_positive IS NULL OR false_positive = FALSE)
+        ) t
+        WHERE code IS NOT NULL AND code <> '' AND LENGTH(code) = 2
+        GROUP BY code
+        ORDER BY count DESC, code ASC
+    """)
+    countries = [dict(r) for r in cur.fetchall()]
+
+    cur.execute("""SELECT COUNT(*)::int AS c FROM iocs WHERE type IN ('IPv4','IPv6')
+                   AND (false_positive IS NULL OR false_positive = FALSE)""")
+    total_ips = cur.fetchone()["c"]
+    located = sum(c["count"] for c in countries)
+
+    return {
+        "countries":   countries,
+        "total_ips":   total_ips,
+        "located":     located,
+        # Surfaced so the page can be honest about coverage instead of implying
+        # these few countries are the whole picture.
+        "unlocated":   total_ips - located,
+    }
 
 @app.get("/stats/dashboard")
 def dashboard(user=Depends(require_full_access), conn=Depends(get_db)):
@@ -4165,19 +4269,24 @@ async def intel_news(body: IntelNewsRequest, user=Depends(get_current_user)):
     return {"items": unique[:16]}
 
 # ── CVE WALL ─────────────────────────────────────────────────────────────────
+# fetch_cve_rss swallows non-200s and returns [], so a dead feed degrades the
+# wall silently. Four entries were removed on 2026-08-17 after each was
+# confirmed dead; don't re-add without checking:
+#   nvd.nist.gov/feeds/xml/cve/misc/nvd-rss.xml    404 — NVD retired its RSS feeds
+#   debian.org/security/dsa.en.rdf                 404 — file moved
+#   cisa.gov/known-exploited-vulnerabilities.xml    404 — XML gone; the JSON
+#     catalogue used by fetch_kev_catalog() is unaffected and still serves 200
+#   cvedetails.com/rss/vulnerabilities.php         403 — now behind Cloudflare's
+#     bot check, so it cannot be fetched server-side at all
 CVE_FEEDS = [
     # CISA Advisories
     ("https://www.cisa.gov/cybersecurity-advisories/all.xml",             "CISA",          "Advisory"),
-    ("https://www.cisa.gov/known-exploited-vulnerabilities.xml",          "CISA KEV",      "KEV"),
     # Vendor Security Advisories
     ("https://www.redhat.com/en/rss/security-advisories",                 "Red Hat",       "Advisory"),
     ("https://support.apple.com/en-us/100100/rss/feed.rss",              "Apple",         "Advisory"),
-    ("https://www.debian.org/security/dsa.en.rdf",                        "Debian",        "Advisory"),
     ("https://ubuntu.com/security/notices/rss.xml",                       "Ubuntu",        "Advisory"),
     ("https://www.openwall.com/lists/oss-security/",                      "OSS Security",  "Vulnerability"),
     # CVE-focused news
-    ("https://nvd.nist.gov/feeds/xml/cve/misc/nvd-rss.xml",             "NVD",           "CVE"),
-    ("https://www.cvedetails.com/rss/vulnerabilities.php",               "CVE Details",   "CVE"),
     ("https://securelist.com/feed/",                                      "Kaspersky",     "Analysis"),
     ("https://www.zerodayinitiative.com/rss/published/",                  "Zero Day",      "0day"),
     ("https://packetstormsecurity.com/files/tags/advisory/rss.xml",      "PacketStorm",   "Advisory"),
@@ -4264,50 +4373,6 @@ async def cve_wall(category: str = "all", user=Depends(get_current_user)):
             seen.add(k); unique.append(item)
     return {"items": unique[:40], "total": len(unique)}
 
-@app.get("/cves/search")
-async def search_cves(
-    q: str = "",
-    severity: str = "",
-    kev_only: bool = False,
-    unpatched_only: bool = False,
-    min_epss: float = 0,
-    asset_id: str = "",
-    year: int = 0,
-    limit: int = 50,
-    offset: int = 0,
-    user=Depends(require_full_access),
-    conn=Depends(get_db)
-):
-    """Full CVE search with filters — OpenCVE-parity search endpoint."""
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    where = ["1=1"]; params = []
-    if q:
-        where.append("(cf.cve_id ILIKE %s OR cf.title ILIKE %s OR cf.description ILIKE %s)")
-        params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
-    if severity:
-        where.append("cf.cvss_severity = %s"); params.append(severity.capitalize())
-    if kev_only:
-        where.append("cf.kev_listed = TRUE")
-    if unpatched_only:
-        where.append("(cf.patch_available = FALSE OR cf.patch_available IS NULL)")
-    if min_epss > 0:
-        where.append("cf.epss_score >= %s"); params.append(min_epss)
-    if asset_id:
-        where.append("cf.asset_id = %s"); params.append(asset_id)
-    if year:
-        where.append("cf.published_date LIKE %s"); params.append(f"{year}%")
-    query = f"""SELECT cf.*, a.name as asset_name, a.vendor as asset_vendor
-        FROM cve_findings cf LEFT JOIN assets a ON cf.asset_id = a.id
-        WHERE {' AND '.join(where)}
-        ORDER BY cf.kev_listed DESC, cf.cvss_score DESC NULLS LAST, cf.published_date DESC
-        LIMIT %s OFFSET %s"""
-    params.extend([limit, offset])
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    # Total count
-    cur.execute(f"SELECT COUNT(*) FROM cve_findings cf WHERE {' AND '.join(where)}", params[:-2])
-    total = cur.fetchone()["count"]
-    return {"cves": rows, "total": total, "limit": limit, "offset": offset}
 
 
 
@@ -4447,32 +4512,15 @@ async def lookup_osv(cve_id: str) -> dict:
     except Exception as e:
         return {"source":"OSV","status":"error","error":str(e)}
 
-async def lookup_cve_trends(cve_id: str) -> dict:
-    try:
-        async with httpx.AsyncClient(timeout=8,
-            headers={"User-Agent":"ThreatFeed-CTI/1.0"}) as c:
-            r = await c.get(f"https://cvetrends.com/api/cve/{cve_id}")
-        if r.status_code == 404:
-            return {"source":"CVE Trends","status":"not_found"}
-        if r.status_code != 200:
-            return {"source":"CVE Trends","status":"error","error":f"HTTP {r.status_code}"}
-        data = r.json()
-        return {
-            "source":   "CVE Trends",
-            "status":   "ok",
-            "url":      f"https://cvetrends.com/cve/{cve_id}",
-            "tweets":   data.get("tweets",[])[:5],
-            "trending": data.get("trending", False),
-            "count_24h": data.get("tweet_count_24h", 0),
-        }
-    except Exception:
-        return {"source":"CVE Trends","status":"not_found"}
-
 @app.get("/cve/lookup")
 async def cve_multi_lookup(id: str, user=Depends(get_current_user)):
     """
-    Aggregate CVE data from NVD, CVE.org, OSV, CVE Trends, EPSS, and CISA KEV.
+    Aggregate CVE data from NVD, CVE.org, OSV, EPSS, and CISA KEV.
     Returns all sources in parallel with their references and affected packages.
+
+    CVE Trends was dropped on 2026-08-17 — cvetrends.com is gone (its API 404s
+    and the domain serves a parking page). It degraded gracefully, but it cost a
+    request per lookup and showed the analyst a permanently empty source.
     """
     cve_id = id.upper().strip()
     if not CVE_ID_RE.match(cve_id):
@@ -4486,7 +4534,6 @@ async def cve_multi_lookup(id: str, user=Depends(get_current_user)):
         lookup_nvd(cve_id, nvd_headers),
         lookup_cve_org(cve_id),
         lookup_osv(cve_id),
-        lookup_cve_trends(cve_id),
         return_exceptions=True
     )
     sources = [r if not isinstance(r, Exception) else {"source":"?","status":"error","error":str(r)}
@@ -4960,16 +5007,28 @@ Be factual. Use the provided data only. Do not invent version numbers or links."
                 headers={"Authorization": f"Bearer {GROQ_API_KEY}",
                          "Content-Type": "application/json"},
                 json={
-                    "model": "llama-3.3-70b-versatile",
+                    "model": GROQ_MODEL,
                     "messages": [{"role":"system","content":system},
                                  {"role":"user",  "content":user_msg}],
                     "temperature": 0.15,
                     "max_tokens": 1800,
                 }
             )
+        # Check the status before indexing the body. Without this an error
+        # response (429 rate limit, 404 retired model) surfaced as a bare
+        # KeyError — "LLM error: 'choices'" — which says nothing about the
+        # actual cause and sent us looking in the wrong place.
+        if r.status_code == 429:
+            raise HTTPException(status_code=429,
+                detail="AI rate limit reached on Groq. Wait a minute and retry.")
+        if r.status_code != 200:
+            raise HTTPException(status_code=502,
+                detail=f"Groq API error: {r.status_code} {r.text[:180]}")
         content = r.json()["choices"][0]["message"]["content"]
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"LLM error: {type(e).__name__}: {e}")
 
     # Extract subject line for emails
     subject = ""
@@ -5176,7 +5235,7 @@ def taxii_objects(collection_id: str, user=Depends(get_current_user), conn=Depen
         media_type="application/taxii+json;version=2.1")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# QUERY BUILDER & EXPLAINER — powered by Groq (llama-3.3-70b)
+# QUERY BUILDER & EXPLAINER — powered by Groq (see GROQ_MODEL)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class QueryGenRequest(BaseModel):
@@ -5406,15 +5465,26 @@ async def call_groq(system: str, user: str, max_tokens: int = 2500) -> str:
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": GROQ_MODEL,
                 "messages": [{"role":"system","content":system},{"role":"user","content":user}],
                 "temperature": 0.2,
                 "max_tokens": max_tokens,
                 "response_format": {"type": "json_object"},
             }
         )
+    # 429 is the common failure on the free tier and needs to read as a rate
+    # limit, not a generic upstream fault. 404 almost always means the model
+    # in GROQ_MODEL has been retired.
+    if r.status_code == 429:
+        raise HTTPException(status_code=429,
+            detail="AI rate limit reached on Groq. Wait a minute and retry.")
+    if r.status_code == 404:
+        raise HTTPException(status_code=502,
+            detail=f"Groq rejected model '{GROQ_MODEL}' (404). It may have been retired — "
+                   f"check https://api.groq.com/openai/v1/models and set GROQ_MODEL.")
     if r.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Groq API error: {r.status_code}")
+        raise HTTPException(status_code=502,
+            detail=f"Groq API error: {r.status_code} {r.text[:180]}")
     return r.json()["choices"][0]["message"]["content"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -5839,15 +5909,26 @@ Return as JSON: {{"subject": "TLP:{body.tlp} // Threat Advisory — {body.client
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": GROQ_MODEL,
                 "messages": [{"role":"system","content":system},{"role":"user","content":user}],
                 "temperature": 0.2,
                 "max_tokens": max_tokens,
                 "response_format": {"type": "json_object"},
             }
         )
+    # 429 is the common failure on the free tier and needs to read as a rate
+    # limit, not a generic upstream fault. 404 almost always means the model
+    # in GROQ_MODEL has been retired.
+    if r.status_code == 429:
+        raise HTTPException(status_code=429,
+            detail="AI rate limit reached on Groq. Wait a minute and retry.")
+    if r.status_code == 404:
+        raise HTTPException(status_code=502,
+            detail=f"Groq rejected model '{GROQ_MODEL}' (404). It may have been retired — "
+                   f"check https://api.groq.com/openai/v1/models and set GROQ_MODEL.")
     if r.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Groq API error: {r.status_code}")
+        raise HTTPException(status_code=502,
+            detail=f"Groq API error: {r.status_code} {r.text[:180]}")
     return r.json()["choices"][0]["message"]["content"]
 
 @app.post("/query-gen/generate")
