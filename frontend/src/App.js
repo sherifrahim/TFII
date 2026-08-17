@@ -3062,6 +3062,7 @@ function CVELookup({token,C,initialId=""}){
 function CVEWall({token,C}){
   const [items,setItems]=useState([]); const [loading,setLoading]=useState(false);
   const [err,setErr]=useState("");
+  const [feedStatus,setFeedStatus]=useState([]);
   const [activeSource,setActiveSource]=useState("all");
   const [activeSev,setActiveSev]=useState("all");
   const [activeCat,setActiveCat]=useState("all");
@@ -3076,7 +3077,7 @@ function CVEWall({token,C}){
     setLoading(true);setErr("");
     try{
       const r=await api("/cve-wall?category=all",{},token);
-      if(r.ok){const d=await r.json();setItems(d.items||[]);}
+      if(r.ok){const d=await r.json();setItems(d.items||[]);setFeedStatus(d.feeds||[]);}
       else setErr("Failed to fetch CVE wall.");
     }catch(e){setErr("Cannot reach server.");}
     setLoading(false);
@@ -3145,7 +3146,35 @@ function CVEWall({token,C}){
       </div>
 
       {err&&<div style={{padding:14,background:C.red+"10",border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
-      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>Fetching vulnerability advisories from CISA, NVD, vendor feeds...</div>}
+      {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>Fetching vulnerability advisories from distro, vendor and research feeds...</div>}
+
+      {/* Feed health. Failed feeds used to be swallowed silently, which is how
+          five sources stayed dead without anyone noticing. */}
+      {!loading&&feedStatus.length>0&&(()=>{
+        const dead=feedStatus.filter(f=>!f.ok);
+        return(
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
+            marginBottom:14,fontSize:11.5,color:C.muted}}>
+            <span style={{fontWeight:600,color:dead.length?C.amber:C.green}}>
+              {feedStatus.length-dead.length}/{feedStatus.length} sources live
+            </span>
+            {feedStatus.map(f=>(
+              <span key={f.source} title={f.error||`${f.count} items`}
+                style={{fontSize:10,padding:"2px 8px",borderRadius:20,
+                  background:f.ok?C.green+"14":C.red+"14",
+                  border:`1px solid ${f.ok?C.green:C.red}40`,
+                  color:f.ok?C.green:C.red}}>
+                {f.source}{f.ok?` ${f.count}`:" ✕"}
+              </span>
+            ))}
+            {dead.length>0&&(
+              <span style={{fontSize:10.5,opacity:.85}}>
+                — hover a red chip for the reason
+              </span>
+            )}
+          </div>
+        );
+      })()}
       {!loading&&items.length===0&&!err&&(
         <div style={{textAlign:"center",padding:48,color:C.muted}}>
           <div style={{fontSize:32,marginBottom:12}}>🛡️</div>

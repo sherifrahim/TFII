@@ -1,4 +1,5 @@
 import os, uuid, httpx, asyncio, base64, csv, io, re, json, socket, ipaddress, hashlib, secrets, shutil
+import html as _html   # aliased: one function uses a local named `html`
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
@@ -4179,6 +4180,14 @@ DESC_MAP = {
 
 @app.post("/ai/pre-fill")
 async def ai_pre_fill(body: AIEnrichRequest, user=Depends(get_current_user)):
+    """Suggest TLP, tags and MITRE techniques for a new IOC.
+
+    Despite the /ai/ path this calls NO language model — it is a lookup over
+    TYPE_TAGS, INDUSTRY_TAGS and MITRE_MAP, which is why it kept answering in
+    ~130ms while every real AI feature was down. Don't chase it when debugging
+    an LLM outage. The path is kept for compatibility; the UI correctly labels
+    this "Pre-fill" rather than anything AI.
+    """
     high_risk = ["Government","Energy","Medical","Fintech"]
     tlp = "RED" if body.industry in high_risk else "AMBER"
     tags = list(set(TYPE_TAGS.get(body.ioc_type,["ioc"]) + INDUSTRY_TAGS.get(body.industry,["malware"])))[:5]
@@ -4224,6 +4233,9 @@ def parse_rss_date(date_str: str) -> str:
 
 def clean_html(text: str) -> str:
     if not text: return ""
+    # Unescape first so escaped markup becomes real tags and gets stripped,
+    # rather than reaching the UI as literal &lt;a href=&quot;...
+    text = _html.unescape(_html.unescape(text))
     text = re.sub(r'<[^>]+>',' ',text); text = re.sub(r'\s+',' ',text).strip()
     return text[:300] + ("..." if len(text)>300 else "")
 
@@ -4278,26 +4290,44 @@ async def intel_news(body: IntelNewsRequest, user=Depends(get_current_user)):
 #     catalogue used by fetch_kev_catalog() is unaffected and still serves 200
 #   cvedetails.com/rss/vulnerabilities.php         403 — now behind Cloudflare's
 #     bot check, so it cannot be fetched server-side at all
+# A further five were removed on the same day after being tested FROM THE SERVER
+# rather than from a dev box — an important distinction, because two of them
+# answer 200 elsewhere:
+#   cisa.gov/cybersecurity-advisories/all.xml   403 Access Denied to this host's
+#     IP specifically (200 from other networks) — not a User-Agent problem
+#   redhat.com/en/rss/security-advisories       200 but an empty channel upstream,
+#     682 bytes with zero items
+#   support.apple.com/.../feed.rss              200 but now serves HTML
+#   openwall.com/lists/oss-security/            an HTML list index, never a feed
+#   packetstormsecurity.com/.../rss.xml         301 to an HTML page
+# Replacements below were each confirmed live from the server with real items.
 CVE_FEEDS = [
-    # CISA Advisories
-    ("https://www.cisa.gov/cybersecurity-advisories/all.xml",             "CISA",          "Advisory"),
-    # Vendor Security Advisories
-    ("https://www.redhat.com/en/rss/security-advisories",                 "Red Hat",       "Advisory"),
-    ("https://support.apple.com/en-us/100100/rss/feed.rss",              "Apple",         "Advisory"),
+    # Vendor / distro security advisories
     ("https://ubuntu.com/security/notices/rss.xml",                       "Ubuntu",        "Advisory"),
-    ("https://www.openwall.com/lists/oss-security/",                      "OSS Security",  "Vulnerability"),
-    # CVE-focused news
-    ("https://securelist.com/feed/",                                      "Kaspersky",     "Analysis"),
+    ("https://www.debian.org/security/dsa",                               "Debian",        "Advisory"),
+    # Vulnerability research & 0day
     ("https://www.zerodayinitiative.com/rss/published/",                  "Zero Day",      "0day"),
-    ("https://packetstormsecurity.com/files/tags/advisory/rss.xml",      "PacketStorm",   "Advisory"),
+    ("https://blog.talosintelligence.com/rss/",                           "Cisco Talos",   "Analysis"),
+    ("https://blog.rapid7.com/rss/",                                      "Rapid7",        "Analysis"),
+    ("https://securelist.com/feed/",                                      "Kaspersky",     "Analysis"),
 ]
 
-async def fetch_cve_rss(url: str, source: str, category: str) -> list:
+async def fetch_cve_rss(url: str, source: str, category: str) -> dict:
+    """Fetch one CVE feed. Returns {source, ok, items, error} rather than a bare
+    list so the wall can report which feeds are failing. Returning [] for both
+    "fetched nothing" and "feed is dead" is how four feeds stayed broken
+    unnoticed until the 2026-08-17 audit."""
     try:
-        async with httpx.AsyncClient(timeout=8,
-            headers={"User-Agent":"Mozilla/5.0 ThreatFeed-CTI/1.0"}) as c:
+        # follow_redirects was missing here (fetch_rss has always had it), so a
+        # feed that moved returned a bare 301 and counted as dead.
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True,
+            headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                  "Chrome/120.0.0.0 Safari/537.36"}) as c:
             r = await c.get(url)
-        if r.status_code != 200: return []
+        if r.status_code != 200:
+            return {"source": source, "ok": False, "items": [],
+                    "error": f"HTTP {r.status_code}"}
         content = r.text
         items = []
         # Extract titles and links
@@ -4320,7 +4350,13 @@ async def fetch_cve_rss(url: str, source: str, category: str) -> list:
             desc = ""
             if i < len(descs):
                 raw = (descs[i][0] or descs[i][1]).strip()
-                desc = re.sub(r"<[^>]+>","",raw).strip()[:300]
+                # Decode entities BEFORE stripping tags, or escaped markup
+                # survives to the UI verbatim — Debian's DSA feed ships its
+                # links double-encoded and rendered as "&lt;a href=&quot;...".
+                # Unescape twice to catch that second layer.
+                raw = _html.unescape(_html.unescape(raw))
+                desc = re.sub(r"<[^>]+>", " ", raw)
+                desc = re.sub(r"\s+", " ", desc).strip()[:300]
             # Extract CVE IDs mentioned
             # Strip HTML tags and decode entities before extracting CVE IDs
             clean_title = re.sub(r"<[^>]+>", "", title)
@@ -4350,10 +4386,14 @@ async def fetch_cve_rss(url: str, source: str, category: str) -> list:
                 "cves_mentioned": cves_mentioned[:5],
             })
             if len(items) >= 8: break
-        return items
+        # Reachable but yielding nothing is its own failure mode — a feed that
+        # changed format parses to zero items while still returning 200.
+        return {"source": source, "ok": bool(items), "items": items,
+                "error": None if items else "reachable but no items parsed"}
     except Exception as e:
         print(f"[cve-wall] {source}: {e}")
-        return []
+        return {"source": source, "ok": False, "items": [],
+                "error": f"{type(e).__name__}: {str(e)[:120]}"}
 
 @app.get("/cve-wall")
 async def cve_wall(category: str = "all", user=Depends(get_current_user)):
@@ -4363,15 +4403,23 @@ async def cve_wall(category: str = "all", user=Depends(get_current_user)):
     ]
     tasks = [fetch_cve_rss(url, source, cat) for url, source, cat in feeds_to_use]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    items = []; seen = set()
-    for r in results:
-        if isinstance(r, list): items.extend(r)
+    items = []; seen = set(); feed_status = []
+    for r, (_u, src, _c) in zip(results, feeds_to_use):
+        if isinstance(r, Exception):
+            feed_status.append({"source": src, "ok": False, "count": 0,
+                                "error": f"{type(r).__name__}: {str(r)[:120]}"})
+            continue
+        items.extend(r["items"])
+        feed_status.append({"source": r["source"], "ok": r["ok"],
+                            "count": len(r["items"]), "error": r["error"]})
     unique = []
     for item in sorted(items, key=lambda x: x.get("date",""), reverse=True):
         k = item["title"][:60]
         if k not in seen:
             seen.add(k); unique.append(item)
-    return {"items": unique[:40], "total": len(unique)}
+    return {"items": unique[:40], "total": len(unique), "feeds": feed_status,
+            "feeds_ok": sum(1 for f in feed_status if f["ok"]),
+            "feeds_total": len(feed_status)}
 
 
 
