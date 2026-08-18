@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 const API_BASE = "https://YOUR_DOMAIN";
 const INDUSTRIES = ["Fintech","Medical","Gaming","Retail","Energy","Government","Telecom"];
@@ -165,50 +165,50 @@ const THEMES = {
 
 // ── MODE NAV DEFINITIONS ──────────────────────────────────────────────────────
 const IOC_NAV=[
-  {id:"dashboard",  label:"Dashboard",     icon:"grid",   locked:true},
-  {id:"feed",       label:"IOC Feed",      icon:"list",   locked:true},
-  {id:"add",        label:"Add IOC",       icon:"plus",   locked:true},
-  {id:"bulklookup", label:"Bulk Lookup",   icon:"search"},
-  {id:"advisory",   label:"Advisory",      icon:"send",   locked:true},
-  {id:"campaigns",  label:"Campaigns",     icon:"folder", locked:true},
-  {id:"map",        label:"Geo Map",       icon:"map",    locked:true},
-  {id:"public",     label:"Public Lookup", icon:"search"},
-  {id:"import",     label:"Import",        icon:"upload", locked:true},
-  {id:"export",     label:"Export",        icon:"download",locked:true},
+  {id:"dashboard",  label:"Dashboard",     icon:"grid",   locked:true, sec:"Overview"},
+  {id:"feed",       label:"IOC Feed",      icon:"list",   locked:true, sec:"Indicators"},
+  {id:"add",        label:"Add IOC",       icon:"plus",   locked:true, sec:"Indicators"},
+  {id:"bulklookup", label:"Bulk Lookup",   icon:"search", sec:"Indicators"},
+  {id:"advisory",   label:"Advisory",      icon:"send",   locked:true, sec:"Reporting"},
+  {id:"campaigns",  label:"Campaigns",     icon:"folder", locked:true, sec:"Indicators"},
+  {id:"map",        label:"Geo Map",       icon:"map",    locked:true, sec:"Indicators"},
+  {id:"public",     label:"Public Lookup", icon:"search", sec:"Reporting"},
+  {id:"import",     label:"Import",        icon:"upload", locked:true, sec:"Data"},
+  {id:"export",     label:"Export",        icon:"download",locked:true, sec:"Data"},
 ];
 const CVE_NAV=[
   {id:"dashboard",label:"Dashboard",     icon:"grid",   locked:true},
-  {id:"cve",      label:"CVE Monitor",   icon:"shield", locked:true},
-  {id:"cvelookup",label:"CVE Lookup",    icon:"search"},
+  {id:"cve",      label:"CVE Monitor",   icon:"shield", locked:true, sec:"Vulnerabilities"},
+  {id:"cvelookup",label:"CVE Lookup",    icon:"search", sec:"Vulnerabilities"},
   {id:"advisory", label:"Advisory",      icon:"send",   locked:true},
-  {id:"cvewall",  label:"CVE Wall",      icon:"rss"},
-  {id:"intel",    label:"Intel Wall",    icon:"rss"},
-  {id:"actors",   label:"Threat Actors", icon:"users"},
-  {id:"querygen", label:"Query Builder", icon:"code"},
+  {id:"cvewall",  label:"CVE Wall",      icon:"rss", sec:"Vulnerabilities"},
+  {id:"intel",    label:"Intel Wall",    icon:"rss", sec:"Intelligence"},
+  {id:"actors",   label:"Threat Actors", icon:"users", sec:"Intelligence"},
+  {id:"querygen", label:"Query Builder", icon:"code", sec:"Intelligence"},
 ];
 // Analyst utilities that belong to neither mode — OSINT lookup, URL decoding,
 // link unwrapping, UA parsing, redirect tracing, diffing. These used to live in
 // CVE_NAV only, which made them invisible from IOC mode and effectively
 // undiscoverable unless you already knew where to look.
 const SHARED_NAV=[
-  {id:"osint",    label:"OSINT & Tools", icon:"radar"},
+  {id:"osint",    label:"OSINT & Tools", icon:"radar", sec:"Tools"},
 ];
 // Owner-only. This gating is cosmetic — every /files endpoint independently
 // enforces the same restriction server-side, so hiding the nav is convenience,
 // not the security boundary.
 const OWNER_NAV=[
-  {id:"files",    label:"Files",         icon:"folder"},
+  {id:"files",    label:"Files",         icon:"folder", sec:"Tools"},
 ];
 const ADMIN_NAV=[
-  {id:"settings",    label:"Settings",    icon:"settings"},
-  {id:"workspace",   label:"Workspace",   icon:"edit"},
-  {id:"health",      label:"Health",      icon:"heartbeat"},
-  {id:"connectors",  label:"Connectors",  icon:"radar"},
-  {id:"users",       label:"Users",       icon:"usergroup"},
-  {id:"invites",     label:"Invites",     icon:"mail"},
+  {id:"settings",    label:"Settings",    icon:"settings", sec:"Account"},
+  {id:"workspace",   label:"Workspace",   icon:"edit", sec:"Account"},
+  {id:"health",      label:"Health",      icon:"heartbeat", sec:"Administration"},
+  {id:"connectors",  label:"Connectors",  icon:"radar", sec:"Administration"},
+  {id:"users",       label:"Users",       icon:"usergroup", sec:"Administration"},
+  {id:"invites",     label:"Invites",     icon:"mail", sec:"Administration"},
 ];
 const USER_NAV=[
-  {id:"settings", label:"Settings",      icon:"settings"},
+  {id:"settings", label:"Settings",      icon:"settings", sec:"Account"},
 ];
 
 // SVG nav icons — matches the clean icon style in the reference screenshots
@@ -8165,6 +8165,8 @@ export default function App(){
   const [filterTLP,setFilterTLP]=useState("All"); const [filterCampaign,setFilterCampaign]=useState("All");
   const [filterExpired,setFilterExpired]=useState(false); const [filterFP,setFilterFP]=useState(false);
   const [feedSort,setFeedSort]=useState("triage");
+  const [feedDir,setFeedDir]=useState("desc");
+  const [feedView,setFeedView]=useState("cards");
   const [search,setSearch]=useState("");
   const blank={type:"IPv4",value:"",industry:"Fintech",tlp:"AMBER",confidence:75,description:"",tags:"",valid_days:90,mitre_techniques:[],campaign_id:""};
   const [form,setForm]=useState(blank);
@@ -8271,12 +8273,22 @@ export default function App(){
     return true;
   });
 
-  const NAV=[
+  const NAV_RAW=[
     ...(mode==="ioc"?IOC_NAV:CVE_NAV),
     ...SHARED_NAV,
     ...(me?.username==="admin"?OWNER_NAV:[]),
     ...(me?.role==="admin"?ADMIN_NAV:USER_NAV),
   ];
+  // The arrays interleave sections (Advisory sits between IOC entries), so a
+  // "new section" heading fired more than once per group. Order by section
+  // while keeping each group's own sequence.
+  const SEC_ORDER=["Overview","Indicators","Vulnerabilities","Intelligence",
+                   "Reporting","Data","Tools","Account","Administration"];
+  const NAV=NAV_RAW.map((n,i)=>({n,i}))
+    .sort((a,b)=>{
+      const sa=SEC_ORDER.indexOf(a.n.sec||""), sb=SEC_ORDER.indexOf(b.n.sec||"");
+      return (sa===sb? a.i-b.i : (sa<0?99:sa)-(sb<0?99:sb));
+    }).map(x=>x.n);
   const currentNavLocked = NAV.find(n=>n.id===view)?.locked;
   const showLockedPage   = me?.role==="explorer" && currentNavLocked;
 
@@ -8450,11 +8462,20 @@ export default function App(){
 
         {/* Nav */}
         <nav style={{padding:"10px 10px",flex:1,overflowY:"auto"}}>
-          {NAV.map(n=>{
+          {NAV.map((n,ni)=>{
             const active=view===n.id;
+            // 18 flat items with no structure made it impossible to tell where
+            // day-to-day work ended and admin began. Print a section label the
+            // first time each group appears.
+            const newSection=n.sec&&n.sec!==NAV[ni-1]?.sec;
             const locked=me?.role==="explorer"&&n.locked;
             return(
-              <button key={n.id} className="nav-item" onClick={()=>setView(n.id)}
+              <React.Fragment key={n.id}>
+              {newSection&&(
+                <div style={{fontSize:9,fontWeight:700,letterSpacing:".1em",textTransform:"uppercase",
+                  color:C.muted,opacity:.6,padding:ni===0?"2px 12px 6px":"14px 12px 6px"}}>{n.sec}</div>
+              )}
+              <button className="nav-item" onClick={()=>setView(n.id)}
                 style={{
                   display:"flex",alignItems:"center",gap:12,width:"100%",
                   padding:"9px 12px",borderRadius:8,marginBottom:2,
@@ -8468,6 +8489,7 @@ export default function App(){
                 <span className="sidebar-label" style={{flex:1}}>{n.label}</span>
                 {locked&&<span className="sidebar-label" style={{fontSize:11}}>🔒</span>}
               </button>
+              </React.Fragment>
             );
           })}
         </nav>
@@ -8606,6 +8628,15 @@ export default function App(){
                     <Chip n={stats.high} label="high confidence" tone={C.green}/>
                     {stats.flagged>0&&<Chip n={stats.flagged} label="expired / FP" tone={C.amber}/>}
                     <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
+                      <div style={{display:"flex",gap:2,background:C.surfaceHi,borderRadius:7,padding:3,marginRight:4}}>
+                        {[["cards","Cards"],["table","Table"]].map(([v,l])=>(
+                          <button key={v} onClick={()=>setFeedView(v)}
+                            style={{padding:"3px 10px",borderRadius:5,border:"none",cursor:"pointer",
+                              fontSize:11,fontFamily:"inherit",fontWeight:600,
+                              background:feedView===v?C.accent:"transparent",
+                              color:feedView===v?"#fff":C.muted}}>{l}</button>
+                        ))}
+                      </div>
                       <span style={{fontSize:11,color:C.muted}}>Sort</span>
                       <select value={feedSort} onChange={e=>setFeedSort(e.target.value)}
                         style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,
@@ -8614,6 +8645,8 @@ export default function App(){
                         <option value="newest">Newest first</option>
                         <option value="confidence">Confidence</option>
                         <option value="type">Type</option>
+                        <option value="value">Indicator</option>
+                        <option value="tlp">TLP</option>
                       </select>
                     </div>
                   </div>
@@ -8633,13 +8666,20 @@ export default function App(){
                 // Fields that never vary carry no information. On this feed every
                 // row was TLP:AMBER / General / bulk-lookup / admin, so three of
                 // the five things on a card said nothing. Hide what is uniform.
-                const uniq=k=>new Set(filtered.map(i=>i[k]).filter(Boolean)).size;
-                const showTlp=uniq("tlp")>1, showIndustry=uniq("industry")>1, showAuthor=uniq("author")>1;
+                const dominant=k=>{
+                  const vals=filtered.map(i=>i[k]).filter(Boolean);
+                  if(vals.length<2) return true;
+                  const counts={};
+                  vals.forEach(v=>{counts[v]=(counts[v]||0)+1;});
+                  return Math.max(...Object.values(counts))/filtered.length>=0.95;
+                };
+                const showTlp=!dominant("tlp"), showIndustry=!dominant("industry"),
+                      showAuthor=!dominant("author");
                 const commonTags=new Set();
                 if(filtered.length>1){
                   const counts={};
                   filtered.forEach(i=>(i.tags||[]).forEach(t=>{counts[t]=(counts[t]||0)+1;}));
-                  Object.entries(counts).forEach(([t,c])=>{ if(c===filtered.length) commonTags.add(t); });
+                  Object.entries(counts).forEach(([t,c])=>{ if(c/filtered.length>=0.95) commonTags.add(t); });
                 }
                 const DAY=864e5, now=Date.now();
                 const score=i=>{
@@ -8651,11 +8691,93 @@ export default function App(){
                   const penalty=(i.false_positive?1000:0)+(i.expired?500:0);
                   return penalty-(c*10)+Math.min(age,90);
                 };
-                const sorted=[...filtered].sort((a,b)=>
-                  feedSort==="newest"     ? new Date(b.created_at||0)-new Date(a.created_at||0)
-                : feedSort==="confidence" ? (b.confidence||0)-(a.confidence||0)
-                : feedSort==="type"       ? String(a.type).localeCompare(String(b.type))||(b.confidence||0)-(a.confidence||0)
-                :                           score(a)-score(b));
+                // Triage is an opinionated ranking, so it ignores direction.
+                // Every explicit column sorts both ways.
+                const dir=feedDir==="asc"?-1:1;
+                const cmp=(a,b)=>
+                  feedSort==="newest"     ? (new Date(b.created_at||0)-new Date(a.created_at||0))*dir
+                : feedSort==="confidence" ? ((b.confidence||0)-(a.confidence||0))*dir
+                : feedSort==="type"       ? (String(a.type||"").localeCompare(String(b.type||""))*-1)*dir
+                : feedSort==="value"      ? (String(a.value_defanged||a.value||"").localeCompare(String(b.value_defanged||b.value||""))*-1)*dir
+                : feedSort==="tlp"        ? (String(a.tlp||"").localeCompare(String(b.tlp||""))*-1)*dir
+                :                           score(a)-score(b);
+                const sorted=[...filtered].sort(cmp);
+
+                // Clicking a header sorts by it; clicking the active one flips
+                // direction, which is the behaviour every table teaches people.
+                const sortBy=f=>{
+                  if(feedSort===f) setFeedDir(d=>d==="desc"?"asc":"desc");
+                  else { setFeedSort(f); setFeedDir("desc"); }
+                };
+                const Th=({f,label,align,width})=>(
+                  <th onClick={()=>sortBy(f)} title={`Sort by ${label.toLowerCase()}`}
+                    style={{padding:"8px 12px",textAlign:align||"left",width,cursor:"pointer",
+                      fontSize:10,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",
+                      color:feedSort===f?C.accentText:C.muted,userSelect:"none",whiteSpace:"nowrap",
+                      background:C.surfaceHi,borderBottom:`1px solid ${C.border}`}}>
+                    {label}
+                    <span style={{marginLeft:5,opacity:feedSort===f?1:.25,fontSize:9}}>
+                      {feedSort===f?(feedDir==="desc"?"\u25bc":"\u25b2"):"\u25bc"}
+                    </span>
+                  </th>
+                );
+
+                if(feedView==="table") return(
+              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
+                overflow:"auto",boxShadow:C.shadow}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5}}>
+                  <thead><tr>
+                    <Th f="value" label="Indicator"/>
+                    <Th f="type" label="Type" width={90}/>
+                    <Th f="confidence" label="Conf" align="right" width={80}/>
+                    <Th f="tlp" label="TLP" width={90}/>
+                    <Th f="newest" label="Added" width={110}/>
+                    <th style={{width:34,background:C.surfaceHi,borderBottom:`1px solid ${C.border}`}}/>
+                  </tr></thead>
+                  <tbody>
+                    {sorted.map((ioc,idx)=>{
+                      const conf=ioc.confidence||0;
+                      const col=conf>=75?C.red:conf>=50?C.amber:C.muted;
+                      const canDel=me?.role==="admin"||ioc.created_by===me?.id;
+                      const fresh=ioc.created_at&&(Date.now()-new Date(ioc.created_at).getTime())<864e5;
+                      return(
+                        <tr key={ioc.id} onClick={()=>setSelectedIOC(ioc)}
+                          style={{cursor:"pointer",background:idx%2?C.surfaceHi+"40":"transparent",
+                            opacity:ioc.expired?.55:1,borderLeft:`3px solid ${col}`}}
+                          onMouseEnter={e=>e.currentTarget.style.background=C.accentDim}
+                          onMouseLeave={e=>e.currentTarget.style.background=idx%2?C.surfaceHi+"40":"transparent"}>
+                          <td style={{padding:"8px 12px",maxWidth:0,overflow:"hidden",
+                            textOverflow:"ellipsis",whiteSpace:"nowrap",
+                            fontFamily:"'JetBrains Mono',ui-monospace,monospace",
+                            color:C.white||C.textHi}} title={ioc.value_defanged||ioc.value}>
+                            {ioc.value_defanged||ioc.value}
+                            {fresh&&<span style={{marginLeft:8,fontSize:9,fontWeight:700,padding:"1px 6px",
+                              borderRadius:20,background:C.accent+"1e",color:C.accentText}}>NEW</span>}
+                            {ioc.false_positive&&<span style={{marginLeft:8,fontSize:9,color:C.amber}}>FP</span>}
+                            {ioc.expired&&<span style={{marginLeft:8,fontSize:9,color:C.red}}>expired</span>}
+                          </td>
+                          <td style={{padding:"8px 12px",color:C.muted,fontSize:11}}>{ioc.type}</td>
+                          <td style={{padding:"8px 12px",textAlign:"right",color:col,fontWeight:700,
+                            fontVariantNumeric:"tabular-nums"}}>{conf}%</td>
+                          <td style={{padding:"8px 12px"}}><TLPBadge level={ioc.tlp}/></td>
+                          <td style={{padding:"8px 12px",color:C.muted,fontSize:11,
+                            fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>
+                            {ioc.created_at?new Date(ioc.created_at).toLocaleDateString():"—"}
+                          </td>
+                          <td style={{padding:"8px 6px",textAlign:"center"}}>
+                            {canDel&&<button onClick={e=>deleteIOC(ioc.id,e)} title="Delete indicator"
+                              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                                fontSize:14,padding:0,opacity:.35,lineHeight:1}}
+                              onMouseEnter={e=>{e.currentTarget.style.opacity=1;e.currentTarget.style.color=C.red;}}
+                              onMouseLeave={e=>{e.currentTarget.style.opacity=.35;e.currentTarget.style.color=C.muted;}}>×</button>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+                );
 
                 return(
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:12}}>
@@ -8725,7 +8847,7 @@ export default function App(){
                               {ioc.mitre_techniques[0].split(" - ")[0]}
                             </span>
                           )}
-                          {showAuthor&&<span style={{marginLeft:"auto",fontSize:10,color:C.muted}}>{ioc.author||"?"}</span>}
+                          {showAuthor&&ioc.author&&<span style={{marginLeft:"auto",fontSize:10,color:C.muted}}>{ioc.author}</span>}
                         </div>
                       </div>
                     </div>
