@@ -8445,8 +8445,14 @@ export default function App(){
               <div style={{fontSize:10,color:C.muted,fontWeight:500,letterSpacing:"0.04em"}}>THREAT INTEL</div>
             </div>
           </div>
-          {/* Mode switcher */}
-          <div style={{display:"flex",background:C.surfaceHi,borderRadius:8,padding:3,gap:2}}>
+          {/* Mode switcher. Styled and labelled as a workspace switch because it
+              replaces the entire sidebar — as an unlabelled segmented control it
+              read like a filter, and flipping it looked like the app breaking. */}
+          <div style={{fontSize:9,fontWeight:700,letterSpacing:".1em",textTransform:"uppercase",
+            color:C.muted,opacity:.6,marginBottom:5}}>Workspace</div>
+          <div title="Switches the whole sidebar between indicator work and vulnerability work"
+            style={{display:"flex",background:C.surfaceHi,borderRadius:8,padding:3,gap:2,
+            border:`1px solid ${C.border}`}}>
             {[["ioc","IOC"],["cve","CVE"]].map(([m,label])=>(
               <button key={m} onClick={()=>switchMode(m)} style={{
                 flex:1,padding:"5px 8px",borderRadius:6,border:"none",cursor:"pointer",
@@ -8538,12 +8544,12 @@ export default function App(){
                 style={{padding:"7px 14px",background:C.accentDim,border:`1px solid ${C.accent}30`,
                   color:C.accentText,borderRadius:8,cursor:"pointer",fontSize:12,
                   fontFamily:"inherit",fontWeight:600}}>STIX Export</button>
-              <button onClick={()=>{setView("add");setAddResult(null);}}
+              {view!=="add"&&<button onClick={()=>{setView("add");setAddResult(null);}}
                 style={{padding:"8px 16px",background:C.accent,border:"none",color:"#fff",
                   borderRadius:8,cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600,
                   display:"flex",alignItems:"center",gap:8}}>
                 <NavIcon name="plus" size={14} color="#fff"/> Add IOC
-              </button>
+              </button>}
             </>}
           </div>
         </div>
