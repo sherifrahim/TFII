@@ -3636,7 +3636,6 @@ function OSINTTool({token,C}){
       if(data.dns&&Object.keys(data.dns).length>0) setActiveTab("dns");
       else if(data.rdap) setActiveTab("rdap");
       else if(data.shodan) setActiveTab("shodan");
-      else if(data.hibp) setActiveTab("hibp");
     }
     setLoading(false);
   }
@@ -3645,7 +3644,6 @@ function OSINTTool({token,C}){
     result.data?.dns&&Object.keys(result.data.dns).length>0    ?{id:"dns",  label:"DNS"}  :null,
     result.data?.rdap                                           ?{id:"rdap", label:"WHOIS"} :null,
     result.data?.shodan                                         ?{id:"shodan",label:"Shodan"}:null,
-    result.data?.hibp                                           ?{id:"hibp", label:"HIBP"}  :null,
     result.data?.email_domain_mx?.length>0                      ?{id:"mx",   label:"MX"}    :null,
   ].filter(Boolean):[];
 
@@ -3781,39 +3779,6 @@ function OSINTTool({token,C}){
                   </div>
                 )}
               </div>
-            )}
-
-            {/* HIBP tab */}
-            {activeTab==="hibp"&&result.data?.hibp&&(
-              result.data.hibp.skipped?(
-                <div style={{fontSize:13,color:C.muted,lineHeight:1.8}}>
-                  HIBP API key not configured.<br/>
-                  Add <code style={{color:C.accentText}}>HIBP_API_KEY</code> to <code style={{color:C.accentText}}>.env</code>.{" "}
-                  <a href="https://haveibeenpwned.com/API/Key" target="_blank" rel="noreferrer"
-                    style={{color:C.accentText}}>Get a free key →</a>
-                </div>
-              ):result.data.hibp.breached?(
-                <>
-                  <div style={{fontSize:14,fontWeight:700,color:C.red,marginBottom:14}}>
-                    ⚠ Found in {result.data.hibp.breach_count} data breach{result.data.hibp.breach_count!==1?"es":""}
-                  </div>
-                  {result.data.hibp.breaches?.map(b=>(
-                    <div key={b.name} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,
-                      borderRadius:8,padding:12,marginBottom:8}}>
-                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                        <span style={{fontSize:13,fontWeight:700,color:C.white||C.textHi}}>{b.name}</span>
-                        <span style={{fontSize:11,color:C.muted}}>{b.date}</span>
-                      </div>
-                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                        {b.data_classes?.map(dc=>(
-                          <span key={dc} style={{fontSize:10,padding:"2px 7px",borderRadius:3,
-                            background:C.red+"20",color:C.red,fontWeight:600}}>{dc}</span>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </>
-              ):<div style={{fontSize:13,color:C.green,fontWeight:600}}>✓ Not found in any known data breaches</div>
             )}
 
             {/* MX tab */}
@@ -6170,7 +6135,6 @@ function ApiKeyModal({token, C, onClose}){
     {id:"urlhaus",    name:"URLhaus",       url:"https://auth.abuse.ch/",                          desc:"Malware URL/host database (free Auth-Key required since Jun 2025)", placeholder:"Enter your abuse.ch Auth-Key"},
     {id:"groq",       name:"Groq",          url:"https://console.groq.com/keys",                  desc:"SPL/KQL query generation",     placeholder:"gsk_xxxxxxxxxxxx"},
     {id:"shodan",     name:"Shodan",        url:"https://account.shodan.io/",                     desc:"Port scan & host lookup",      placeholder:"Enter your Shodan key"},
-    {id:"hibp",       name:"HaveIBeenPwned",url:"https://haveibeenpwned.com/API/Key",              desc:"Email breach lookup",          placeholder:"Enter your HIBP key"},
     {id:"nvd",        name:"NVD",           url:"https://nvd.nist.gov/developers/request-an-api-key","desc":"CVE database (higher rate limit)","placeholder":"Enter your NVD key"},
   ];
 
@@ -7529,7 +7493,7 @@ function HealthPage({token,C}){
 
   function ApiKeyRow({svc,info}){
     const labels={virustotal:"VirusTotal",abuseipdb:"AbuseIPDB",urlhaus:"URLhaus",
-      shodan:"Shodan",hibp:"HaveIBeenPwned",groq:"Groq",nvd:"NVD"};
+      shodan:"Shodan",groq:"Groq",nvd:"NVD"};
     return(
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
         padding:"6px 0",borderBottom:`1px solid ${C.border}20`}}>
@@ -7847,7 +7811,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
           API Keys
         </div>
         <div style={{fontSize:12,color:C.muted,marginBottom:12}}>
-          Add personal keys for VirusTotal, AbuseIPDB, Shodan, HIBP, Groq, and NVD.
+          Add personal keys for VirusTotal, AbuseIPDB, Shodan, Groq, and NVD.
         </div>
         <Btn onClick={onOpenApiKeys} C={C}>Manage API Keys</Btn>
       </div>

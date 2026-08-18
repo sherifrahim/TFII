@@ -36,7 +36,6 @@ ADMIN_DEFAULT_USER = "admin"
 ADMIN_DEFAULT_PASS = "TFeed@99"
 VT_API_KEY         = os.getenv("VT_API_KEY", "")
 ABUSEIPDB_API_KEY  = os.getenv("ABUSEIPDB_API_KEY", "")
-HIBP_API_KEY       = os.getenv("HIBP_API_KEY", "")
 SHODAN_API_KEY     = os.getenv("SHODAN_API_KEY", "")
 NVD_API_KEY        = os.getenv("NVD_API_KEY", "")
 GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
@@ -55,7 +54,6 @@ CACHE_HOURS        = 24
 PLATFORM_KEYS = {
     "virustotal":  VT_API_KEY,
     "abuseipdb":   ABUSEIPDB_API_KEY,
-    "hibp":        HIBP_API_KEY,
     "shodan":      SHODAN_API_KEY,
     "nvd":         NVD_API_KEY,
     "groq":        GROQ_API_KEY,
@@ -150,7 +148,7 @@ def resolve_api_key(conn, service: str, user: dict) -> tuple:
 
 def get_all_quota_status(conn, user_id: str, is_admin: bool) -> dict:
     """Returns quota info for all services for a user."""
-    services = ["virustotal","abuseipdb","urlhaus","shodan","hibp","groq","nvd"]
+    services = ["virustotal","abuseipdb","urlhaus","shodan","groq","nvd"]
     result = {}
     cur = conn.cursor()
     for svc in services:
@@ -2564,12 +2562,11 @@ def change_password(body: PasswordChange, user=Depends(get_current_user), conn=D
 
 # ── USER API KEYS ─────────────────────────────────────────────────────────────
 
-ALLOWED_SERVICES = {"virustotal","abuseipdb","shodan","hibp","groq","nvd"}
+ALLOWED_SERVICES = {"virustotal","abuseipdb","shodan","groq","nvd"}
 SERVICE_LABELS = {
     "virustotal": {"name":"VirusTotal",   "url":"https://www.virustotal.com/gui/my-apikey",    "placeholder":"Enter your VirusTotal API key"},
     "abuseipdb":  {"name":"AbuseIPDB",    "url":"https://www.abuseipdb.com/account/api",        "placeholder":"Enter your AbuseIPDB API key"},
     "shodan":     {"name":"Shodan",       "url":"https://account.shodan.io/",                   "placeholder":"Enter your Shodan API key"},
-    "hibp":       {"name":"HaveIBeenPwned","url":"https://haveibeenpwned.com/API/Key",           "placeholder":"Enter your HIBP API key"},
     "groq":       {"name":"Groq",         "url":"https://console.groq.com/keys",                "placeholder":"gsk_xxxxxxxxxxxx"},
     "nvd":        {"name":"NVD",          "url":"https://nvd.nist.gov/developers/request-an-api-key","placeholder":"Enter your NVD API key"},
 }
@@ -4067,39 +4064,9 @@ async def osint_lookup(body: OSINTRequest, user=Depends(get_current_user)):
                             "last_changed":next((e.get("eventDate","?") for e in d.get("events",[]) if e.get("eventAction")=="last changed"),"?")}
                 except Exception: pass
         elif body.target_type == "email":
-            if HIBP_API_KEY:
-                try:
-                    async with httpx.AsyncClient(timeout=10) as c:
-                        r = await c.get(f"https://haveibeenpwned.com/api/v3/breachedaccount/{body.target}",
-                                        headers={"hibp-api-key":HIBP_API_KEY,"user-agent":"ThreatFeed-CTI/1.0"})
-                    if r.status_code == 200:
-                        breaches = r.json()
-                        results["data"]["hibp"] = {"breached":True,"breach_count":len(breaches),
-                            "breaches":[{"name":b.get("Name","?"),"date":b.get("BreachDate","?"),
-                                         "data_classes":b.get("DataClasses",[])[:5]} for b in breaches[:10]]}
-                    elif r.status_code == 404:
-                        results["data"]["hibp"] = {"breached":False}
-                    elif r.status_code in (401, 403):
-                        # HIBP moved to paid API keys. A 401 previously matched no
-                        # branch at all, so the whole section vanished from the
-                        # results with nothing said — which looks like a bug in
-                        # this app rather than an unpurchased subscription.
-                        results["data"]["hibp"] = {"unavailable":True,
-                            "reason":"HaveIBeenPwned requires a paid API subscription. "
-                                     "Add a valid key in Settings -> API Keys to enable "
-                                     "email breach lookup; every other OSINT source is unaffected."}
-                    elif r.status_code == 429:
-                        results["data"]["hibp"] = {"unavailable":True,
-                            "reason":"HaveIBeenPwned rate limit reached. Try again shortly."}
-                    else:
-                        results["data"]["hibp"] = {"unavailable":True,
-                            "reason":f"HaveIBeenPwned returned HTTP {r.status_code}."}
-                except Exception as e:
-                    results["data"]["hibp"] = {"error":str(e)}
-            else:
-                results["data"]["hibp"] = {"skipped":True,
-                    "reason":"No HaveIBeenPwned key configured. It is a paid API; "
-                             "the rest of the OSINT lookup works without it."}
+            # HaveIBeenPwned was removed on 2026-08-18. Its API is paid-only, so
+            # without a subscription the section could never do anything but
+            # explain why it was empty. MX lookup below still runs for emails.
             try:
                 domain = body.target.split("@")[1] if "@" in body.target else None
                 if domain:
