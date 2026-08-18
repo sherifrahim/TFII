@@ -6868,6 +6868,39 @@ function AdvisoryBuilder({token,C}){
       .catch(()=>setCveLoading(false));
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
 
+  const [rescanning,setRescanning]=useState({});   // ioc id -> true while in flight
+  const [rescanned,setRescanned]=useState({});     // ioc id -> {confidence, verdict, at}
+
+  // Re-runs live enrichment (VirusTotal / AbuseIPDB / URLhaus) against the
+  // indicator so you can confirm it is still considered malicious before it
+  // goes out to a client, rather than trusting a score captured days ago.
+  async function rescan(ioc,e){
+    if(e) e.stopPropagation();
+    setRescanning(r=>({...r,[ioc.id]:true}));
+    try{
+      const r=await api(`/iocs/${ioc.id}/re-enrich`,{method:"POST"},token);
+      if(r.ok){
+        const d=await r.json();
+        const conf=typeof d.confidence==="number"?d.confidence:ioc.confidence;
+        setRescanned(m=>({...m,[ioc.id]:{confidence:conf,at:Date.now(),
+          verdict:conf>=70?"malicious":conf>=40?"suspicious":"clean"}}));
+        setIocPool(pool=>pool.map(x=>x.id===ioc.id?{...x,confidence:conf}:x));
+      }else{
+        setRescanned(m=>({...m,[ioc.id]:{error:`Re-scan failed (${r.status})`,at:Date.now()}}));
+      }
+    }catch(err){
+      setRescanned(m=>({...m,[ioc.id]:{error:String(err.message||err),at:Date.now()}}));
+    }
+    setRescanning(r=>{const n={...r};delete n[ioc.id];return n;});
+  }
+
+  // Sequential on purpose: these calls each hit third-party APIs with their own
+  // rate limits, and a burst of parallel re-scans burns quota for no gain.
+  async function rescanSelected(){
+    const targets=iocPool.filter(i=>selectedIocIds.has(i.id));
+    for(const t of targets){ await rescan(t); }
+  }
+
   async function loadPool(fam){
     setPoolLoading(true);
     const params=new URLSearchParams({sector:fam==="fintech"?"fintech":"",family:fam==="fintech"?"":fam,limit:80});
@@ -7008,6 +7041,17 @@ function AdvisoryBuilder({token,C}){
                 <option value="">All types</option>
                 {["IPv4","Domain","URL","MD5","SHA256"].map(t=><option key={t} value={t}>{t}</option>)}
               </select>
+              <button onClick={rescanSelected}
+                disabled={selectedIocIds.size===0||Object.keys(rescanning).length>0}
+                title="Re-check every selected indicator against live sources before it goes to a client"
+                style={{fontSize:11,padding:"4px 10px",borderRadius:6,fontFamily:"inherit",fontWeight:600,
+                  cursor:selectedIocIds.size===0?"not-allowed":"pointer",
+                  background:selectedIocIds.size?C.accentDim:"transparent",
+                  border:`1px solid ${selectedIocIds.size?C.accent+"55":C.border}`,
+                  color:selectedIocIds.size?C.accentText:C.muted,
+                  opacity:Object.keys(rescanning).length?0.6:1}}>
+                {Object.keys(rescanning).length?"Re-scanning…":`Re-scan selected (${selectedIocIds.size})`}
+              </button>
             </div>
           </div>
           <div style={{maxHeight:340,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
@@ -7041,7 +7085,28 @@ function AdvisoryBuilder({token,C}){
                     <div style={{fontSize:11,fontFamily:"monospace",color:C.text,marginTop:3,
                       wordBreak:"break-all",lineHeight:1.3}}>{ioc.value}</div>
                   </div>
-                  <div style={{fontSize:10,color:C.muted,flexShrink:0}}>{ioc.confidence}%</div>
+                  <div style={{display:"flex",alignItems:"center",gap:7,flexShrink:0}}>
+                    {(()=>{ const r=rescanned[ioc.id];
+                      if(!r) return <span style={{fontSize:10,color:C.muted}}>{ioc.confidence}%</span>;
+                      if(r.error) return <span style={{fontSize:9.5,color:C.red}} title={r.error}>re-scan failed</span>;
+                      const col=r.verdict==="malicious"?C.red:r.verdict==="suspicious"?C.amber:C.green;
+                      return(
+                        <span style={{display:"inline-flex",alignItems:"center",gap:5}}>
+                          <span style={{fontSize:9,padding:"1px 6px",borderRadius:3,fontWeight:700,
+                            background:col+"1e",color:col}}>{r.verdict}</span>
+                          <span style={{fontSize:10,color:col,fontWeight:600}}>{r.confidence}%</span>
+                        </span>
+                      );
+                    })()}
+                    <button onClick={e=>rescan(ioc,e)} disabled={!!rescanning[ioc.id]}
+                      title="Re-check this indicator against VirusTotal / AbuseIPDB / URLhaus"
+                      style={{fontSize:9.5,padding:"2px 7px",borderRadius:5,fontFamily:"inherit",
+                        fontWeight:600,cursor:rescanning[ioc.id]?"wait":"pointer",
+                        background:"transparent",border:`1px solid ${C.border}`,
+                        color:rescanning[ioc.id]?C.muted:C.accentText}}>
+                      {rescanning[ioc.id]?"…":"Re-scan"}
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -8077,9 +8142,9 @@ export default function App(){
     const LEGACY={light:"porcelain",dark:"graphite",phosphor:"obsidian",
                   glass:"midnight",operator:"obsidian"};
     const resolved=LEGACY[saved]||saved;
-    return THEMES[resolved]?resolved:"porcelain";
+    return THEMES[resolved]?resolved:"obsidian";
   });
-  const C=THEMES[themeName]||THEMES.porcelain;
+  const C=THEMES[themeName]||THEMES.obsidian;
   const [mode,setMode]=useState(()=>localStorage.getItem("tf_mode")||"ioc");
   function switchMode(m){
     setMode(m); localStorage.setItem("tf_mode",m);
@@ -8217,9 +8282,40 @@ export default function App(){
   if(!session){
     return(
       <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:C.bg,padding:16,fontFamily:C.font||"inherit"}}>
-        <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');*{box-sizing:border-box;}input::placeholder{color:${C.muted};}select option{background:${C.surface};color:${C.text};}
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');*{box-sizing:border-box;}input::placeholder{color:${C.muted};}select option{background:${C.surface};color:${C.text};}
         @keyframes tfspin{to{transform:rotate(360deg)}}
-        @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}`}</style>
+        @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+        /* ── Typographic rhythm ──────────────────────────────────────────────
+           Sizes are set per-component inline, so the scale is enforced here at
+           the level that actually reads: weight, tracking and leading. */
+        body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+             text-rendering:optimizeLegibility;
+             font-feature-settings:"cv02","cv03","cv04","cv11";}
+
+        /* Uppercase micro-labels are unreadable without tracking; large numerals
+           are loose without negative tracking. Both are pervasive here. */
+        .tf-eyebrow,[data-eyebrow]{letter-spacing:.09em;text-transform:uppercase;font-weight:700;}
+
+        /* Any figure that sits in a column should line up. */
+        table td,table th,.tf-num{font-variant-numeric:tabular-nums;}
+
+        /* Monospace carries every indicator, hash and query in this app, so it
+           deserves a real face rather than the browser default. */
+        code,pre,kbd,samp{font-family:'JetBrains Mono','SF Mono',ui-monospace,
+             SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;
+             font-variant-ligatures:none;}
+
+        h1,h2,h3,h4{letter-spacing:-.015em;text-wrap:balance;}
+        p,li{text-wrap:pretty;}
+        input,select,textarea,button{font-feature-settings:inherit;}
+        ::selection{background:${C.accent}33;}
+        ::-webkit-scrollbar{width:10px;height:10px}
+        ::-webkit-scrollbar-track{background:transparent}
+        ::-webkit-scrollbar-thumb{background:${C.border};border-radius:6px;
+             border:2px solid transparent;background-clip:content-box}
+        ::-webkit-scrollbar-thumb:hover{background:${C.borderHi}}
+        `}</style>
         <div style={{width:"100%",maxWidth:440}}>
           <div style={{textAlign:"center",marginBottom:32}}><div style={{fontSize:24,fontWeight:700,letterSpacing:2,color:C.accentText,marginBottom:4}}>TFII</div><div style={{fontSize:12,color:C.muted,letterSpacing:1}}>THREATFEED INTELLIGENCE</div></div>
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:36,boxShadow:C.shadow}}>
@@ -8293,7 +8389,7 @@ export default function App(){
         .nav-item:hover svg{filter:drop-shadow(0 0 4px rgba(57,255,20,0.8))!important;}
       `}</style>}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
         *{box-sizing:border-box;}
         ::-webkit-scrollbar{width:5px;height:5px;}
         ::-webkit-scrollbar-track{background:transparent;}

@@ -6021,7 +6021,10 @@ def advisory_ioc_pool(
             WHERE ('connector'=ANY(tags) OR 'threatfox'=ANY(tags) OR 'malwarebazaar'=ANY(tags))
             AND (false_positive IS NULL OR false_positive = FALSE)
             {fam_filter} {type_filter}
-            ORDER BY confidence DESC, created_at DESC LIMIT %s
+            -- Newest first. Ordering by confidence first surfaced old
+            -- high-confidence rows and buried today's indicators, which is the
+            -- opposite of what an advisory needs.
+            ORDER BY created_at DESC, confidence DESC LIMIT %s
         """, params + [limit])
 
     rows = cur.fetchall()
