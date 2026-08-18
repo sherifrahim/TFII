@@ -4079,10 +4079,27 @@ async def osint_lookup(body: OSINTRequest, user=Depends(get_current_user)):
                                          "data_classes":b.get("DataClasses",[])[:5]} for b in breaches[:10]]}
                     elif r.status_code == 404:
                         results["data"]["hibp"] = {"breached":False}
+                    elif r.status_code in (401, 403):
+                        # HIBP moved to paid API keys. A 401 previously matched no
+                        # branch at all, so the whole section vanished from the
+                        # results with nothing said — which looks like a bug in
+                        # this app rather than an unpurchased subscription.
+                        results["data"]["hibp"] = {"unavailable":True,
+                            "reason":"HaveIBeenPwned requires a paid API subscription. "
+                                     "Add a valid key in Settings -> API Keys to enable "
+                                     "email breach lookup; every other OSINT source is unaffected."}
+                    elif r.status_code == 429:
+                        results["data"]["hibp"] = {"unavailable":True,
+                            "reason":"HaveIBeenPwned rate limit reached. Try again shortly."}
+                    else:
+                        results["data"]["hibp"] = {"unavailable":True,
+                            "reason":f"HaveIBeenPwned returned HTTP {r.status_code}."}
                 except Exception as e:
                     results["data"]["hibp"] = {"error":str(e)}
             else:
-                results["data"]["hibp"] = {"skipped":True}
+                results["data"]["hibp"] = {"skipped":True,
+                    "reason":"No HaveIBeenPwned key configured. It is a paid API; "
+                             "the rest of the OSINT lookup works without it."}
             try:
                 domain = body.target.split("@")[1] if "@" in body.target else None
                 if domain:
