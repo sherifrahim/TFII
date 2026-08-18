@@ -8164,6 +8164,7 @@ export default function App(){
   const [filterIndustry,setFilterIndustry]=useState("All"); const [filterType,setFilterType]=useState("All");
   const [filterTLP,setFilterTLP]=useState("All"); const [filterCampaign,setFilterCampaign]=useState("All");
   const [filterExpired,setFilterExpired]=useState(false); const [filterFP,setFilterFP]=useState(false);
+  const [feedSort,setFeedSort]=useState("triage");
   const [search,setSearch]=useState("");
   const blank={type:"IPv4",value:"",industry:"Fintech",tlp:"AMBER",confidence:75,description:"",tags:"",valid_days:90,mitre_techniques:[],campaign_id:""};
   const [form,setForm]=useState(blank);
@@ -8578,84 +8579,161 @@ export default function App(){
                 </label>
               </div>
 
-              {/* Count */}
-              <div style={{fontSize:12,color:C.muted,marginBottom:12}}>
-                <strong style={{color:C.white||C.textHi}}>{filtered.length}</strong> of {iocs.length} IOCs
-              </div>
+              {/* Triage bar. "3266 of 3266" told you the filter was not
+                  filtering and nothing else; these are the numbers you act on. */}
+              {(()=>{
+                const DAY=864e5, now=Date.now();
+                const isNew=i=>i.created_at&&(now-new Date(i.created_at).getTime())<DAY;
+                const stats={
+                  shown:filtered.length,
+                  total:iocs.length,
+                  fresh:filtered.filter(isNew).length,
+                  high:filtered.filter(i=>(i.confidence||0)>=75).length,
+                  flagged:filtered.filter(i=>i.false_positive||i.expired).length,
+                };
+                const Chip=({n,label,tone})=>(
+                  <span style={{display:"inline-flex",alignItems:"baseline",gap:4,fontSize:12,
+                    padding:"4px 12px",borderRadius:20,background:(tone||C.muted)+"14",
+                    border:`1px solid ${(tone||C.border)}33`,color:tone||C.muted}}>
+                    <strong style={{fontSize:13,fontWeight:700,fontVariantNumeric:"tabular-nums"}}>{n}</strong>
+                    <span style={{opacity:.85}}>{label}</span>
+                  </span>
+                );
+                return(
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:16}}>
+                    <Chip n={stats.shown} label={stats.shown===stats.total?"indicators":`of ${stats.total} shown`}/>
+                    {stats.fresh>0&&<Chip n={stats.fresh} label="new today" tone={C.accent}/>}
+                    <Chip n={stats.high} label="high confidence" tone={C.green}/>
+                    {stats.flagged>0&&<Chip n={stats.flagged} label="expired / FP" tone={C.amber}/>}
+                    <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
+                      <span style={{fontSize:11,color:C.muted}}>Sort</span>
+                      <select value={feedSort} onChange={e=>setFeedSort(e.target.value)}
+                        style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,
+                          padding:"4px 8px",borderRadius:6,fontSize:11.5,fontFamily:"inherit",cursor:"pointer"}}>
+                        <option value="triage">Triage — threats first</option>
+                        <option value="newest">Newest first</option>
+                        <option value="confidence">Confidence</option>
+                        <option value="type">Type</option>
+                      </select>
+                    </div>
+                  </div>
+                );
+              })()}
 
-              {loading&&<div style={{textAlign:"center",padding:48,color:C.muted}}>Loading...</div>}
+              {loading&&<SlowLoader C={C} pad={48} message="Loading indicators"/>}
 
-              {/* Compact card grid */}
               {!loading&&filtered.length===0&&(
                 <div style={{textAlign:"center",padding:48,color:C.muted,background:C.surface,
                   border:`1px solid ${C.border}`,borderRadius:12}}>
                   {iocs.length===0?"No IOCs yet — add one above.":"No matches for current filters."}
                 </div>
               )}
+
+              {(()=>{
+                // Fields that never vary carry no information. On this feed every
+                // row was TLP:AMBER / General / bulk-lookup / admin, so three of
+                // the five things on a card said nothing. Hide what is uniform.
+                const uniq=k=>new Set(filtered.map(i=>i[k]).filter(Boolean)).size;
+                const showTlp=uniq("tlp")>1, showIndustry=uniq("industry")>1, showAuthor=uniq("author")>1;
+                const commonTags=new Set();
+                if(filtered.length>1){
+                  const counts={};
+                  filtered.forEach(i=>(i.tags||[]).forEach(t=>{counts[t]=(counts[t]||0)+1;}));
+                  Object.entries(counts).forEach(([t,c])=>{ if(c===filtered.length) commonTags.add(t); });
+                }
+                const DAY=864e5, now=Date.now();
+                const score=i=>{
+                  // Triage order: unreviewed threats first. Confidence dominates,
+                  // recency breaks ties, and anything expired or marked false
+                  // positive sinks regardless of score.
+                  const c=i.confidence||0;
+                  const age=i.created_at?(now-new Date(i.created_at).getTime())/DAY:999;
+                  const penalty=(i.false_positive?1000:0)+(i.expired?500:0);
+                  return penalty-(c*10)+Math.min(age,90);
+                };
+                const sorted=[...filtered].sort((a,b)=>
+                  feedSort==="newest"     ? new Date(b.created_at||0)-new Date(a.created_at||0)
+                : feedSort==="confidence" ? (b.confidence||0)-(a.confidence||0)
+                : feedSort==="type"       ? String(a.type).localeCompare(String(b.type))||(b.confidence||0)-(a.confidence||0)
+                :                           score(a)-score(b));
+
+                return(
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:12}}>
-                {filtered.map(ioc=>{
+                {sorted.map(ioc=>{
                   const canDelete=me?.role==="admin"||ioc.created_by===me?.id;
                   const conf=ioc.confidence||0;
-                  const confColor=conf>=75?C.green:conf>=50?C.amber:C.red;
+                  const confColor=conf>=75?C.red:conf>=50?C.amber:C.muted;
+                  const verdict=conf>=75?"malicious":conf>=50?"suspicious":"low";
+                  const fresh=ioc.created_at&&(now-new Date(ioc.created_at).getTime())<DAY;
+                  const tags=(ioc.tags||[]).filter(t=>!commonTags.has(t));
                   return(
                     <div key={ioc.id} onClick={()=>setSelectedIOC(ioc)}
                       style={{background:C.surface,border:`1px solid ${
-                        ioc.false_positive?C.amber+"50":ioc.expired?C.border:C.border}`,
-                        borderRadius:10,padding:"12px 16px",cursor:"pointer",
-                        boxShadow:C.shadow,transition:"border-color .12s, box-shadow .12s",
-                        opacity:ioc.expired?0.65:1}}
-                      onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.boxShadow=C.shadowMd||C.shadow;}}
-                      onMouseLeave={e=>{e.currentTarget.style.borderColor=ioc.false_positive?C.amber+"50":C.border;e.currentTarget.style.boxShadow=C.shadow;}}>
+                        ioc.false_positive?C.amber+"50":C.border}`,
+                        borderRadius:10,cursor:"pointer",display:"flex",overflow:"hidden",
+                        boxShadow:C.shadow,transition:"border-color .12s, box-shadow .12s, transform .12s",
+                        opacity:ioc.expired?0.55:1}}
+                      onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.boxShadow=C.shadowMd;e.currentTarget.style.transform="translateY(-1px)";}}
+                      onMouseLeave={e=>{e.currentTarget.style.borderColor=ioc.false_positive?C.amber+"50":C.border;e.currentTarget.style.boxShadow=C.shadow;e.currentTarget.style.transform="none";}}>
 
-                      {/* Top row: type badge + value + delete */}
-                      <div style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:8}}>
-                        <span style={{fontSize:10,padding:"2px 7px",borderRadius:4,fontWeight:700,
-                          background:C.accentDim,color:C.accentText,flexShrink:0,marginTop:2}}>
-                          {ioc.type}
-                        </span>
-                        <span style={{fontWeight:600,color:C.white||C.textHi,
-                          flex:1,wordBreak:"break-all",lineHeight:1.3,fontFamily:"monospace",fontSize:12}}>
-                          {ioc.value_defanged||ioc.value}
-                        </span>
-                        {canDelete&&(
-                          <button onClick={e=>deleteIOC(ioc.id,e)}
-                            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
-                              fontSize:16,padding:0,flexShrink:0,opacity:.5,lineHeight:1}}>×</button>
-                        )}
-                      </div>
+                      {/* Severity rail — lets you scan a screenful without reading */}
+                      <div style={{width:3,flexShrink:0,background:confColor,opacity:ioc.expired?.4:1}}/>
 
-                      {/* Mid row: TLP + industry + conf bar */}
-                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
-                        <TLPBadge level={ioc.tlp}/>
-                        {ioc.industry&&<span style={{fontSize:11,color:C.purple,fontWeight:500}}>{ioc.industry}</span>}
-                        {ioc.campaign_id&&<span style={{fontSize:11,color:C.amber,fontWeight:500}}>📁 Campaign</span>}
-                        {ioc.false_positive&&<span style={{fontSize:10,color:C.amber,border:`1px solid ${C.amber}40`,padding:"1px 5px",borderRadius:3,fontWeight:700}}>FP</span>}
-                        {ioc.expired&&<span style={{fontSize:10,color:C.red,border:`1px solid ${C.red}40`,padding:"1px 5px",borderRadius:3,fontWeight:700}}>EXPIRED</span>}
-                        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
-                          <div style={{width:40,height:3,background:C.border,borderRadius:2,overflow:"hidden"}}>
-                            <div style={{width:`${conf}%`,height:"100%",background:confColor,borderRadius:2}}/>
-                          </div>
-                          <span style={{fontSize:10,color:confColor,fontWeight:700}}>{conf}%</span>
-                        </div>
-                      </div>
-
-                      {/* Bottom row: tags + MITRE + author */}
-                      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                        {(ioc.tags||[]).slice(0,3).map(t=><Tag key={t} label={t} C={C}/>)}
-                        {(ioc.tags||[]).length>3&&<Tag label={`+${ioc.tags.length-3}`} C={C}/>}
-                        {(ioc.mitre_techniques||[]).length>0&&(
-                          <span style={{fontSize:10,padding:"1px 6px",borderRadius:3,
-                            background:C.purple+"20",color:C.purple,fontWeight:600}}>
-                            {ioc.mitre_techniques[0].split(" - ")[0]}
-                            {ioc.mitre_techniques.length>1&&` +${ioc.mitre_techniques.length-1}`}
+                      <div style={{flex:1,minWidth:0,padding:"12px 16px"}}>
+                        {/* Value is the hero. A hash is one token, so it truncates
+                            rather than breaking mid-string across two lines. */}
+                        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                          <span title={ioc.value_defanged||ioc.value}
+                            style={{flex:1,minWidth:0,fontWeight:600,color:C.white||C.textHi,
+                              fontFamily:"'JetBrains Mono',ui-monospace,monospace",fontSize:12.5,
+                              whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                            {ioc.value_defanged||ioc.value}
                           </span>
-                        )}
-                        <span style={{marginLeft:"auto",fontSize:10,color:C.muted}}>{ioc.author||"?"}</span>
+                          {fresh&&<span style={{fontSize:9,fontWeight:700,letterSpacing:".06em",
+                            padding:"2px 8px",borderRadius:20,flexShrink:0,
+                            background:C.accent+"1e",color:C.accentText}}>NEW</span>}
+                          {canDelete&&(
+                            <button onClick={e=>deleteIOC(ioc.id,e)} title="Delete indicator"
+                              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                                fontSize:15,padding:"0 2px",flexShrink:0,opacity:.35,lineHeight:1}}
+                              onMouseEnter={e=>{e.currentTarget.style.opacity=1;e.currentTarget.style.color=C.red;}}
+                              onMouseLeave={e=>{e.currentTarget.style.opacity=.35;e.currentTarget.style.color=C.muted;}}>×</button>
+                          )}
+                        </div>
+
+                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                          <span style={{fontSize:9.5,padding:"2px 8px",borderRadius:4,fontWeight:700,
+                            letterSpacing:".04em",background:C.surfaceHi,color:C.muted,flexShrink:0}}>
+                            {ioc.type}
+                          </span>
+                          <span style={{fontSize:11,fontWeight:700,color:confColor,
+                            fontVariantNumeric:"tabular-nums"}}>{conf}%</span>
+                          <span style={{fontSize:10.5,color:confColor,opacity:.85}}>{verdict}</span>
+
+                          {showTlp&&<TLPBadge level={ioc.tlp}/>}
+                          {showIndustry&&ioc.industry&&<span style={{fontSize:10.5,color:C.purple}}>{ioc.industry}</span>}
+                          {ioc.campaign_id&&<span style={{fontSize:10.5,color:C.amber}}>campaign</span>}
+                          {ioc.false_positive&&<span style={{fontSize:9.5,color:C.amber,
+                            border:`1px solid ${C.amber}40`,padding:"1px 6px",borderRadius:3}}>false positive</span>}
+                          {ioc.expired&&<span style={{fontSize:9.5,color:C.red,
+                            border:`1px solid ${C.red}40`,padding:"1px 6px",borderRadius:3}}>expired</span>}
+                          {tags.slice(0,2).map(t=><Tag key={t} label={t} C={C}/>)}
+                          {tags.length>2&&<Tag label={`+${tags.length-2}`} C={C}/>}
+                          {(ioc.mitre_techniques||[]).length>0&&(
+                            <span style={{fontSize:9.5,padding:"1px 6px",borderRadius:3,
+                              background:C.purple+"20",color:C.purple,fontWeight:600}}>
+                              {ioc.mitre_techniques[0].split(" - ")[0]}
+                            </span>
+                          )}
+                          {showAuthor&&<span style={{marginLeft:"auto",fontSize:10,color:C.muted}}>{ioc.author||"?"}</span>}
+                        </div>
                       </div>
                     </div>
                   );
                 })}
               </div>
+                );
+              })()}
               {!loading&&filtered.length>0&&(
                 <div style={{marginTop:12,fontSize:11,color:C.muted,textAlign:"center"}}>
                   Click any card for enrichment details, notes, score history, and relationships
