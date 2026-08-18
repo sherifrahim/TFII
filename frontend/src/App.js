@@ -53,103 +53,112 @@ const COUNTRY_FLAGS = {
 };
 
 const THEMES = {
-  // Professional light
-  light:{
-    name:"Light",font:"'Inter',sans-serif",
-    bg:"#f8fafc",surface:"#ffffff",surfaceHi:"#f1f5f9",
-    border:"#e2e8f0",borderHi:"#cbd5e1",
-    accent:"#10b981",accentDim:"#10b98112",accentText:"#059669",accentHover:"#059669",
-    text:"#475569",textHi:"#1e293b",muted:"#94a3b8",mutedHi:"#64748b",
-    white:"#0f172a",green:"#10b981",amber:"#f59e0b",red:"#ef4444",purple:"#8b5cf6",
-    inputBg:"#ffffff",inputBorder:"#e2e8f0",inputText:"#0f172a",
-    shadow:"0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04)",
-    shadowMd:"0 4px 6px -1px rgba(0,0,0,0.07),0 2px 4px -1px rgba(0,0,0,0.04)",
-    badge:"#f1f5f9",navActive:"#f0fdf4",navActiveBorder:"#10b981",
-    statNum:"#0f172a",statLabel:"#10b981",
-    sidebarBg:"#ffffff",topbarBg:"#ffffff",
+  // Every theme carries the same token set. `white` is the highest-contrast text
+  // colour, not a literal white — it inverts in light themes.
+  //
+  // Depth comes from stacked low-opacity shadows rather than a single hairline:
+  // one tight contact shadow, one mid diffuse, one wide ambient. That is the
+  // difference between "a box with a border" and a surface sitting above a page.
+
+  // ── Porcelain: warm paper, ink, jade. Quiet and document-like. ──────────────
+  porcelain:{
+    name:"Porcelain",font:"'Inter',-apple-system,BlinkMacSystemFont,sans-serif",
+    bg:"#faf9f7",surface:"#ffffff",surfaceHi:"#f4f2ef",
+    border:"#e7e3dd",borderHi:"#d6d0c7",
+    accent:"#0b6e4f",accentDim:"#0b6e4f10",accentText:"#0a5c42",accentHover:"#095a41",
+    text:"#57534e",textHi:"#1c1b18",muted:"#a8a29a",mutedHi:"#78716c",
+    white:"#1c1b18",green:"#0b6e4f",amber:"#a86e18",red:"#b4342a",purple:"#6d5296",
+    inputBg:"#ffffff",inputBorder:"#e7e3dd",inputText:"#1c1b18",
+    shadow:"0 1px 2px rgba(28,27,24,.04),0 4px 12px -2px rgba(28,27,24,.05),0 12px 32px -12px rgba(28,27,24,.08)",
+    shadowMd:"0 2px 4px rgba(28,27,24,.05),0 12px 28px -6px rgba(28,27,24,.10),0 24px 56px -20px rgba(28,27,24,.12)",
+    badge:"#f4f2ef",navActive:"#0b6e4f0f",navActiveBorder:"#0b6e4f",
+    statNum:"#1c1b18",statLabel:"#0b6e4f",
+    sidebarBg:"#fdfcfb",topbarBg:"#fdfcfbe6",
     glass:false,
   },
-  // Professional dark
-  dark:{
-    name:"Dark",font:"'Inter',sans-serif",
-    bg:"#0f172a",surface:"#1e293b",surfaceHi:"#334155",
-    border:"#334155",borderHi:"#475569",
-    accent:"#10b981",accentDim:"#10b98118",accentText:"#34d399",accentHover:"#34d399",
-    text:"#94a3b8",textHi:"#e2e8f0",muted:"#64748b",mutedHi:"#94a3b8",
-    white:"#f1f5f9",green:"#10b981",amber:"#f59e0b",red:"#f87171",purple:"#a78bfa",
-    inputBg:"#1e293b",inputBorder:"#334155",inputText:"#f1f5f9",
-    shadow:"0 1px 3px rgba(0,0,0,0.3)",shadowMd:"0 4px 6px -1px rgba(0,0,0,0.4)",
-    badge:"#334155",navActive:"#10b98118",navActiveBorder:"#10b981",
-    statNum:"#f1f5f9",statLabel:"#10b981",
-    sidebarBg:"#1e293b",topbarBg:"#1e293b",
+
+  // ── Graphite: neutral dark with a cool cast. The everyday dark. ─────────────
+  graphite:{
+    name:"Graphite",font:"'Inter',-apple-system,BlinkMacSystemFont,sans-serif",
+    bg:"#131519",surface:"#1a1d22",surfaceHi:"#22262d",
+    border:"#2a2f37",borderHi:"#3a414b",
+    accent:"#3fbf8f",accentDim:"#3fbf8f14",accentText:"#6fd6ae",accentHover:"#4fd0a0",
+    text:"#b6bcc6",textHi:"#f2f4f7",muted:"#7c848f",mutedHi:"#9aa2ad",
+    white:"#f2f4f7",green:"#3fbf8f",amber:"#e0a34a",red:"#ef6b63",purple:"#a98bdc",
+    inputBg:"#16191d",inputBorder:"#2a2f37",inputText:"#f2f4f7",
+    shadow:"0 1px 2px rgba(0,0,0,.35),0 4px 14px -3px rgba(0,0,0,.4)",
+    shadowMd:"0 2px 6px rgba(0,0,0,.4),0 16px 40px -12px rgba(0,0,0,.6)",
+    badge:"#22262d",navActive:"#3fbf8f16",navActiveBorder:"#3fbf8f",
+    statNum:"#f2f4f7",statLabel:"#3fbf8f",
+    sidebarBg:"#16181c",topbarBg:"#16181ce6",
     glass:false,
   },
-  // Phosphor — CRT phosphor glow, replaces Operator
-  phosphor:{
-    name:"Phosphor",font:"'Space Mono',monospace",
-    bg:"#000a00",surface:"#010f01",surfaceHi:"#001a00",
-    border:"#003300",borderHi:"#005500",
-    accent:"#39ff14",accentDim:"#39ff1415",accentText:"#39ff14",accentHover:"#7fff00",
-    text:"#00bb00",textHi:"#39ff14",muted:"#005500",mutedHi:"#007700",
-    white:"#c8ffc8",green:"#39ff14",amber:"#ccff00",red:"#ff4444",purple:"#cc44ff",
-    inputBg:"#000d00",inputBorder:"#004400",inputText:"#39ff14",
-    shadow:"0 0 12px rgba(57,255,20,0.15)",shadowMd:"0 0 24px rgba(57,255,20,0.2)",
-    badge:"#001a00",navActive:"#39ff1412",navActiveBorder:"#39ff14",
-    statNum:"#39ff14",statLabel:"#007700",
-    sidebarBg:"#010f01",topbarBg:"#010f01",
+
+  // ── Obsidian: near-black with warm brass. Dramatic, low-light rooms. ────────
+  obsidian:{
+    name:"Obsidian",font:"'Inter',-apple-system,BlinkMacSystemFont,sans-serif",
+    bg:"#0b0b0d",surface:"#131316",surfaceHi:"#1b1b20",
+    border:"#26262c",borderHi:"#38383f",
+    accent:"#c8a44d",accentDim:"#c8a44d14",accentText:"#dcbe72",accentHover:"#d6b45e",
+    text:"#b0aca4",textHi:"#f5f2ec",muted:"#77736c",mutedHi:"#959088",
+    white:"#f5f2ec",green:"#5cba8a",amber:"#c8a44d",red:"#d9605a",purple:"#9b86c9",
+    inputBg:"#0f0f12",inputBorder:"#26262c",inputText:"#f5f2ec",
+    shadow:"0 1px 2px rgba(0,0,0,.5),0 6px 18px -4px rgba(0,0,0,.55)",
+    shadowMd:"0 2px 8px rgba(0,0,0,.55),0 20px 48px -14px rgba(0,0,0,.75)",
+    badge:"#1b1b20",navActive:"#c8a44d16",navActiveBorder:"#c8a44d",
+    statNum:"#f5f2ec",statLabel:"#c8a44d",
+    sidebarBg:"#0e0e11",topbarBg:"#0e0e11e6",
     glass:false,
-    // Phosphor-specific: used for glow text-shadow in extra CSS
-    glow:"0 0 8px rgba(57,255,20,0.8), 0 0 16px rgba(57,255,20,0.4)",
-    scanlines:true,
   },
-  // Glassmorphic — frosted glass over aurora gradient
-  glass:{
-    name:"Glassmorphic",font:"'Inter',sans-serif",
-    // bg is the full-viewport aurora gradient — rendered via special wrapper
-    bg:"linear-gradient(135deg,#0d0221 0%,#0f3460 30%,#16213e 60%,#1a0533 100%)",
-    surface:"rgba(255,255,255,0.06)",surfaceHi:"rgba(255,255,255,0.10)",
-    border:"rgba(255,255,255,0.12)",borderHi:"rgba(255,255,255,0.22)",
-    accent:"#c084fc",accentDim:"rgba(192,132,252,0.15)",accentText:"#e879f9",accentHover:"#e879f9",
-    text:"rgba(255,255,255,0.72)",textHi:"rgba(255,255,255,0.95)",
-    muted:"rgba(255,255,255,0.38)",mutedHi:"rgba(255,255,255,0.55)",
-    white:"#ffffff",green:"#4ade80",amber:"#fbbf24",red:"#f87171",purple:"#c084fc",
-    inputBg:"rgba(255,255,255,0.07)",inputBorder:"rgba(255,255,255,0.15)",inputText:"rgba(255,255,255,0.92)",
-    shadow:"0 8px 32px rgba(0,0,0,0.4)",shadowMd:"0 16px 48px rgba(0,0,0,0.5)",
-    badge:"rgba(255,255,255,0.08)",navActive:"rgba(192,132,252,0.18)",navActiveBorder:"#c084fc",
-    statNum:"#ffffff",statLabel:"#c084fc",
-    sidebarBg:"rgba(255,255,255,0.04)",topbarBg:"rgba(255,255,255,0.04)",
-    glass:true,          // flag: enable backdrop-filter and gradient bg wrapper
-    blur:"blur(20px)",
-    auroraOrbs:true,     // flag: render decorative aurora orbs in backdrop
+
+  // ── Midnight: deep navy, cold blue. Reads as an ops console. ────────────────
+  midnight:{
+    name:"Midnight",font:"'Inter',-apple-system,BlinkMacSystemFont,sans-serif",
+    bg:"#0a0f1a",surface:"#111827",surfaceHi:"#182133",
+    border:"#22304a",borderHi:"#32425f",
+    accent:"#4c8dff",accentDim:"#4c8dff14",accentText:"#84b0ff",accentHover:"#5f9aff",
+    text:"#a8b6cc",textHi:"#eef3fb",muted:"#6b7c96",mutedHi:"#8798b2",
+    white:"#eef3fb",green:"#3fbf8f",amber:"#e0a34a",red:"#f0655e",purple:"#a98bdc",
+    inputBg:"#0d1421",inputBorder:"#22304a",inputText:"#eef3fb",
+    shadow:"0 1px 2px rgba(0,0,0,.4),0 6px 18px -4px rgba(3,8,20,.55)",
+    shadowMd:"0 2px 8px rgba(0,0,0,.45),0 20px 48px -14px rgba(3,8,20,.7)",
+    badge:"#182133",navActive:"#4c8dff16",navActiveBorder:"#4c8dff",
+    statNum:"#eef3fb",statLabel:"#4c8dff",
+    sidebarBg:"#0c121f",topbarBg:"#0c121fe6",
+    glass:false,
   },
-  // Tokyo Night — deep purple-blue, VS Code vibes
+
+  // ── Tokyo Night: kept, but re-shadowed to match the others. ─────────────────
   tokyo:{
-    name:"Tokyo Night",font:"'Inter',sans-serif",
-    bg:"#1a1b2e",surface:"#24283b",surfaceHi:"#2f3549",
-    border:"#414868",borderHi:"#565f89",
-    accent:"#7c3aed",accentDim:"#7c3aed18",accentText:"#bb9af7",accentHover:"#c0a8f8",
-    text:"#a9b1d6",textHi:"#c0caf5",muted:"#565f89",mutedHi:"#737aa2",
-    white:"#c0caf5",green:"#9ece6a",amber:"#e0af68",red:"#f7768e",purple:"#bb9af7",
-    inputBg:"#1f2335",inputBorder:"#414868",inputText:"#c0caf5",
-    shadow:"0 2px 12px rgba(0,0,0,0.4)",shadowMd:"0 8px 24px rgba(0,0,0,0.5)",
-    badge:"#2f3549",navActive:"#7c3aed18",navActiveBorder:"#7c3aed",
-    statNum:"#c0caf5",statLabel:"#bb9af7",
-    sidebarBg:"#1f2335",topbarBg:"#1f2335",
+    name:"Tokyo Night",font:"'Inter',-apple-system,BlinkMacSystemFont,sans-serif",
+    bg:"#1a1b26",surface:"#20212e",surfaceHi:"#292b3a",
+    border:"#32344a",borderHi:"#414868",
+    accent:"#7aa2f7",accentDim:"#7aa2f714",accentText:"#9eb9f9",accentHover:"#89aef8",
+    text:"#a9b1d6",textHi:"#f0f2fb",muted:"#6f7691",mutedHi:"#8a92b2",
+    white:"#f0f2fb",green:"#9ece6a",amber:"#e0af68",red:"#f7768e",purple:"#bb9af7",
+    inputBg:"#1b1c28",inputBorder:"#32344a",inputText:"#f0f2fb",
+    shadow:"0 1px 2px rgba(0,0,0,.4),0 6px 18px -4px rgba(10,10,20,.5)",
+    shadowMd:"0 2px 8px rgba(0,0,0,.45),0 20px 48px -14px rgba(10,10,20,.7)",
+    badge:"#292b3a",navActive:"#7aa2f716",navActiveBorder:"#7aa2f7",
+    statNum:"#f0f2fb",statLabel:"#7aa2f7",
+    sidebarBg:"#1c1d29",topbarBg:"#1c1d29e6",
     glass:false,
   },
-  // Nord — Nordic blue-gray, calm and readable
+
+  // ── Nord: kept, re-shadowed. ───────────────────────────────────────────────
   nord:{
-    name:"Nord",font:"'Inter',sans-serif",
-    bg:"#2e3440",surface:"#3b4252",surfaceHi:"#434c5e",
-    border:"#4c566a",borderHi:"#5e6779",
-    accent:"#88c0d0",accentDim:"#88c0d018",accentText:"#88c0d0",accentHover:"#8fbcbb",
-    text:"#d8dee9",textHi:"#eceff4",muted:"#4c566a",mutedHi:"#616e88",
+    name:"Nord",font:"'Inter',-apple-system,BlinkMacSystemFont,sans-serif",
+    bg:"#2e3440",surface:"#343c4a",surfaceHi:"#3d4757",
+    border:"#454f61",borderHi:"#566178",
+    accent:"#88c0d0",accentDim:"#88c0d016",accentText:"#a8d4e0",accentHover:"#95c9d8",
+    text:"#c8d0dc",textHi:"#eceff4",muted:"#8891a1",mutedHi:"#a2abbb",
     white:"#eceff4",green:"#a3be8c",amber:"#ebcb8b",red:"#bf616a",purple:"#b48ead",
-    inputBg:"#3b4252",inputBorder:"#4c566a",inputText:"#eceff4",
-    shadow:"0 2px 8px rgba(0,0,0,0.3)",shadowMd:"0 4px 16px rgba(0,0,0,0.4)",
-    badge:"#434c5e",navActive:"#88c0d018",navActiveBorder:"#88c0d0",
+    inputBg:"#2b313c",inputBorder:"#454f61",inputText:"#eceff4",
+    shadow:"0 1px 2px rgba(0,0,0,.3),0 6px 18px -4px rgba(20,24,32,.45)",
+    shadowMd:"0 2px 8px rgba(0,0,0,.35),0 20px 48px -14px rgba(20,24,32,.6)",
+    badge:"#3d4757",navActive:"#88c0d016",navActiveBorder:"#88c0d0",
     statNum:"#eceff4",statLabel:"#88c0d0",
-    sidebarBg:"#3b4252",topbarBg:"#3b4252",
+    sidebarBg:"#2b313c",topbarBg:"#2b313ce6",
     glass:false,
   },
 };
@@ -7678,14 +7687,9 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
     setTimeout(()=>setAccessMsg(""),6000);
   }
 
-  const THEMES_LIST=[
-    {id:"light",label:"Light"},
-    {id:"dark",label:"Dark"},
-    {id:"phosphor",label:"Phosphor"},
-    {id:"glass",label:"Glassmorphic"},
-    {id:"tokyo",label:"Tokyo Night"},
-    {id:"nord",label:"Nord"},
-  ];
+  // Derived from THEMES so adding or renaming a palette cannot leave the picker
+  // pointing at a key that no longer exists.
+  const THEMES_LIST=Object.entries(THEMES).map(([id,t])=>({id,label:t.name}));
 
   useEffect(()=>{
     if(!isAdmin) return;
@@ -8065,8 +8069,17 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
 
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 export default function App(){
-  const [themeName,setThemeName]=useState(()=>localStorage.getItem("tf_theme")||"light");
-  const C=THEMES[themeName]||THEMES.dark;
+  // The theme keys were renamed when the palettes were redesigned. Anyone with a
+  // saved legacy name would otherwise resolve to undefined and get a white
+  // screen, so map the old names onto their closest replacement.
+  const [themeName,setThemeName]=useState(()=>{
+    const saved=localStorage.getItem("tf_theme");
+    const LEGACY={light:"porcelain",dark:"graphite",phosphor:"obsidian",
+                  glass:"midnight",operator:"obsidian"};
+    const resolved=LEGACY[saved]||saved;
+    return THEMES[resolved]?resolved:"porcelain";
+  });
+  const C=THEMES[themeName]||THEMES.porcelain;
   const [mode,setMode]=useState(()=>localStorage.getItem("tf_mode")||"ioc");
   function switchMode(m){
     setMode(m); localStorage.setItem("tf_mode",m);
