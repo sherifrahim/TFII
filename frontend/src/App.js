@@ -308,12 +308,12 @@ function Field({label,children,C}){
   );
 }
 function Inp({value,onChange,type="text",placeholder,C,rows}){
-  const base={width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"10px 14px",borderRadius:8,fontSize:14,outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
+  const base={width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"12px 16px",borderRadius:8,fontSize:14,outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
   if(rows)return <textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} style={{...base,resize:"vertical"}}/>;
   return <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={base}/>;
 }
 function Sel({value,onChange,options,C}){
-  return <select value={value} onChange={e=>onChange(e.target.value)} style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}>
+  return <select value={value} onChange={e=>onChange(e.target.value)} style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"12px 12px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}>
     {options.map(o=><option key={o} value={o}>{o}</option>)}
   </select>;
 }
@@ -336,7 +336,7 @@ function SlowLoader({C,message,hint,pad=32}){
   },[]);
   return(
     <div style={{textAlign:"center",padding:pad,color:C.muted}}>
-      <div style={{display:"inline-flex",alignItems:"center",gap:9,fontSize:13}}>
+      <div style={{display:"inline-flex",alignItems:"center",gap:8,fontSize:13}}>
         <span style={{width:11,height:11,borderRadius:"50%",flexShrink:0,
           border:`2px solid ${C.accent}`,borderTopColor:"transparent",
           display:"inline-block",animation:"tfspin .8s linear infinite"}}/>
@@ -352,8 +352,8 @@ function SlowLoader({C,message,hint,pad=32}){
 function StatCard({label,value,color,C,sublabel}){
   return(
     <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-      padding:"22px 24px",boxShadow:C.shadow,transition:"box-shadow .15s"}}>
-      <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6}}>
+      padding:"24px 24px",boxShadow:C.shadow,transition:"box-shadow .15s"}}>
+      <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6}}>
         <span style={{fontSize:38,fontWeight:700,letterSpacing:"-0.02em",
           color:C.statNum,lineHeight:1}}>{typeof value==="number"?value.toLocaleString():value}</span>
         {sublabel&&<span style={{fontSize:13,fontWeight:600,color:color||C.statLabel}}>{sublabel}</span>}
@@ -440,7 +440,7 @@ function NotificationBell({token,C,isAdmin}){
 
       {open&&(
         <div style={{position:"absolute",top:"calc(100% + 8px)",right:0,width:380,maxHeight:520,overflowY:"auto",background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,boxShadow:C.shadow,zIndex:400}}>
-          <div style={{padding:"14px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,background:C.surface}}>
+          <div style={{padding:"16px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,background:C.surface}}>
             <div style={{fontSize:13,fontWeight:700,color:C.white}}>Notifications {count>0&&<span style={{fontSize:11,color:C.red,fontWeight:700}}>({count} unread)</span>}</div>
             {count>0&&<button onClick={markAllRead} style={{fontSize:11,color:C.accentText,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Mark all read</button>}
           </div>
@@ -460,7 +460,7 @@ function NotificationBell({token,C,isAdmin}){
                 style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}20`,cursor:n.read?"default":"pointer",background:n.read?"transparent":color+"08",transition:"background .15s"}}
                 onMouseEnter={e=>!n.read&&(e.currentTarget.style.background=color+"12")}
                 onMouseLeave={e=>!n.read&&(e.currentTarget.style.background=color+"08")}>
-                <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
                   <span style={{fontSize:18,flexShrink:0,marginTop:1}}>{icon}</span>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:4}}>
@@ -618,7 +618,7 @@ function CVEReportModal({cveId,token,C,onClose}){
           <div style={{display:"flex",background:C.surfaceHi,borderRadius:8,padding:3,gap:2}}>
             {[["email","📧 Email Draft"],["summary","📋 Summary Brief"]].map(([val,label])=>(
               <button key={val} onClick={()=>{setFormat(val);setResult(null);setErr("");}}
-                style={{padding:"7px 16px",borderRadius:6,border:"none",cursor:"pointer",
+                style={{padding:"8px 16px",borderRadius:6,border:"none",cursor:"pointer",
                   fontSize:12,fontFamily:"inherit",fontWeight:600,
                   background:format===val?C.accent:"transparent",
                   color:format===val?"#fff":C.muted}}>
@@ -651,7 +651,7 @@ function CVEReportModal({cveId,token,C,onClose}){
 
         {/* Body */}
         <div style={{flex:1,overflowY:"auto",padding:"16px 24px"}}>
-          {err&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,
+          {err&&<div style={{padding:"12px 16px",background:C.red+"10",border:`1px solid ${C.red}30`,
             borderRadius:8,color:C.red,fontSize:13,marginBottom:12}}>{err}</div>}
 
           {loading&&(
@@ -684,10 +684,10 @@ function CVEReportModal({cveId,token,C,onClose}){
           {result&&(
             <div>
               {/* PoC status banner */}
-              <div style={{marginBottom:12,padding:"10px 14px",borderRadius:8,
+              <div style={{marginBottom:12,padding:"12px 16px",borderRadius:8,
                 background:result.poc?.available?C.red+"08":C.green+"08",
                 border:`1px solid ${result.poc?.available?C.red:C.green}30`,
-                display:"flex",alignItems:"center",gap:10}}>
+                display:"flex",alignItems:"center",gap:12}}>
                 <span style={{fontSize:16}}>
                   {result.poc?.available?"🚨":"✅"}
                 </span>
@@ -708,7 +708,7 @@ function CVEReportModal({cveId,token,C,onClose}){
                     </div>
                   )}
                 </div>
-                <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
                   <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
                     background:(SEV_COLORS[result.severity]||C.muted)+"20",
                     color:SEV_COLORS[result.severity]||C.muted}}>
@@ -719,7 +719,7 @@ function CVEReportModal({cveId,token,C,onClose}){
 
               {/* Email subject */}
               {format==="email"&&result.subject&&(
-                <div style={{marginBottom:12,padding:"10px 14px",background:C.surfaceHi,
+                <div style={{marginBottom:12,padding:"12px 16px",background:C.surfaceHi,
                   border:`1px solid ${C.border}`,borderRadius:8}}>
                   <span style={{fontSize:10,color:C.muted,fontWeight:700,
                     textTransform:"uppercase",letterSpacing:"0.05em"}}>Subject: </span>
@@ -737,7 +737,7 @@ function CVEReportModal({cveId,token,C,onClose}){
 
               {/* PoC links */}
               {result.poc?.available&&result.poc?.results?.length>0&&(
-                <div style={{marginTop:12,padding:"14px 16px",background:C.red+"08",
+                <div style={{marginTop:12,padding:"16px 16px",background:C.red+"08",
                   border:`1px solid ${C.red}20`,borderRadius:10}}>
                   <div style={{fontSize:11,color:C.red,fontWeight:700,marginBottom:10,
                     textTransform:"uppercase",letterSpacing:"0.05em"}}>
@@ -898,12 +898,12 @@ function CVEDetail({cve,token,onClose,C}){
           background:C.surfaceHi,position:"sticky",top:0,zIndex:10}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
             <div style={{flex:1,minWidth:0,marginRight:12}}>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6,flexWrap:"wrap"}}>
                 <span style={{fontSize:16,fontWeight:800,color:C.accentText,fontFamily:"monospace",
                   letterSpacing:"-0.01em"}}>{d.cve_id}</span>
-                {inKev&&<span style={{fontSize:11,padding:"3px 9px",borderRadius:5,fontWeight:700,
+                {inKev&&<span style={{fontSize:11,padding:"4px 8px",borderRadius:5,fontWeight:700,
                   background:C.red+"20",color:C.red,border:`1px solid ${C.red}40`}}>🚨 CISA KEV</span>}
-                {d.patch_available&&<span style={{fontSize:11,padding:"3px 9px",borderRadius:5,fontWeight:700,
+                {d.patch_available&&<span style={{fontSize:11,padding:"4px 8px",borderRadius:5,fontWeight:700,
                   background:C.green+"20",color:C.green,border:`1px solid ${C.green}40`}}>✅ Patch Available</span>}
                 <a href={`https://nvd.nist.gov/vuln/detail/${d.cve_id}`} target="_blank" rel="noreferrer"
                   style={{fontSize:11,color:C.muted,display:"flex",alignItems:"center",gap:3}}>
@@ -983,7 +983,7 @@ function CVEDetail({cve,token,onClose,C}){
           {tab==="overview"&&(
             <div>
               {/* Description */}
-              <div style={{fontSize:13,color:C.text,lineHeight:1.8,padding:"14px 16px",
+              <div style={{fontSize:13,color:C.text,lineHeight:1.8,padding:"16px 16px",
                 background:C.surfaceHi,borderRadius:10,marginBottom:18,border:`1px solid ${C.border}`}}>
                 {d.description||nvd?.description||"No description available."}
               </div>
@@ -1019,9 +1019,9 @@ function CVEDetail({cve,token,onClose,C}){
 
               {/* Scores grid */}
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",
-                gap:10,marginBottom:18}}>
+                gap:12,marginBottom:18}}>
                 {/* CVSS */}
-                <div style={{padding:"12px 14px",background:C.surfaceHi,
+                <div style={{padding:"12px 16px",background:C.surfaceHi,
                   border:`1px solid ${score>=9?C.red:score>=7?C.amber:C.border}30`,borderRadius:10}}>
                   <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6,textTransform:"uppercase"}}>CVSS v{nvd?.cvss?.version||"3.1"}</div>
                   <div style={{fontSize:22,fontWeight:800,color:scoreColor,lineHeight:1}}>{score||"N/A"}</div>
@@ -1029,7 +1029,7 @@ function CVEDetail({cve,token,onClose,C}){
                 </div>
                 {/* EPSS */}
                 {epss&&(
-                  <div style={{padding:"12px 14px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
+                  <div style={{padding:"12px 16px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
                     <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6,textTransform:"uppercase"}}>EPSS Score</div>
                     <div style={{fontSize:22,fontWeight:800,color:C.accentText,lineHeight:1}}>
                       {(epss.epss*100).toFixed(2)}%
@@ -1044,7 +1044,7 @@ function CVEDetail({cve,token,onClose,C}){
                   </div>
                 )}
                 {/* KEV */}
-                <div style={{padding:"12px 14px",background:inKev?C.red+"08":C.surfaceHi,
+                <div style={{padding:"12px 16px",background:inKev?C.red+"08":C.surfaceHi,
                   border:`1px solid ${inKev?C.red+"40":C.border}`,borderRadius:10}}>
                   <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6,textTransform:"uppercase"}}>CISA KEV</div>
                   <div style={{fontSize:14,fontWeight:700,color:inKev?C.red:C.muted}}>
@@ -1054,7 +1054,7 @@ function CVEDetail({cve,token,onClose,C}){
                 </div>
                 {/* CWE */}
                 {d.cwe&&(
-                  <div style={{padding:"12px 14px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
+                  <div style={{padding:"12px 16px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
                     <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6,textTransform:"uppercase"}}>Weakness</div>
                     <div style={{fontSize:13,fontWeight:700,color:C.purple}}>{d.cwe}</div>
                     <a href={`https://cwe.mitre.org/data/definitions/${d.cwe.replace("CWE-","")}.html`}
@@ -1068,7 +1068,7 @@ function CVEDetail({cve,token,onClose,C}){
 
               {/* Patch section */}
               {d.patch_available&&d.patch_url&&(
-                <div style={{padding:"14px 16px",background:C.green+"08",
+                <div style={{padding:"16px 16px",background:C.green+"08",
                   border:`1px solid ${C.green}30`,borderRadius:10,marginBottom:18}}>
                   <div style={{fontSize:11,fontWeight:700,color:C.green,marginBottom:8}}>
                     ✅ Vendor Patch / Advisory Available
@@ -1081,7 +1081,7 @@ function CVEDetail({cve,token,onClose,C}){
                   <a href={d.patch_url} target="_blank" rel="noreferrer"
                     style={{fontSize:12,color:C.green,fontWeight:600,padding:"6px 14px",
                       border:`1px solid ${C.green}40`,borderRadius:6,
-                      background:C.green+"10",display:"inline-flex",alignItems:"center",gap:6}}>
+                      background:C.green+"10",display:"inline-flex",alignItems:"center",gap:8}}>
                     <NavIcon name="externalLink" size={12} color={C.green}/>
                     View Patch / Advisory
                   </a>
@@ -1098,7 +1098,7 @@ function CVEDetail({cve,token,onClose,C}){
                   <div style={{background:C.surfaceHi,border:`1px solid ${C.border}`,
                     borderRadius:10,overflow:"hidden"}}>
                     {cveOrg.affected.map((a,i)=>(
-                      <div key={i} style={{padding:"10px 14px",
+                      <div key={i} style={{padding:"12px 16px",
                         borderBottom:i<cveOrg.affected.length-1?`1px solid ${C.border}20`:"none",
                         display:"flex",alignItems:"center",gap:8}}>
                         <span style={{fontSize:12,color:C.white||C.textHi,fontWeight:500}}>{a}</span>
@@ -1158,26 +1158,26 @@ function CVEDetail({cve,token,onClose,C}){
               {cvssMetrics&&(
                 <div>
                   {/* Vector string */}
-                  <div style={{padding:"10px 14px",background:C.surfaceHi,borderRadius:8,
+                  <div style={{padding:"12px 16px",background:C.surfaceHi,borderRadius:8,
                     marginBottom:20,fontFamily:"monospace",fontSize:12,color:C.accentText,
                     wordBreak:"break-all",border:`1px solid ${C.border}`}}>
                     {d.cvss_vector||nvd?.cvss?.vector}
                   </div>
                   {/* Metric grid */}
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10,marginBottom:20}}>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:20}}>
                     {Object.entries(cvssMetrics).filter(([k])=>CVSS_META[k]).map(([key,val])=>{
                       const meta=CVSS_META[key];
                       const valMeta=meta[val];
                       const color=cvssRiskColor(key,val);
                       const bg=cvssRiskBg(key,val);
                       return(
-                        <div key={key} style={{padding:"12px 14px",background:bg,
+                        <div key={key} style={{padding:"12px 16px",background:bg,
                           border:`1px solid ${color}40`,borderRadius:10}}>
                           <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:6,
                             textTransform:"uppercase",letterSpacing:"0.05em"}}>
                             {meta.label}
                           </div>
-                          <div style={{display:"flex",alignItems:"center",gap:6}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
                             <span style={{fontSize:16,fontWeight:800,color:color,
                               fontFamily:"monospace"}}>{key}:{val}</span>
                             <span style={{fontSize:13,color:color,fontWeight:600}}>
@@ -1219,7 +1219,7 @@ function CVEDetail({cve,token,onClose,C}){
                   <div style={{fontSize:11,fontWeight:700,color:
                     cat==="Patch"?C.green:cat==="Exploit"?C.red:cat==="Advisory"?C.amber:C.muted,
                     marginBottom:10,textTransform:"uppercase",letterSpacing:"0.06em",
-                    display:"flex",alignItems:"center",gap:6}}>
+                    display:"flex",alignItems:"center",gap:8}}>
                     <span style={{width:6,height:6,borderRadius:"50%",display:"inline-block",
                       background:cat==="Patch"?C.green:cat==="Exploit"?C.red:cat==="Advisory"?C.amber:C.border}}/>
                     {cat} ({refs.length})
@@ -1254,7 +1254,7 @@ function CVEDetail({cve,token,onClose,C}){
                     {v.id}
                   </div>
                   {v.packages?.map((p,j)=>(
-                    <div key={j} style={{display:"flex",alignItems:"center",gap:10,
+                    <div key={j} style={{display:"flex",alignItems:"center",gap:12,
                       padding:"8px 12px",background:C.surfaceHi,borderRadius:7,marginBottom:6}}>
                       <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,
                         background:C.accentDim,color:C.accentText,fontWeight:700}}>
@@ -1296,7 +1296,7 @@ function CVEDetail({cve,token,onClose,C}){
                     </span>
                   </div>
                   {src.status==="ok"&&src.source==="NVD"&&src.cvss&&(
-                    <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
+                    <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:8}}>
                       <span style={{fontSize:12,fontWeight:700,
                         color:(SEV_COLORS=>{return SEV_COLORS[src.cvss.severity]||C.muted;})({CRITICAL:C.red,HIGH:C.amber,MEDIUM:C.purple,LOW:C.green})
                       }}>CVSS {src.cvss.version}: {src.cvss.score} {src.cvss.severity}</span>
@@ -1398,14 +1398,14 @@ function RelGraph({iocId,iocValue,token,C}){
       <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"flex-end"}}>
         <div style={{flex:1,minWidth:180}}>
           <label style={{display:"block",fontSize:11,color:C.muted,marginBottom:4,fontWeight:600}}>Link to IOC</label>
-          <select value={newRelTarget} onChange={e=>setNewRelTarget(e.target.value)} style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"8px 10px",borderRadius:6,fontSize:12,outline:"none",fontFamily:"inherit"}}>
+          <select value={newRelTarget} onChange={e=>setNewRelTarget(e.target.value)} style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"8px 12px",borderRadius:6,fontSize:12,outline:"none",fontFamily:"inherit"}}>
             <option value="">Select IOC...</option>
             {allIocs.filter(i=>i.id!==iocId).map(i=><option key={i.id} value={i.id}>{i.type}: {(i.value_defanged||i.value)?.slice(0,40)}</option>)}
           </select>
         </div>
         <div>
           <label style={{display:"block",fontSize:11,color:C.muted,marginBottom:4,fontWeight:600}}>Relationship</label>
-          <select value={newRelType} onChange={e=>setNewRelType(e.target.value)} style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"8px 10px",borderRadius:6,fontSize:12,outline:"none",fontFamily:"inherit"}}>
+          <select value={newRelType} onChange={e=>setNewRelType(e.target.value)} style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"8px 12px",borderRadius:6,fontSize:12,outline:"none",fontFamily:"inherit"}}>
             {REL_TYPES.map(t=><option key={t}>{t}</option>)}
           </select>
         </div>
@@ -1484,7 +1484,7 @@ function EnrichmentPanel({ioc,token,onClose,C,me}){
                       <div style={{height:8,background:C.border,borderRadius:4,overflow:"hidden",marginBottom:10}}>
                         <div style={{width:`${data.calculated_confidence}%`,height:"100%",borderRadius:4,background:data.calculated_confidence>=80?C.green:data.calculated_confidence>=50?C.amber:C.red,transition:"width .5s"}}/>
                       </div>
-                      {data.confidence_reasons?.map((r,i)=><div key={i} style={{fontSize:11,color:C.muted,marginBottom:3,display:"flex",gap:6}}><span style={{color:C.accentText}}>›</span>{r}</div>)}
+                      {data.confidence_reasons?.map((r,i)=><div key={i} style={{fontSize:11,color:C.muted,marginBottom:3,display:"flex",gap:8}}><span style={{color:C.accentText}}>›</span>{r}</div>)}
                     </div>
                   </div>
                   <div style={{fontSize:11,color:C.muted}}>Enriched: {data.enriched_at?new Date(data.enriched_at).toLocaleString():"?"} · Cached 24h</div>
@@ -1503,7 +1503,7 @@ function EnrichmentPanel({ioc,token,onClose,C,me}){
                     {d.link&&<a href={d.link} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.accentText,display:"inline-block",marginTop:10,fontWeight:600}}>View on {label} →</a>}
                   </div>);
                 })}
-                {ioc.mitre_techniques?.length>0&&<div style={{marginTop:12}}><div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>MITRE ATT&CK</div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{ioc.mitre_techniques.map(t=><span key={t} style={{fontSize:11,padding:"3px 10px",borderRadius:4,background:C.purple+"20",color:C.purple,fontWeight:600,border:`1px solid ${C.purple}40`}}>{t}</span>)}</div></div>}
+                {ioc.mitre_techniques?.length>0&&<div style={{marginTop:12}}><div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>MITRE ATT&CK</div><div style={{display:"flex",flexWrap:"wrap",gap:8}}>{ioc.mitre_techniques.map(t=><span key={t} style={{fontSize:11,padding:"4px 12px",borderRadius:4,background:C.purple+"20",color:C.purple,fontWeight:600,border:`1px solid ${C.purple}40`}}>{t}</span>)}</div></div>}
               </>)}
             </>
           )}
@@ -1511,14 +1511,14 @@ function EnrichmentPanel({ioc,token,onClose,C,me}){
             <>
               <div style={{display:"flex",gap:8,marginBottom:16}}>
                 <input value={newNote} onChange={e=>setNewNote(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();addNote();}}} placeholder="Add investigation note... (Enter to submit)"
-                  style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"10px 14px",borderRadius:8,fontSize:13,outline:"none",fontFamily:"inherit"}}/>
+                  style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"12px 16px",borderRadius:8,fontSize:13,outline:"none",fontFamily:"inherit"}}/>
                 <Btn onClick={addNote} disabled={!newNote.trim()} C={C}>Add</Btn>
               </div>
               {notes.length===0&&<div style={{fontSize:13,color:C.muted,textAlign:"center",padding:24}}>No notes yet.</div>}
               {notes.map(n=>(
                 <div key={n.id} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10,padding:14,marginBottom:10}}>
                   <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                    <div style={{display:"flex",gap:10}}><span style={{fontSize:12,color:C.accentText,fontWeight:700}}>{n.username}</span><span style={{fontSize:11,color:C.muted}}>{new Date(n.created_at).toLocaleString()}</span></div>
+                    <div style={{display:"flex",gap:12}}><span style={{fontSize:12,color:C.accentText,fontWeight:700}}>{n.username}</span><span style={{fontSize:11,color:C.muted}}>{new Date(n.created_at).toLocaleString()}</span></div>
                     {(me?.role==="admin"||n.user_id===me?.id)&&<button onClick={()=>deleteNote(n.id)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:16,padding:0,opacity:.7}}>×</button>}
                   </div>
                   <div style={{fontSize:13,color:C.text,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{n.note}</div>
@@ -1540,7 +1540,7 @@ function EnrichmentPanel({ioc,token,onClose,C,me}){
                     </div>
                     <div style={{fontSize:11,color:C.muted,textAlign:"right"}}><div style={{fontWeight:600}}>{h.triggered_by}</div><div>{new Date(h.created_at).toLocaleString()}</div></div>
                   </div>
-                  {h.reason&&h.reason.split(" | ").map((r,j)=><div key={j} style={{fontSize:11,color:C.muted,marginBottom:2,display:"flex",gap:6}}><span style={{color:C.accentText}}>›</span>{r}</div>)}
+                  {h.reason&&h.reason.split(" | ").map((r,j)=><div key={j} style={{fontSize:11,color:C.muted,marginBottom:2,display:"flex",gap:8}}><span style={{color:C.accentText}}>›</span>{r}</div>)}
                 </div>
               ))}
             </>
@@ -1551,7 +1551,7 @@ function EnrichmentPanel({ioc,token,onClose,C,me}){
               <div style={{marginBottom:16,padding:14,background:isFP?C.amber+"10":C.surfaceHi,border:`1px solid ${isFP?C.amber+"40":C.border}`,borderRadius:10}}>
                 <div style={{fontSize:13,color:isFP?C.amber:C.text,fontWeight:700,marginBottom:8}}>{isFP?"⚠ Marked as False Positive":"Mark as False Positive"}</div>
                 <div style={{fontSize:12,color:C.muted,marginBottom:12,lineHeight:1.6}}>False positives are excluded from TAXII and STIX exports but kept in the database.</div>
-                <Field label="Reason" C={C}><input value={fpReason} onChange={e=>setFpReason(e.target.value)} placeholder="Why is this a false positive?" style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"10px 14px",borderRadius:8,fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"inherit"}}/></Field>
+                <Field label="Reason" C={C}><input value={fpReason} onChange={e=>setFpReason(e.target.value)} placeholder="Why is this a false positive?" style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"12px 16px",borderRadius:8,fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"inherit"}}/></Field>
                 <Btn onClick={toggleFP} variant={isFP?"ghost":"danger"} C={C}>{isFP?"Remove FP Flag":"Flag as False Positive"}</Btn>
               </div>
             </div>
@@ -1735,7 +1735,7 @@ invoice.pdf.exe`;
     <div style={{maxWidth:1000}}>
       {/* Input box */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-        padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+        padding:"20px 20px",marginBottom:16,boxShadow:C.shadow}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
           <div>
             <div style={{fontSize:14,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
@@ -1745,16 +1745,16 @@ invoice.pdf.exe`;
               Paste or upload IPs, domains, URLs, hashes, emails, or filenames — fanged or defanged.
             </div>
           </div>
-          <div style={{display:"flex",gap:6}}>
+          <div style={{display:"flex",gap:8}}>
             <button onClick={()=>setInput(EXAMPLE)}
-              style={{fontSize:11,padding:"5px 12px",borderRadius:6,background:C.surfaceHi,
+              style={{fontSize:11,padding:"4px 12px",borderRadius:6,background:C.surfaceHi,
                 border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>
               Load Example
             </button>
             <input ref={fileInputRef} type="file" accept=".txt,.csv,.log" onChange={handleFileUpload}
               style={{display:"none"}}/>
             <button onClick={()=>fileInputRef.current?.click()} disabled={uploading}
-              style={{fontSize:11,padding:"5px 12px",borderRadius:6,background:C.accentDim,
+              style={{fontSize:11,padding:"4px 12px",borderRadius:6,background:C.accentDim,
                 border:`1px solid ${C.accent}40`,color:C.accentText,cursor:"pointer",fontFamily:"inherit",
                 fontWeight:600}}>
               {uploading?"Uploading...":"📁 Upload File"}
@@ -1779,7 +1779,7 @@ invoice.pdf.exe`;
         </div>
       </div>
 
-      {err&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,
+      {err&&<div style={{padding:"12px 16px",background:C.red+"10",border:`1px solid ${C.red}30`,
         borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
 
       {(loading||uploading)&&(
@@ -1806,7 +1806,7 @@ invoice.pdf.exe`;
           <button onClick={downloadCSV}
             style={{marginLeft:"auto",fontSize:12,padding:"8px 16px",borderRadius:10,cursor:"pointer",
               background:C.surfaceHi,border:`1px solid ${C.border}`,color:C.text,fontWeight:600,
-              fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
+              fontFamily:"inherit",display:"flex",alignItems:"center",gap:8}}>
             ⬇ Download CSV
           </button>
         </div>
@@ -1814,25 +1814,25 @@ invoice.pdf.exe`;
 
       {results&&results.length>0&&(
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-          marginBottom:10,flexWrap:"wrap",gap:8,padding:"10px 14px",background:C.surfaceHi,
+          marginBottom:10,flexWrap:"wrap",gap:8,padding:"12px 16px",background:C.surfaceHi,
           borderRadius:10,border:`1px solid ${C.border}`}}>
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
             <span style={{fontSize:11,color:C.muted,fontWeight:600}}>
               {selectedCount>0?`${selectedCount} selected`:"Select indicators to bulk-add"}
             </span>
             <button onClick={()=>selectAll(filtered)}
-              style={{fontSize:11,padding:"4px 10px",borderRadius:6,background:C.surface,
+              style={{fontSize:11,padding:"4px 12px",borderRadius:6,background:C.surface,
                 border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>
               Select Filtered
             </button>
             <button onClick={selectMaliciousSuspicious}
-              style={{fontSize:11,padding:"4px 10px",borderRadius:6,background:C.surface,
+              style={{fontSize:11,padding:"4px 12px",borderRadius:6,background:C.surface,
                 border:`1px solid ${C.amber}40`,color:C.amber,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
               Select Malicious + Suspicious
             </button>
             {selectedCount>0&&(
               <button onClick={selectNone}
-                style={{fontSize:11,padding:"4px 10px",borderRadius:6,background:"transparent",
+                style={{fontSize:11,padding:"4px 12px",borderRadius:6,background:"transparent",
                   border:"none",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>
                 Clear
               </button>
@@ -1851,7 +1851,7 @@ invoice.pdf.exe`;
       )}
 
       {results&&(
-        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
           {filtered.length===0&&(
             <div style={{textAlign:"center",padding:32,color:C.muted,background:C.surface,
               border:`1px solid ${C.border}`,borderRadius:12}}>
@@ -1871,8 +1871,8 @@ invoice.pdf.exe`;
                 selected[idx]?C.accent:meta.color+"30"}`,
                 borderRadius:12,padding:"14px 18px",boxShadow:C.shadow}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
-                  flexWrap:"wrap",gap:10}}>
-                  <div style={{display:"flex",gap:10,flex:1,minWidth:0}}>
+                  flexWrap:"wrap",gap:12}}>
+                  <div style={{display:"flex",gap:12,flex:1,minWidth:0}}>
                     {addable&&(
                       <input type="checkbox" checked={!!selected[idx]} onChange={()=>toggleSelect(idx)}
                         style={{marginTop:4,accentColor:C.accent,width:15,height:15,flexShrink:0,cursor:"pointer"}}/>
@@ -1930,10 +1930,10 @@ invoice.pdf.exe`;
                   {addable&&(
                     addedIds[idx] ? (
                       <span style={{fontSize:11,color:C.green,fontWeight:600,flexShrink:0,
-                        padding:"5px 12px"}}>✓ Added to feed</span>
+                        padding:"4px 12px"}}>✓ Added to feed</span>
                     ) : (
                       <button onClick={()=>addToFeed(item,idx)} disabled={addingId===idx}
-                        style={{fontSize:11,padding:"5px 12px",borderRadius:6,cursor:"pointer",
+                        style={{fontSize:11,padding:"4px 12px",borderRadius:6,cursor:"pointer",
                           background:C.accentDim,border:`1px solid ${C.accent}40`,
                           color:C.accentText,fontWeight:600,fontFamily:"inherit",flexShrink:0}}>
                         {addingId===idx?"Adding...":"+ Add to Feed"}
@@ -1947,17 +1947,17 @@ invoice.pdf.exe`;
                   <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap",marginLeft:addable?25:0}}>
                     {vt&&(
                       vt.skipped ? (
-                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        <span style={{fontSize:10,padding:"4px 8px",borderRadius:5,
                           background:C.surfaceHi,color:C.muted,opacity:0.6}}>
                           VT: no API key configured
                         </span>
                       ) : vt.error ? (
-                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        <span style={{fontSize:10,padding:"4px 8px",borderRadius:5,
                           background:C.red+"10",color:C.red}}>
                           VT: {vt.error.includes("quota")?"daily quota reached":"error checking"}
                         </span>
                       ) : (
-                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        <span style={{fontSize:10,padding:"4px 8px",borderRadius:5,
                           background:C.surfaceHi,color:C.muted}}>
                           VT: {vt.malicious!==undefined?`${vt.malicious}/${vt.total} flagged`:vt.found===false?"not found":"checked"}
                         </span>
@@ -1965,17 +1965,17 @@ invoice.pdf.exe`;
                     )}
                     {ab&&(
                       ab.skipped ? (
-                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        <span style={{fontSize:10,padding:"4px 8px",borderRadius:5,
                           background:C.surfaceHi,color:C.muted,opacity:0.6}}>
                           AbuseIPDB: no API key configured
                         </span>
                       ) : ab.error ? (
-                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        <span style={{fontSize:10,padding:"4px 8px",borderRadius:5,
                           background:C.red+"10",color:C.red}}>
                           AbuseIPDB: {ab.error.includes("quota")?"daily quota reached":"error checking"}
                         </span>
                       ) : (
-                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        <span style={{fontSize:10,padding:"4px 8px",borderRadius:5,
                           background:C.surfaceHi,color:C.muted}}>
                           AbuseIPDB: {ab.abuse_score}% confidence
                         </span>
@@ -1983,24 +1983,24 @@ invoice.pdf.exe`;
                     )}
                     {uh&&(
                       uh.skipped ? (
-                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        <span style={{fontSize:10,padding:"4px 8px",borderRadius:5,
                           background:C.surfaceHi,color:C.muted,opacity:0.6}}>
                           URLhaus: no Auth-Key configured
                         </span>
                       ) : uh.error ? (
-                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        <span style={{fontSize:10,padding:"4px 8px",borderRadius:5,
                           background:C.red+"10",color:C.red}}>
                           URLhaus: {uh.error.includes("quota")?"daily quota reached":uh.error.includes("Auth-Key")?"invalid Auth-Key":"error checking"}
                         </span>
                       ) : (
-                        <span style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                        <span style={{fontSize:10,padding:"4px 8px",borderRadius:5,
                           background:C.surfaceHi,color:C.muted}}>
                           URLhaus: {uh.found?`listed (${uh.threat})`:"not listed"}
                         </span>
                       )
                     )}
                     {item.enrichment?.flags?.length>0&&item.enrichment.flags.map((f,i)=>(
-                      <span key={i} style={{fontSize:10,padding:"3px 9px",borderRadius:5,
+                      <span key={i} style={{fontSize:10,padding:"4px 8px",borderRadius:5,
                         background:C.amber+"15",color:C.amber}}>{f}</span>
                     ))}
                   </div>
@@ -2108,7 +2108,7 @@ function PublicSearch({C}){
         <div style={{fontSize:20,fontWeight:700,color:C.white,marginBottom:8}}>Public IOC Lookup</div>
         <div style={{fontSize:13,color:C.muted}}>Check any IP, domain, URL or hash. DB-first — if not found, queries providers and auto-adds if malicious.</div>
       </div>
-      <div style={{display:"flex",gap:10,marginBottom:24}}>
+      <div style={{display:"flex",gap:12,marginBottom:24}}>
         <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")search();}} placeholder="Enter IP, domain, URL, MD5, SHA256..."
           style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"14px 18px",borderRadius:10,fontSize:15,outline:"none",fontFamily:"inherit"}}/>
         <button onClick={search} disabled={loading||!query.trim()} style={{padding:"14px 24px",background:C.accent,border:"none",color:"#fff",borderRadius:10,cursor:"pointer",fontSize:15,fontWeight:700,fontFamily:"inherit",opacity:loading?0.5:1}}>{loading?"Checking...":"Search"}</button>
@@ -2132,7 +2132,7 @@ function PublicSearch({C}){
           </div>
           <div style={{padding:20}}>
             {result.found_in_db&&<div style={{marginBottom:16,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:12}}>{[["Industry",result.industry],["TLP",result.tlp],["Added by",result.added_by],["Tags",(result.tags||[]).join(", ")||"none"]].map(([k,v])=><div key={k}><div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:2}}>{k}</div><div style={{fontSize:13,color:C.text,fontWeight:500}}>{v||"—"}</div></div>)}{result.description&&<div style={{gridColumn:"1/-1"}}><div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:2}}>Description</div><div style={{fontSize:13,color:C.text,lineHeight:1.6}}>{result.description}</div></div>}</div>}
-            {result.reasons?.length>0&&<div style={{marginBottom:16}}><div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Why this verdict</div>{result.reasons.map((r,i)=><div key={i} style={{fontSize:12,color:C.text,marginBottom:4,display:"flex",gap:6}}><span style={{color:C.accentText}}>›</span>{r}</div>)}</div>}
+            {result.reasons?.length>0&&<div style={{marginBottom:16}}><div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Why this verdict</div>{result.reasons.map((r,i)=><div key={i} style={{fontSize:12,color:C.text,marginBottom:4,display:"flex",gap:8}}><span style={{color:C.accentText}}>›</span>{r}</div>)}</div>}
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12}}>
               {[{label:"VirusTotal",d:vt,score:vt.vt_score,detail:`${vt.malicious??0}/${vt.total??0} engines`},{label:"AbuseIPDB",d:abuse,score:abuse.abuse_score,detail:`${abuse.total_reports??0} reports`},{label:"URLhaus",d:uh,score:uh.found===true?85:uh.found===false?0:null,detail:uh.found===true?uh.threat||"Found":uh.found===false?"Not found":"N/A"}].map(({label,d,score,detail})=>{
                 if(!d||d.skipped||d.note)return null;
@@ -2237,7 +2237,7 @@ function AssetManager({token,C,onChanged}){
   // Suggested field wrapper — shows teal dot + "suggested" label + edit clears suggestion
   const SuggestedField=({field,label,children})=>(
     <Field label={
-      <div style={{display:"flex",alignItems:"center",gap:6}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
         <span>{label}</span>
         {suggested[field]&&(
           <span style={{fontSize:10,padding:"1px 6px",borderRadius:3,
@@ -2266,7 +2266,7 @@ function AssetManager({token,C,onChanged}){
           {" "}Override any field freely.
         </div>
 
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:4}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:4}}>
           {/* Name — triggers autofill */}
           <Field label={
             <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -2296,7 +2296,7 @@ function AssetManager({token,C,onChanged}){
               onChange={e=>{setForm(p=>({...p,asset_type:e.target.value}));clearSuggested("asset_type");}}
               style={{width:"100%",background:C.inputBg,border:`1px solid ${
                 suggested.asset_type?C.accent:C.inputBorder}`,
-                color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:14,
+                color:C.inputText,padding:"12px 12px",borderRadius:8,fontSize:14,
                 outline:"none",fontFamily:"inherit",
                 boxShadow:suggested.asset_type?`0 0 0 2px ${C.accent}20`:"none"}}>
               {ASSET_TYPES.map(t=><option key={t.val} value={t.val}>{t.label}</option>)}
@@ -2315,9 +2315,9 @@ function AssetManager({token,C,onChanged}){
           </div>
         )}
 
-        {err&&<div style={{fontSize:12,color:C.red,margin:"10px 0",padding:"10px 14px",
+        {err&&<div style={{fontSize:12,color:C.red,margin:"10px 0",padding:"12px 16px",
           background:C.red+"10",borderRadius:6,border:`1px solid ${C.red}30`}}>{err}</div>}
-        {msg&&<div style={{fontSize:12,color:C.green,margin:"10px 0",padding:"10px 14px",
+        {msg&&<div style={{fontSize:12,color:C.green,margin:"10px 0",padding:"12px 16px",
           background:C.green+"10",borderRadius:6,border:`1px solid ${C.green}30`}}>{msg}</div>}
 
         <Btn onClick={addAsset} disabled={!form.name.trim()||saving} C={C}>
@@ -2355,7 +2355,7 @@ function AssetManager({token,C,onChanged}){
                   {ASSET_TYPES.find(t=>t.val===asset.asset_type)?.label||asset.asset_type||"application"}
                 </span>
               </div>
-              <div style={{display:"flex",gap:14,fontSize:12,flexWrap:"wrap",marginBottom:4}}>
+              <div style={{display:"flex",gap:16,fontSize:12,flexWrap:"wrap",marginBottom:4}}>
                 <span style={{color:C.text}}>{asset.cve_count||0} CVEs found</span>
                 <span style={{color:C.muted}}>
                   {asset.version?`Monitoring v${asset.version}`:"Monitoring all versions"}
@@ -2466,7 +2466,7 @@ function CVEDashboard({token,C}){
       {selectedCVE&&<CVEDetail cve={selectedCVE} token={token} onClose={()=>setSelectedCVE(null)} C={C}/>}
 
       {/* Tab bar */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
         <div style={{display:"flex",gap:4,background:C.surfaceHi,borderRadius:10,padding:3}}>
           {[["cves","CVE Monitor"],["assets","Asset Registry"]].map(([id,label])=>(
             <button key={id} onClick={()=>{setSubView(id);setSelectedAsset(null);}}
@@ -2480,10 +2480,10 @@ function CVEDashboard({token,C}){
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
           {/* Year selector */}
-          <div style={{display:"flex",gap:3,background:C.surfaceHi,borderRadius:8,padding:3}}>
+          <div style={{display:"flex",gap:4,background:C.surfaceHi,borderRadius:8,padding:3}}>
             {YEARS.map(y=>(
               <button key={y} onClick={()=>{setYearFilter(y);setSelectedAsset(null);}}
-                style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:"pointer",
+                style={{padding:"4px 12px",borderRadius:6,border:"none",cursor:"pointer",
                   fontSize:12,fontFamily:"inherit",fontWeight:600,
                   background:yearFilter===y?C.accent:"transparent",
                   color:yearFilter===y?"#fff":C.muted}}>
@@ -2501,7 +2501,7 @@ function CVEDashboard({token,C}){
               background:"none",border:`1px solid ${C.border}`,color:C.muted,
               borderRadius:8,cursor:"pointer",fontSize:14}}>↻</button>
           <button onClick={pollNow} disabled={polling}
-            style={{padding:"7px 16px",background:polling?C.accentDim:C.accent,border:"none",
+            style={{padding:"8px 16px",background:polling?C.accentDim:C.accent,border:"none",
               color:"#fff",borderRadius:8,cursor:"pointer",fontSize:12,
               fontFamily:"inherit",fontWeight:600,opacity:polling?0.6:1}}>
             {polling?"Polling NVD...":"⟳ Poll Now"}
@@ -2577,13 +2577,13 @@ function CVEDashboard({token,C}){
                 return(
                   <div key={asset.id} onClick={()=>setSelectedAsset(asset)}
                     style={{background:C.surface,border:`1px solid ${hasKev?C.red+"40":C.border}`,
-                      borderRadius:12,padding:"18px 20px",marginBottom:12,
+                      borderRadius:12,padding:"20px 20px",marginBottom:12,
                       cursor:"pointer",boxShadow:C.shadow,transition:"all .15s"}}
                     onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.boxShadow=C.shadowMd||C.shadow;}}
                     onMouseLeave={e=>{e.currentTarget.style.borderColor=hasKev?C.red+"40":C.border;e.currentTarget.style.boxShadow=C.shadow;}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
                       <div>
-                        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6,flexWrap:"wrap"}}>
                           <span style={{fontSize:16,fontWeight:700,color:C.white||C.textHi}}>{asset.name}</span>
                           {asset.vendor&&<span style={{fontSize:13,color:C.muted}}>{asset.vendor}</span>}
                           {asset.version&&(
@@ -2658,10 +2658,10 @@ function CVEDashboard({token,C}){
                 </div>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
                   {/* Patch filter */}
-                  <div style={{display:"flex",gap:3,background:C.surfaceHi,borderRadius:8,padding:3}}>
+                  <div style={{display:"flex",gap:4,background:C.surfaceHi,borderRadius:8,padding:3}}>
                     {[["all","All"],["unpatched","Unpatched"],["patched","Patched"]].map(([val,label])=>(
                       <button key={val} onClick={()=>setFilterPatch(val)}
-                        style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:"pointer",
+                        style={{padding:"4px 12px",borderRadius:6,border:"none",cursor:"pointer",
                           fontSize:11,fontFamily:"inherit",fontWeight:600,
                           background:filterPatch===val?C.accent:"transparent",
                           color:filterPatch===val?"#fff":C.muted}}>
@@ -2669,7 +2669,7 @@ function CVEDashboard({token,C}){
                       </button>
                     ))}
                   </div>
-                  <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.muted,cursor:"pointer",whiteSpace:"nowrap"}}>
+                  <label style={{display:"flex",alignItems:"center",gap:4,fontSize:12,color:C.muted,cursor:"pointer",whiteSpace:"nowrap"}}>
                     <input type="checkbox" checked={filterKEV} onChange={e=>setFilterKEV(e.target.checked)} style={{accentColor:C.accent}}/>
                     KEV Only
                   </label>
@@ -2723,7 +2723,7 @@ function CVEDashboard({token,C}){
                             onMouseLeave={e=>e.currentTarget.style.background=cve.kev_listed?C.red+"05":"transparent"}>
 
                             <td style={{padding:"13px 16px"}}>
-                              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <div style={{display:"flex",alignItems:"center",gap:8}}>
                                 <span style={{fontWeight:700,fontSize:13,color:C.white||C.textHi,letterSpacing:"-0.01em"}}>
                                   {cve.cve_id}
                                 </span>
@@ -2813,7 +2813,7 @@ function GeoMap({token,C}){
           const flag=COUNTRY_FLAGS[c.code]||"🌐";const name=COUNTRY_NAMES[c.code]||c.code;const pct=Math.round((c.count/max)*100);
           return(<div key={c.code} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:14,boxShadow:C.shadow}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:20}}>{flag}</span><div><div style={{fontSize:13,fontWeight:600,color:C.white}}>{name}</div><div style={{fontSize:11,color:C.muted}}>{c.code}</div></div></div>
+              <div style={{display:"flex",alignItems:"center",gap:12}}><span style={{fontSize:20}}>{flag}</span><div><div style={{fontSize:13,fontWeight:600,color:C.white}}>{name}</div><div style={{fontSize:11,color:C.muted}}>{c.code}</div></div></div>
               <div style={{textAlign:"right"}}><div style={{fontSize:20,fontWeight:700,color:pct>=80?C.red:pct>=40?C.amber:C.green}}>{c.count}</div><div style={{fontSize:11,color:C.muted}}>IOCs</div></div>
             </div>
             <div style={{height:4,background:C.border,borderRadius:2,overflow:"hidden"}}><div style={{width:`${pct}%`,height:"100%",background:pct>=80?C.red:pct>=40?C.amber:C.green,borderRadius:2}}/></div>
@@ -2854,7 +2854,7 @@ function CVELookup({token,C,initialId=""}){
   return(
     <div style={{maxWidth:1000}}>
       {/* Search bar */}
-      <div style={{display:"flex",gap:10,marginBottom:24}}>
+      <div style={{display:"flex",gap:12,marginBottom:24}}>
         <input value={cveId} onChange={e=>setCveId(e.target.value)}
           onKeyDown={e=>{if(e.key==="Enter")doLookup();}}
           placeholder="Enter CVE ID — e.g. CVE-2024-12345"
@@ -2866,7 +2866,7 @@ function CVELookup({token,C,initialId=""}){
         </Btn>
       </div>
 
-      {err&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
+      {err&&<div style={{padding:"12px 16px",background:C.red+"10",border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
       {loading&&(
         <div style={{textAlign:"center",padding:48,color:C.muted}}>
           <div style={{fontSize:14,marginBottom:8}}>Querying NVD, CVE.org, OSV, CVE Trends, EPSS...</div>
@@ -2886,13 +2886,13 @@ function CVELookup({token,C,initialId=""}){
                   fontFamily:"monospace",marginBottom:6}}>{result.cve_id}</div>
                 <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                   {result.in_kev&&(
-                    <span style={{fontSize:12,padding:"3px 10px",borderRadius:4,fontWeight:700,
+                    <span style={{fontSize:12,padding:"4px 12px",borderRadius:4,fontWeight:700,
                       background:C.red+"20",color:C.red,border:`1px solid ${C.red}30`}}>
                       🚨 CISA KEV — Added {result.kev_date}
                     </span>
                   )}
                   {result.epss&&(
-                    <span style={{fontSize:12,padding:"3px 10px",borderRadius:4,fontWeight:600,
+                    <span style={{fontSize:12,padding:"4px 12px",borderRadius:4,fontWeight:600,
                       background:result.epss.epss>=0.5?C.red+"15":result.epss.epss>=0.1?C.amber+"15":C.accentDim,
                       color:result.epss.epss>=0.5?C.red:result.epss.epss>=0.1?C.amber:C.accentText}}>
                       EPSS {(result.epss.epss*100).toFixed(1)}% · {(result.epss.percentile*100).toFixed(0)}th percentile
@@ -2902,7 +2902,7 @@ function CVELookup({token,C,initialId=""}){
                   {result.sources?.find(s=>s.source==="NVD"&&s.cvss)?.cvss&&(()=>{
                     const cvss=result.sources.find(s=>s.source==="NVD").cvss;
                     return(
-                      <span style={{fontSize:12,padding:"3px 10px",borderRadius:4,fontWeight:700,
+                      <span style={{fontSize:12,padding:"4px 12px",borderRadius:4,fontWeight:700,
                         background:(SEV_COLORS[cvss.severity]||C.muted)+"20",
                         color:SEV_COLORS[cvss.severity]||C.muted,
                         border:`1px solid ${(SEV_COLORS[cvss.severity]||C.muted)}30`}}>
@@ -2919,7 +2919,7 @@ function CVELookup({token,C,initialId=""}){
                   {name:"OSV",    url:`https://osv.dev/vulnerability/${result.cve_id}`},
                 ].map(link=>(
                   <a key={link.name} href={link.url} target="_blank" rel="noreferrer"
-                    style={{fontSize:11,padding:"5px 12px",borderRadius:6,background:C.accentDim,
+                    style={{fontSize:11,padding:"4px 12px",borderRadius:6,background:C.accentDim,
                       color:C.accentText,fontWeight:600,border:`1px solid ${C.accent}30`,
                       display:"flex",alignItems:"center",gap:4,textDecoration:"none"}}>
                     {link.name} <NavIcon name="externalLink" size={10} color={C.accentText}/>
@@ -2936,7 +2936,7 @@ function CVELookup({token,C,initialId=""}){
             {showReport&&<CVEReportModal cveId={result.cve_id} token={token} C={C} onClose={()=>setShowReport(false)}/>}
             {/* Description from NVD */}
             {result.sources?.find(s=>s.source==="NVD"&&s.description)?.description&&(
-              <div style={{fontSize:13,color:C.text,lineHeight:1.7,padding:"12px 14px",
+              <div style={{fontSize:13,color:C.text,lineHeight:1.7,padding:"12px 16px",
                 background:C.surfaceHi,borderRadius:8}}>
                 {result.sources.find(s=>s.source==="NVD").description}
               </div>
@@ -2945,7 +2945,7 @@ function CVELookup({token,C,initialId=""}){
 
           {/* Source cards */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",
-            gap:14,marginBottom:16}}>
+            gap:16,marginBottom:16}}>
             {result.sources.map(src=>(
               <div key={src.source} style={{background:C.surface,
                 border:`1px solid ${src.status==="ok"?C.border:C.border+"60"}`,
@@ -3010,7 +3010,7 @@ function CVELookup({token,C,initialId=""}){
                       {src.count} related {src.count===1?"advisory":"advisories"}
                     </div>
                     {src.vulns?.slice(0,2).map((v,i)=>(
-                      <div key={i} style={{marginBottom:8,padding:"8px 10px",
+                      <div key={i} style={{marginBottom:8,padding:"8px 12px",
                         background:C.surfaceHi,borderRadius:6}}>
                         <div style={{fontSize:11,fontWeight:700,color:C.accentText,marginBottom:4}}>
                           {v.id}
@@ -3050,15 +3050,15 @@ function CVELookup({token,C,initialId=""}){
           {/* All References unified */}
           {result.all_refs?.length>0&&(
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-              padding:"18px 20px",boxShadow:C.shadow}}>
+              padding:"20px 20px",boxShadow:C.shadow}}>
               <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:14,
                 textTransform:"uppercase",letterSpacing:"0.06em"}}>
                 All References ({result.all_refs.length})
               </div>
               <div style={{display:"grid",gap:8}}>
                 {result.all_refs.map((ref,i)=>(
-                  <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,
-                    padding:"8px 10px",background:C.surfaceHi,borderRadius:6}}>
+                  <div key={i} style={{display:"flex",alignItems:"flex-start",gap:12,
+                    padding:"8px 12px",background:C.surfaceHi,borderRadius:6}}>
                     <div style={{flex:1,minWidth:0}}>
                       <a href={ref.url} target="_blank" rel="noreferrer"
                         style={{fontSize:12,color:C.accentText,wordBreak:"break-all",
@@ -3133,7 +3133,7 @@ function CVEWall({token,C}){
   });
 
   const Pill=({label,active,onClick})=>(
-    <button onClick={onClick} style={{padding:"5px 11px",borderRadius:6,border:"none",
+    <button onClick={onClick} style={{padding:"4px 12px",borderRadius:6,border:"none",
       cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600,
       background:active?C.accent:"transparent",color:active?"#fff":C.muted}}>
       {label}
@@ -3144,7 +3144,7 @@ function CVEWall({token,C}){
     <div>
       {/* Filter bar */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-        padding:"14px 16px",marginBottom:16,boxShadow:C.shadow}}>
+        padding:"16px 16px",marginBottom:16,boxShadow:C.shadow}}>
         <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
           {[["Type",CATEGORIES,activeCat,setActiveCat,c=>c==="all"?"All":c],
             ["Severity",SEVERITIES,activeSev,setActiveSev,s=>s==="all"?"All":s],
@@ -3164,7 +3164,7 @@ function CVEWall({token,C}){
         </div>
         {/* Source pills */}
         {items.length>0&&(
-          <div style={{display:"flex",gap:5,marginTop:12,flexWrap:"wrap"}}>
+          <div style={{display:"flex",gap:4,marginTop:12,flexWrap:"wrap"}}>
             {sources.map(s=>(
               <button key={s} onClick={()=>setActiveSource(s)}
                 style={{padding:"3px 12px",borderRadius:20,cursor:"pointer",fontFamily:"inherit",
@@ -3228,7 +3228,7 @@ function CVEWall({token,C}){
                 <thead>
                   <tr style={{background:C.surfaceHi}}>
                     {[["Source","110px"],["Type","80px"],["Severity","90px"],["Advisory / CVE","auto"],["CVEs","130px"],["Date","100px"],["","40px"]].map(([h,w])=>(
-                      <th key={h} style={{padding:"10px 14px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:600,letterSpacing:"0.04em",whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}`,width:w}}>{h.toUpperCase()}</th>
+                      <th key={h} style={{padding:"12px 16px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:600,letterSpacing:"0.04em",whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}`,width:w}}>{h.toUpperCase()}</th>
                     ))}
                   </tr>
                 </thead>
@@ -3306,7 +3306,7 @@ function IntelNews({token,C}){
 
   return(
     <div>
-      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
+      <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
         <div style={{display:"flex",gap:4,background:C.surfaceHi,borderRadius:10,padding:3}}>
           {["all","cve","apt","ransomware","ioc"].map(t=>(
             <button key={t} onClick={()=>setCategory(t)}
@@ -3335,7 +3335,7 @@ function IntelNews({token,C}){
       {news.length>0&&(
         <>
           {/* Source filter pills */}
-          <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+          <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
             {sources.map(s=>(
               <button key={s} onClick={()=>setActiveSource(s)}
                 style={{padding:"4px 14px",borderRadius:20,border:`1px solid ${activeSource===s?C.accent:C.border}`,
@@ -3354,7 +3354,7 @@ function IntelNews({token,C}){
                 <thead>
                   <tr style={{background:C.surfaceHi}}>
                     {[["Source","130px"],["Category","100px"],["Severity","90px"],["Title","auto"],["Date","100px"],["","60px"]].map(([h,w])=>(
-                      <th key={h} style={{padding:"10px 14px",textAlign:"left",color:C.muted,
+                      <th key={h} style={{padding:"12px 16px",textAlign:"left",color:C.muted,
                         fontSize:11,fontWeight:600,letterSpacing:"0.04em",whiteSpace:"nowrap",
                         borderBottom:`1px solid ${C.border}`,width:w}}>
                         {h.toUpperCase()}
@@ -3369,13 +3369,13 @@ function IntelNews({token,C}){
                       onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHi}
                       onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                       {/* Source */}
-                      <td style={{padding:"12px 14px"}}>
+                      <td style={{padding:"12px 16px"}}>
                         <span style={{fontSize:11,fontWeight:600,color:C.accentText}}>
                           {item.source}
                         </span>
                       </td>
                       {/* Category */}
-                      <td style={{padding:"12px 14px"}}>
+                      <td style={{padding:"12px 16px"}}>
                         <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
                           background:(CAT_COLORS[item.category]||C.muted)+"20",
                           color:CAT_COLORS[item.category]||C.muted}}>
@@ -3383,14 +3383,14 @@ function IntelNews({token,C}){
                         </span>
                       </td>
                       {/* Severity */}
-                      <td style={{padding:"12px 14px"}}>
+                      <td style={{padding:"12px 16px"}}>
                         <span style={{fontSize:11,fontWeight:600,
                           color:SEV_COLORS[item.severity]||C.muted}}>
                           {item.severity}
                         </span>
                       </td>
                       {/* Title + summary */}
-                      <td style={{padding:"12px 14px",maxWidth:400}}>
+                      <td style={{padding:"12px 16px",maxWidth:400}}>
                         <div style={{fontSize:13,fontWeight:600,color:C.white||C.textHi,
                           marginBottom:4,lineHeight:1.4}}>{item.title}</div>
                         <div style={{fontSize:12,color:C.muted,overflow:"hidden",
@@ -3400,11 +3400,11 @@ function IntelNews({token,C}){
                         </div>
                       </td>
                       {/* Date */}
-                      <td style={{padding:"12px 14px",fontSize:11,color:C.muted,whiteSpace:"nowrap"}}>
+                      <td style={{padding:"12px 16px",fontSize:11,color:C.muted,whiteSpace:"nowrap"}}>
                         {item.date}
                       </td>
                       {/* Link */}
-                      <td style={{padding:"12px 14px"}}>
+                      <td style={{padding:"12px 16px"}}>
                         {item.url&&(
                           <a href={item.url} target="_blank" rel="noreferrer"
                             style={{fontSize:11,color:C.accentText,fontWeight:600,
@@ -3464,12 +3464,12 @@ function ThreatActors({token,C}){
   return(
     <div style={{maxWidth:1000}}>
       {/* Search bar */}
-      <div style={{display:"flex",gap:10,marginBottom:20}}>
+      <div style={{display:"flex",gap:12,marginBottom:20}}>
         <input value={query} onChange={e=>setQuery(e.target.value)}
           onKeyDown={e=>{if(e.key==="Enter")research();}}
           placeholder="Search any threat actor or APT group..."
           style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-            color:C.inputText,padding:"10px 14px",borderRadius:10,fontSize:14,
+            color:C.inputText,padding:"12px 16px",borderRadius:10,fontSize:14,
             outline:"none",fontFamily:"inherit"}}/>
         <Btn onClick={()=>research()} disabled={loading||!query.trim()} C={C}>
           {loading?"Searching...":"Search"}
@@ -3534,7 +3534,7 @@ function ThreatActors({token,C}){
                 <a href={result.mitre_url} target="_blank" rel="noreferrer"
                   style={{fontSize:12,padding:"6px 14px",borderRadius:7,background:C.accentDim,
                     color:C.accentText,fontWeight:600,border:`1px solid ${C.accent}40`,
-                    display:"flex",alignItems:"center",gap:6}}>
+                    display:"flex",alignItems:"center",gap:8}}>
                   MITRE ATT&CK <NavIcon name="externalLink" size={12} color={C.accentText}/>
                 </a>
               )}
@@ -3550,14 +3550,14 @@ function ThreatActors({token,C}){
           {/* TTPs */}
           {result.ttps?.length>0&&(
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-              padding:"18px 20px",marginBottom:14,boxShadow:C.shadow}}>
+              padding:"20px 20px",marginBottom:14,boxShadow:C.shadow}}>
               <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:12,
                 letterSpacing:"0.06em",textTransform:"uppercase"}}>
                 MITRE ATT&CK Techniques ({result.ttps.length})
               </div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+              <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                 {result.ttps.map(t=>(
-                  <span key={t} style={{fontSize:11,padding:"3px 10px",borderRadius:4,
+                  <span key={t} style={{fontSize:11,padding:"4px 12px",borderRadius:4,
                     background:C.purple+"20",color:C.purple,fontWeight:600,
                     border:`1px solid ${C.purple}30`}}>{t}</span>
                 ))}
@@ -3568,13 +3568,13 @@ function ThreatActors({token,C}){
           {/* Malware + Tools */}
           {(result.malware_used?.length>0||result.tools_used?.length>0)&&(
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-              padding:"18px 20px",marginBottom:14,boxShadow:C.shadow,
+              padding:"20px 20px",marginBottom:14,boxShadow:C.shadow,
               display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:20}}>
               {result.malware_used?.length>0&&(
                 <div>
                   <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:10,
                     textTransform:"uppercase",letterSpacing:"0.06em"}}>Malware Used</div>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                     {result.malware_used.map(m=>(
                       <span key={m} style={{fontSize:11,padding:"2px 8px",borderRadius:4,
                         background:C.red+"20",color:C.red,border:`1px solid ${C.red}30`}}>{m}</span>
@@ -3586,7 +3586,7 @@ function ThreatActors({token,C}){
                 <div>
                   <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:10,
                     textTransform:"uppercase",letterSpacing:"0.06em"}}>Tools Used</div>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                     {result.tools_used.map(t=>(
                       <span key={t} style={{fontSize:11,padding:"2px 8px",borderRadius:4,
                         background:C.amber+"20",color:C.amber,border:`1px solid ${C.amber}30`}}>{t}</span>
@@ -3600,12 +3600,12 @@ function ThreatActors({token,C}){
           {/* References */}
           {result.references?.filter(r=>r).length>0&&(
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-              padding:"18px 20px",boxShadow:C.shadow}}>
+              padding:"20px 20px",boxShadow:C.shadow}}>
               <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:12,
                 textTransform:"uppercase",letterSpacing:"0.06em"}}>References</div>
               {result.references.filter(r=>r).map((ref,i)=>(
                 <a key={i} href={ref} target="_blank" rel="noreferrer"
-                  style={{display:"flex",alignItems:"center",gap:6,fontSize:12,
+                  style={{display:"flex",alignItems:"center",gap:8,fontSize:12,
                     color:C.accentText,marginBottom:8,wordBreak:"break-all"}}>
                   <NavIcon name="externalLink" size={11} color={C.accentText}/>{ref}
                 </a>
@@ -3668,7 +3668,7 @@ function OSINTTool({token,C}){
           onKeyDown={e=>{if(e.key==="Enter")lookup();}}
           placeholder={targetType==="email"?"email@example.com":targetType==="ip"?"185.220.101.45":"evil-domain.com"}
           style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,
-            padding:"10px 14px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}/>
+            padding:"12px 16px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}/>
         <Btn onClick={lookup} disabled={loading||!target.trim()} C={C}>
           {loading?"Querying...":"Lookup"}
         </Btn>
@@ -3695,11 +3695,11 @@ function OSINTTool({token,C}){
 
           {/* Tabs */}
           {tabs.length>0&&(
-            <div style={{display:"flex",gap:3,background:C.surfaceHi,borderRadius:10,
+            <div style={{display:"flex",gap:4,background:C.surfaceHi,borderRadius:10,
               padding:3,width:"fit-content",marginBottom:16}}>
               {tabs.map(t=>(
                 <button key={t.id} onClick={()=>setActiveTab(t.id)}
-                  style={{padding:"7px 16px",borderRadius:7,border:"none",cursor:"pointer",
+                  style={{padding:"8px 16px",borderRadius:7,border:"none",cursor:"pointer",
                     fontSize:13,fontFamily:"inherit",fontWeight:600,
                     background:activeTab===t.id?C.accent:"transparent",
                     color:activeTab===t.id?"#fff":C.muted}}>
@@ -3711,7 +3711,7 @@ function OSINTTool({token,C}){
 
           {/* Tab content */}
           <div style={{background:C.surface,border:`1px solid ${C.border}`,
-            borderRadius:12,padding:"18px 20px",boxShadow:C.shadow}}>
+            borderRadius:12,padding:"20px 20px",boxShadow:C.shadow}}>
 
             {/* DNS tab */}
             {activeTab==="dns"&&result.data?.dns&&(
@@ -3761,9 +3761,9 @@ function OSINTTool({token,C}){
                 {result.data.shodan.ports?.length>0&&(
                   <div style={{marginBottom:14}}>
                     <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>Open Ports</div>
-                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                       {result.data.shodan.ports.map(p=>(
-                        <span key={p} style={{fontSize:12,padding:"3px 10px",borderRadius:4,
+                        <span key={p} style={{fontSize:12,padding:"4px 12px",borderRadius:4,
                           background:C.red+"20",color:C.red,fontFamily:"monospace",fontWeight:700}}>{p}</span>
                       ))}
                     </div>
@@ -3772,9 +3772,9 @@ function OSINTTool({token,C}){
                 {result.data.shodan.vulns?.length>0&&(
                   <div>
                     <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>Vulnerabilities</div>
-                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                       {result.data.shodan.vulns.map(v=>(
-                        <span key={v} style={{fontSize:12,padding:"3px 10px",borderRadius:4,
+                        <span key={v} style={{fontSize:12,padding:"4px 12px",borderRadius:4,
                           background:C.amber+"20",color:C.amber,fontFamily:"monospace",fontWeight:600}}>{v}</span>
                       ))}
                     </div>
@@ -3893,12 +3893,12 @@ function URLDecoder({C}){
             placeholder="hxxps://evil[.]com%2Fpayload%2F%252Fnested%252Fpath"
             rows={3}
             style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-              color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:13,
+              color:C.inputText,padding:"12px 12px",borderRadius:8,fontSize:13,
               outline:"none",fontFamily:"monospace",resize:"vertical",boxSizing:"border-box"}}/>
         </div>
         <div style={{flexShrink:0}}>
           <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>Iterations</div>
-          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
             <input type="number" min={1} max={10} value={iterations}
               onChange={e=>setIterations(Math.max(1,Math.min(10,parseInt(e.target.value)||1)))}
               style={{width:64,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
@@ -3914,7 +3914,7 @@ function URLDecoder({C}){
           {steps.map((s,idx)=>(
             <div key={idx} style={{background:C.surface,border:`1px solid ${
               s.done?C.green+"40":s.error?C.red+"40":C.border}`,
-              borderRadius:10,padding:"12px 14px"}}>
+              borderRadius:10,padding:"12px 16px"}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:6,alignItems:"center"}}>
                 <span style={{fontSize:11,fontWeight:700,
                   color:s.done?C.green:s.error?C.red:C.muted}}>
@@ -3923,7 +3923,7 @@ function URLDecoder({C}){
                 </span>
                 {idx===steps.length-1&&!s.error&&(
                   <button onClick={copyFinal}
-                    style={{fontSize:11,padding:"3px 10px",borderRadius:5,cursor:"pointer",
+                    style={{fontSize:11,padding:"4px 12px",borderRadius:5,cursor:"pointer",
                       background:copied?C.green+"20":C.accentDim,
                       border:`1px solid ${copied?C.green:C.accent}40`,
                       color:copied?C.green:C.accentText,fontFamily:"inherit",fontWeight:600}}>
@@ -3933,7 +3933,7 @@ function URLDecoder({C}){
               </div>
               <div style={{fontSize:12,fontFamily:"monospace",color:C.white||C.textHi,
                 wordBreak:"break-all",lineHeight:1.6,background:C.surfaceHi,
-                padding:"8px 10px",borderRadius:6}}>
+                padding:"8px 12px",borderRadius:6}}>
                 {s.value||<span style={{color:C.muted,fontStyle:"italic"}}>empty</span>}
               </div>
             </div>
@@ -4107,29 +4107,29 @@ function SafeLinkExtractor({C}){
         placeholder={"Paste email body, log file, HTML source, or any text here...\n\nAll URLs will be extracted and defanged automatically."}
         rows={7}
         style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-          color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:12,
+          color:C.inputText,padding:"12px 12px",borderRadius:8,fontSize:12,
           outline:"none",fontFamily:"monospace",resize:"vertical",
           marginBottom:10,boxSizing:"border-box"}}/>
       <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
         <Btn onClick={extract} C={C}>Extract Links</Btn>
-        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.muted,cursor:"pointer"}}>
+        <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:C.muted,cursor:"pointer"}}>
           <input type="checkbox" checked={uniqueOnly} onChange={e=>setUniqueOnly(e.target.checked)}
             style={{accentColor:C.accent}}/>
           Unique only
         </label>
-        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.muted,cursor:"pointer"}}>
+        <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:C.muted,cursor:"pointer"}}>
           <input type="checkbox" checked={defang} onChange={e=>setDefangOpt(e.target.checked)}
             style={{accentColor:C.accent}}/>
           Output defanged
         </label>
-        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.muted,cursor:"pointer"}}>
+        <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:C.muted,cursor:"pointer"}}>
           <input type="checkbox" checked={unwrap} onChange={e=>setUnwrap(e.target.checked)}
             style={{accentColor:C.accent}}/>
           Unwrap SafeLinks
         </label>
         {links.length>0&&(
           <button onClick={copyAll}
-            style={{marginLeft:"auto",fontSize:11,padding:"5px 12px",borderRadius:6,
+            style={{marginLeft:"auto",fontSize:11,padding:"4px 12px",borderRadius:6,
               cursor:"pointer",background:copied==="all"?C.green+"20":C.accentDim,
               border:`1px solid ${copied==="all"?C.green:C.accent}40`,
               color:copied==="all"?C.green:C.accentText,fontFamily:"inherit",fontWeight:600}}>
@@ -4146,7 +4146,7 @@ function SafeLinkExtractor({C}){
 
       {displayLinks.length>0&&(
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
-          <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,
+          <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}`,
             fontSize:11,fontWeight:700,color:C.muted,display:"flex",justifyContent:"space-between"}}>
             <span>
               {links.length} link{links.length!==1?"s":""} found
@@ -4161,7 +4161,7 @@ function SafeLinkExtractor({C}){
                 background:idx%2===0?"transparent":C.surfaceHi+"50"}}>
                 <div style={{flex:1,minWidth:0}}>
                   {item.wrapped&&(
-                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
                       <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:20,
                         background:item.opaque?C.amber+"15":C.accentDim,
                         border:`1px solid ${item.opaque?C.amber+"40":C.accent+"30"}`,
@@ -4306,7 +4306,7 @@ function UserAgentParser({C}){
   useEffect(()=>{parseUA(ua);},[ua]);// eslint-disable-line react-hooks/exhaustive-deps
 
   const Field2=({label,value,mono})=>(
-    <div style={{padding:"10px 14px",display:"flex",justifyContent:"space-between",
+    <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",
       alignItems:"center",borderBottom:`1px solid ${C.border}20`}}>
       <span style={{fontSize:11,color:C.muted,fontWeight:600,flexShrink:0,minWidth:120}}>{label}</span>
       <span style={{fontSize:12,color:C.white||C.textHi,fontFamily:mono?"monospace":"inherit",
@@ -4326,7 +4326,7 @@ function UserAgentParser({C}){
         placeholder={"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
         rows={3}
         style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-          color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:12,
+          color:C.inputText,padding:"12px 12px",borderRadius:8,fontSize:12,
           outline:"none",fontFamily:"monospace",resize:"vertical",
           marginBottom:12,boxSizing:"border-box"}}/>
       <button onClick={()=>setUa(navigator.userAgent)}
@@ -4346,7 +4346,7 @@ function UserAgentParser({C}){
               result.browser.name!=="Unknown"?["🌐",`${result.browser.name} ${result.browser.version}`.trim()]:null,
               result.os.name!=="Unknown"?["💻",`${result.os.name} ${result.os.version}`.trim()]:null,
             ].filter(Boolean).map(([icon,label],i)=>(
-              <span key={i} style={{fontSize:12,padding:"5px 12px",borderRadius:20,fontWeight:600,
+              <span key={i} style={{fontSize:12,padding:"4px 12px",borderRadius:20,fontWeight:600,
                 background:result.bot&&label.includes("Bot")?C.amber+"15":C.accentDim,
                 border:`1px solid ${result.bot&&label.includes("Bot")?C.amber+"40":C.accent+"30"}`,
                 color:result.bot&&label.includes("Bot")?C.amber:C.accentText}}>
@@ -4363,7 +4363,7 @@ function UserAgentParser({C}){
             <Field2 label="Operating System" value={`${result.os.name} ${result.os.version}`.trim()}/>
             <Field2 label="Device Type" value={result.device}/>
             <Field2 label="Mobile" value={result.mobile?"Yes":"No"}/>
-            <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}20`}}>
+            <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}20`}}>
               <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:6}}>Raw UA String</div>
               <code style={{fontSize:11,color:C.text,fontFamily:"monospace",lineHeight:1.6,
                 wordBreak:"break-all",display:"block"}}>{result.raw}</code>
@@ -4438,7 +4438,7 @@ function RedirectTracer({token,C}){
             onKeyDown={e=>e.key==="Enter"&&trace()}
             placeholder="hxxps://bit[.]ly/3xAmPle"
             style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-              color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:13,
+              color:C.inputText,padding:"12px 12px",borderRadius:8,fontSize:13,
               outline:"none",fontFamily:"monospace",boxSizing:"border-box"}}/>
         </div>
         <div>
@@ -4457,14 +4457,14 @@ function RedirectTracer({token,C}){
         <div style={{display:"flex",gap:2,background:C.surfaceHi,borderRadius:8,padding:3}}>
           {UAS.map(u=>(
             <button key={u.id} onClick={()=>setUa(u.id)}
-              style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:"pointer",
+              style={{padding:"4px 12px",borderRadius:6,border:"none",cursor:"pointer",
                 fontSize:11,fontFamily:"inherit",fontWeight:600,
                 background:ua===u.id?C.accent:"transparent",color:ua===u.id?"#fff":C.muted}}>
               {u.label}
             </button>
           ))}
         </div>
-        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.muted,cursor:"pointer"}}>
+        <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:C.muted,cursor:"pointer"}}>
           <input type="checkbox" checked={followMeta} onChange={e=>setFollowMeta(e.target.checked)}
             style={{accentColor:C.accent}}/>
           Follow meta refresh
@@ -4476,14 +4476,14 @@ function RedirectTracer({token,C}){
 
       {err&&(
         <div style={{background:C.red+"12",border:`1px solid ${C.red}40`,borderRadius:8,
-          padding:"10px 14px",fontSize:12,color:C.red,marginBottom:14}}>{err}</div>
+          padding:"12px 16px",fontSize:12,color:C.red,marginBottom:14}}>{err}</div>
       )}
 
       {res&&(
         <>
           {/* Summary */}
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
-            padding:"14px 16px",marginBottom:14}}>
+            padding:"16px 16px",marginBottom:14}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
               marginBottom:10,flexWrap:"wrap",gap:8}}>
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -4519,7 +4519,7 @@ function RedirectTracer({token,C}){
             {res.hops.map((h,i)=>(
               <div key={i} style={{background:C.surface,
                 border:`1px solid ${h.blocked||h.error?C.red+"40":C.border}`,
-                borderRadius:10,padding:"12px 14px"}}>
+                borderRadius:10,padding:"12px 16px"}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7,flexWrap:"wrap"}}>
                   <span style={{fontSize:10,fontWeight:700,width:22,height:22,borderRadius:11,
                     background:C.surfaceHi,color:C.muted,display:"inline-flex",
@@ -4555,7 +4555,7 @@ function RedirectTracer({token,C}){
                   </div>
                 )}
 
-                <div style={{display:"flex",gap:14,flexWrap:"wrap",marginTop:7,fontSize:10.5,color:C.muted}}>
+                <div style={{display:"flex",gap:16,flexWrap:"wrap",marginTop:7,fontSize:10.5,color:C.muted}}>
                   {h.ips?.length>0&&<span><b style={{fontWeight:600}}>IP</b> {h.ips.join(", ")}</span>}
                   {h.server&&<span><b style={{fontWeight:600}}>Server</b> {h.server}</span>}
                   {h.content_type&&<span><b style={{fontWeight:600}}>Type</b> {h.content_type.split(";")[0]}</span>}
@@ -4650,7 +4650,7 @@ function PermissionsPanel({user,token,C,onClose,onChanged}){
     const col=tone==="grant"?C.green:tone==="revoke"?C.red:C.muted;
     return(
       <button onClick={()=>setState(k,val)} disabled={isRoot}
-        style={{padding:"3px 9px",fontSize:10.5,fontWeight:600,fontFamily:"inherit",
+        style={{padding:"4px 8px",fontSize:10.5,fontWeight:600,fontFamily:"inherit",
           border:`1px solid ${active?col:C.border}`,borderRadius:5,
           background:active?col+"1a":"transparent",color:active?col:C.muted,
           cursor:isRoot?"not-allowed":"pointer",opacity:isRoot?.5:1}}>
@@ -4662,7 +4662,7 @@ function PermissionsPanel({user,token,C,onClose,onChanged}){
   return(
     <Card C={C} style={{marginTop:16}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-        marginBottom:6,flexWrap:"wrap",gap:10}}>
+        marginBottom:6,flexWrap:"wrap",gap:12}}>
         <div>
           <div style={{fontSize:14,fontWeight:700,color:C.white||C.textHi}}>
             Permissions — {data.user.username}
@@ -4682,11 +4682,11 @@ function PermissionsPanel({user,token,C,onClose,onChanged}){
         </div>
       )}
 
-      <div style={{display:"flex",alignItems:"center",gap:10,margin:"14px 0",flexWrap:"wrap"}}>
+      <div style={{display:"flex",alignItems:"center",gap:12,margin:"14px 0",flexWrap:"wrap"}}>
         <span style={{fontSize:11.5,color:C.muted,fontWeight:600}}>Role</span>
         <select value={role} onChange={e=>setRole(e.target.value)} disabled={isRoot}
           style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,
-            padding:"6px 10px",borderRadius:6,fontSize:12,fontFamily:"inherit",
+            padding:"8px 12px",borderRadius:6,fontSize:12,fontFamily:"inherit",
             cursor:isRoot?"not-allowed":"pointer"}}>
           {cat.roles.map(r=><option key={r} value={r}>{r}</option>)}
         </select>
@@ -4705,13 +4705,13 @@ function PermissionsPanel({user,token,C,onClose,onChanged}){
         <div key={g} style={{marginBottom:14}}>
           <div style={{fontSize:10,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",
             color:C.muted,marginBottom:6}}>{g}</div>
-          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
             {cat.capabilities.filter(c=>c.group===g).map(c=>(
               <div key={c.key} style={{display:"flex",alignItems:"flex-start",gap:12,
-                padding:"9px 11px",borderRadius:8,background:C.surfaceHi+"55",
+                padding:"12px 12px",borderRadius:8,background:C.surfaceHi+"55",
                 border:`1px solid ${C.border}`}}>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                     <span style={{fontSize:12.5,fontWeight:600,color:C.white||C.textHi}}>{c.label}</span>
                     <span style={{fontSize:9.5,padding:"1px 6px",borderRadius:4,fontWeight:700,
                       background:effective(c.key)?C.green+"18":C.red+"14",
@@ -4886,8 +4886,8 @@ function FilesPage({token,C}){
 
       {err&&(
         <div style={{background:C.red+"12",border:`1px solid ${C.red}40`,borderRadius:8,
-          padding:"10px 14px",fontSize:12,color:C.red,marginBottom:14,
-          display:"flex",justifyContent:"space-between",gap:10}}>
+          padding:"12px 16px",fontSize:12,color:C.red,marginBottom:14,
+          display:"flex",justifyContent:"space-between",gap:12}}>
           <span>{err}</span>
           <button onClick={()=>setErr("")} style={{background:"none",border:"none",
             color:C.red,cursor:"pointer",fontFamily:"inherit",fontSize:12}}>dismiss</button>
@@ -4911,7 +4911,7 @@ function FilesPage({token,C}){
             <div key={f.id} style={{padding:"12px 16px",
               borderBottom:idx<files.length-1?`1px solid ${C.border}40`:"none",
               background:idx%2===0?"transparent":C.surfaceHi+"40"}}>
-              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
                 {renaming===f.id?(
                   <>
                     <input value={renameVal} autoFocus
@@ -4938,7 +4938,7 @@ function FilesPage({token,C}){
                         PUBLIC · {f.download_count||0} ↓
                       </span>
                     )}
-                    <div style={{display:"flex",gap:5,flexShrink:0}}>
+                    <div style={{display:"flex",gap:4,flexShrink:0}}>
                       <Btn sm variant="ghost" C={C} onClick={()=>download(f)}>Download</Btn>
                       <Btn sm variant="ghost" C={C}
                         onClick={()=>{setRenaming(f.id);setRenameVal(f.filename);}}>Rename</Btn>
@@ -4958,7 +4958,7 @@ function FilesPage({token,C}){
                     background:C.surfaceHi,padding:"5px 9px",borderRadius:6,
                     wordBreak:"break-all"}}>{shareUrl(f)}</code>
                   <button onClick={()=>copy(shareUrl(f),f.id)}
-                    style={{fontSize:10.5,padding:"4px 10px",borderRadius:6,cursor:"pointer",
+                    style={{fontSize:10.5,padding:"4px 12px",borderRadius:6,cursor:"pointer",
                       flexShrink:0,background:copied===f.id?C.green+"20":C.accentDim,
                       border:`1px solid ${copied===f.id?C.green:C.accent}40`,
                       color:copied===f.id?C.green:C.accentText,fontFamily:"inherit",fontWeight:600}}>
@@ -4967,7 +4967,7 @@ function FilesPage({token,C}){
                 </div>
               )}
 
-              <div style={{display:"flex",gap:14,flexWrap:"wrap",marginTop:6,
+              <div style={{display:"flex",gap:16,flexWrap:"wrap",marginTop:6,
                 fontSize:10,color:C.muted}}>
                 <span>{new Date(f.created_at).toLocaleString()}</span>
                 {f.content_type&&<span>{f.content_type}</span>}
@@ -5234,7 +5234,7 @@ function DiffChecker({C,token}){
       <textarea value={val} onChange={e=>{set(e.target.value);setRan(true);}} rows={9}
         placeholder="Paste text, config, IOC list, log…"
         style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-          color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:12,
+          color:C.inputText,padding:"12px 12px",borderRadius:8,fontSize:12,
           outline:"none",fontFamily:"monospace",resize:"vertical",boxSizing:"border-box"}}/>
       <div style={{fontSize:10,color:C.muted,marginTop:3}}>
         {lines.length} line{lines.length!==1?"s":""}
@@ -5253,7 +5253,7 @@ function DiffChecker({C,token}){
         changed lines to Groq.
       </div>
 
-      <div style={{display:"flex",gap:14,marginBottom:12,flexWrap:"wrap"}}>
+      <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
         <Pane label="Original" val={left}  set={setLeft}  lines={aLines}/>
         <Pane label="Changed"  val={right} set={setRight} lines={bLines}/>
       </div>
@@ -5262,7 +5262,7 @@ function DiffChecker({C,token}){
         <div style={{display:"flex",gap:2,background:C.surfaceHi,borderRadius:8,padding:3}}>
           {[["split","Side by side"],["unified","Unified"]].map(([id,lbl])=>(
             <button key={id} onClick={()=>setView(id)}
-              style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:"pointer",
+              style={{padding:"4px 12px",borderRadius:6,border:"none",cursor:"pointer",
                 fontSize:11,fontFamily:"inherit",fontWeight:600,
                 background:view===id?C.accent:"transparent",color:view===id?"#fff":C.muted}}>
               {lbl}
@@ -5272,14 +5272,14 @@ function DiffChecker({C,token}){
         {[["Ignore whitespace",ignoreWs,setIgnoreWs],
           ["Ignore case",ignoreCase,setIgnoreCase],
           ["Collapse unchanged",collapse,setCollapse]].map(([lbl,val,set])=>(
-          <label key={lbl} style={{display:"flex",alignItems:"center",gap:6,fontSize:12,
+          <label key={lbl} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,
             color:C.muted,cursor:"pointer"}}>
             <input type="checkbox" checked={val} onChange={e=>set(e.target.checked)}
               style={{accentColor:C.accent}}/>
             {lbl}
           </label>
         ))}
-        <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
           <Btn onClick={swap} variant="ghost" sm C={C}>Swap</Btn>
           <Btn onClick={clearAll} variant="ghost" sm C={C}>Clear</Btn>
           <Btn onClick={copyUnified} variant="dim" sm C={C}>{copied?"Copied!":"Copy diff"}</Btn>
@@ -5288,7 +5288,7 @@ function DiffChecker({C,token}){
 
       {degraded&&(
         <div style={{background:C.amber+"12",border:`1px solid ${C.amber}40`,borderRadius:8,
-          padding:"10px 14px",fontSize:11.5,color:C.amber,marginBottom:12}}>
+          padding:"12px 16px",fontSize:11.5,color:C.amber,marginBottom:12}}>
           These inputs are too dissimilar to align line by line within the time budget —
           showing them as a wholesale replacement rather than freezing the page.
         </div>
@@ -5321,7 +5321,7 @@ function DiffChecker({C,token}){
                 <input value={aiContext} onChange={e=>setAiContext(e.target.value)}
                   placeholder="optional: what is this file? e.g. 'Suricata rules for prod edge'"
                   style={{flex:"1 1 320px",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-                    color:C.inputText,padding:"6px 10px",borderRadius:6,fontSize:11.5,
+                    color:C.inputText,padding:"8px 12px",borderRadius:6,fontSize:11.5,
                     outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
               </div>
               <div style={{fontSize:10,color:C.muted,marginTop:5,opacity:.8}}>
@@ -5333,12 +5333,12 @@ function DiffChecker({C,token}){
 
           {aiErr&&(
             <div style={{background:C.red+"12",border:`1px solid ${C.red}40`,borderRadius:8,
-              padding:"10px 14px",fontSize:11.5,color:C.red,marginBottom:14}}>{aiErr}</div>
+              padding:"12px 16px",fontSize:11.5,color:C.red,marginBottom:14}}>{aiErr}</div>
           )}
 
           {ai&&(
             <div style={{background:C.surface,border:`1px solid ${C.accent}35`,borderRadius:10,
-              padding:"14px 16px",marginBottom:14}}>
+              padding:"16px 16px",marginBottom:14}}>
               <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:9,flexWrap:"wrap"}}>
                 <span style={{fontSize:11,fontWeight:700,color:C.accentText}}>AI ANALYSIS</span>
                 {ai.content_type&&(
@@ -5377,7 +5377,7 @@ function DiffChecker({C,token}){
               )}
 
               {ai.changes?.length>0&&(
-                <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:12}}>
+                <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
                   {ai.changes.map((c,i)=>{
                     const col=c.severity==="high"?C.red:c.severity==="medium"?C.amber:
                               c.severity==="low"?C.accent:C.muted;
@@ -5398,7 +5398,7 @@ function DiffChecker({C,token}){
                   <div style={{fontSize:10.5,fontWeight:700,color:C.muted,marginBottom:5}}>FOLLOW UP</div>
                   {ai.watch_for.map((w,i)=>(
                     <div key={i} style={{fontSize:11.5,color:C.white||C.textHi,lineHeight:1.6,
-                      display:"flex",gap:7}}>
+                      display:"flex",gap:8}}>
                       <span style={{color:C.accent}}>→</span><span>{w}</span>
                     </div>
                   ))}
@@ -5481,7 +5481,7 @@ function OSINTPage({token,C}){
         padding:4,marginBottom:22,width:"fit-content",flexWrap:"wrap"}}>
         {TOOLS.map(t=>(
           <button key={t.id} onClick={()=>setTool(t.id)}
-            style={{padding:"7px 16px",borderRadius:7,border:"none",cursor:"pointer",
+            style={{padding:"8px 16px",borderRadius:7,border:"none",cursor:"pointer",
               fontSize:12,fontFamily:"inherit",fontWeight:600,
               background:tool===t.id?C.accent:"transparent",
               color:tool===t.id?"#fff":C.muted}}>
@@ -5574,7 +5574,7 @@ function QueryGenerator({token,C}){
         <div style={{display:"flex",background:C.surfaceHi,borderRadius:10,padding:3,gap:2}}>
           {[["kql","KQL / Sentinel"],["spl","SPL / Splunk"]].map(([id,label])=>(
             <button key={id} onClick={()=>setQueryType(id)}
-              style={{padding:"7px 16px",borderRadius:8,border:"none",cursor:"pointer",
+              style={{padding:"8px 16px",borderRadius:8,border:"none",cursor:"pointer",
                 fontSize:12,fontFamily:"inherit",fontWeight:600,
                 background:queryType===id?C.purple:"transparent",color:queryType===id?"#fff":C.muted}}>
               {label}
@@ -5596,14 +5596,14 @@ function QueryGenerator({token,C}){
                     :"e.g. Detect brute force login attempts — more than 10 failed authentications within 5 minutes from the same source IP, followed by a successful login"}
                   rows={4}
                   style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-                    color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:13,
+                    color:C.inputText,padding:"12px 12px",borderRadius:8,fontSize:13,
                     outline:"none",fontFamily:"inherit",resize:"vertical",boxSizing:"border-box"}}/>
               </Field>
             </div>
             <Field label={`MITRE Tactic (optional)`} C={C}>
               <select value={tacticHint} onChange={e=>setTacticHint(e.target.value)}
                 style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-                  color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:13,
+                  color:C.inputText,padding:"12px 12px",borderRadius:8,fontSize:13,
                   outline:"none",fontFamily:"inherit"}}>
                 {TACTICS.map(t=><option key={t} value={t}>{t||"— Any —"}</option>)}
               </select>
@@ -5620,7 +5620,7 @@ function QueryGenerator({token,C}){
             <span style={{fontSize:11,color:C.muted}}>Ctrl+Enter in description box also works</span>
           </div>
 
-          {err&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,
+          {err&&<div style={{padding:"12px 16px",background:C.red+"10",border:`1px solid ${C.red}30`,
             borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{err}</div>}
 
           {loading&&(
@@ -5635,7 +5635,7 @@ function QueryGenerator({token,C}){
           {result&&(
             <div>
               {/* Variant tabs */}
-              <div style={{display:"flex",gap:3,background:C.surfaceHi,borderRadius:10,
+              <div style={{display:"flex",gap:4,background:C.surfaceHi,borderRadius:10,
                 padding:3,marginBottom:16,width:"fit-content"}}>
                 {result.queries?.map((q,i)=>(
                   <button key={i} onClick={()=>setActiveVariant(i)}
@@ -5649,7 +5649,7 @@ function QueryGenerator({token,C}){
               </div>
 
               {variant&&(
-                <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:14}}>
+                <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16}}>
                   {/* Left: Query */}
                   <div>
                     <div style={{background:C.surface,border:`1px solid ${C.border}`,
@@ -5658,7 +5658,7 @@ function QueryGenerator({token,C}){
                       <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}`,
                         display:"flex",justifyContent:"space-between",alignItems:"center",
                         background:C.surfaceHi}}>
-                        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                        <div style={{display:"flex",gap:12,alignItems:"center"}}>
                           <span style={{fontSize:12,fontWeight:700,color:C.white||C.textHi}}>
                             {variant.label}
                           </span>
@@ -5672,7 +5672,7 @@ function QueryGenerator({token,C}){
                           </span>
                         </div>
                         <button onClick={()=>copyQuery(variant.query)}
-                          style={{fontSize:11,padding:"5px 12px",borderRadius:6,cursor:"pointer",
+                          style={{fontSize:11,padding:"4px 12px",borderRadius:6,cursor:"pointer",
                             background:copied?C.green+"20":C.accentDim,
                             border:`1px solid ${copied?C.green:C.accent}40`,
                             color:copied?C.green:C.accentText,fontWeight:600,fontFamily:"inherit"}}>
@@ -5709,7 +5709,7 @@ function QueryGenerator({token,C}){
                     {/* MITRE */}
                     {result.mitre&&(
                       <div style={{background:C.surface,border:`1px solid ${C.border}`,
-                        borderRadius:10,padding:"14px 16px",boxShadow:C.shadow}}>
+                        borderRadius:10,padding:"16px 16px",boxShadow:C.shadow}}>
                         <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:8,
                           textTransform:"uppercase",letterSpacing:"0.05em"}}>MITRE ATT&CK</div>
                         <div style={{fontSize:12,color:C.red,fontWeight:700,marginBottom:4}}>
@@ -5731,7 +5731,7 @@ function QueryGenerator({token,C}){
                     {/* Required tables */}
                     {(result.required_tables||result.required_indexes)?.length>0&&(
                       <div style={{background:C.surface,border:`1px solid ${C.border}`,
-                        borderRadius:10,padding:"14px 16px",boxShadow:C.shadow}}>
+                        borderRadius:10,padding:"16px 16px",boxShadow:C.shadow}}>
                         <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:8,
                           textTransform:"uppercase",letterSpacing:"0.05em"}}>
                           Required {queryType==="kql"?"Tables":"Indexes"}
@@ -5749,7 +5749,7 @@ function QueryGenerator({token,C}){
                     {/* False positives */}
                     {result.false_positives?.length>0&&(
                       <div style={{background:C.surface,border:`1px solid ${C.amber}30`,
-                        borderRadius:10,padding:"14px 16px",boxShadow:C.shadow}}>
+                        borderRadius:10,padding:"16px 16px",boxShadow:C.shadow}}>
                         <div style={{fontSize:10,color:C.amber,fontWeight:600,marginBottom:8,
                           textTransform:"uppercase",letterSpacing:"0.05em"}}>⚠ False Positives</div>
                         {result.false_positives.map((fp,i)=>(
@@ -5762,7 +5762,7 @@ function QueryGenerator({token,C}){
                     {/* Tuning tips */}
                     {result.tuning_tips?.length>0&&(
                       <div style={{background:C.surface,border:`1px solid ${C.border}`,
-                        borderRadius:10,padding:"14px 16px",boxShadow:C.shadow}}>
+                        borderRadius:10,padding:"16px 16px",boxShadow:C.shadow}}>
                         <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:8,
                           textTransform:"uppercase",letterSpacing:"0.05em"}}>Tuning Tips</div>
                         {result.tuning_tips.map((tip,i)=>(
@@ -5808,7 +5808,7 @@ function QueryGenerator({token,C}){
             {explainResult&&<Btn onClick={()=>{setExplainResult(null);setExplainQuery("");}} variant="dim" C={C}>Clear</Btn>}
           </div>
 
-          {explainErr&&<div style={{padding:"10px 14px",background:C.red+"10",border:`1px solid ${C.red}30`,
+          {explainErr&&<div style={{padding:"12px 16px",background:C.red+"10",border:`1px solid ${C.red}30`,
             borderRadius:8,color:C.red,fontSize:13,marginBottom:16}}>{explainErr}</div>}
 
           {explaining&&(
@@ -5822,7 +5822,7 @@ function QueryGenerator({token,C}){
             <div>
               {/* Summary card */}
               <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-                padding:"18px 20px",marginBottom:14,boxShadow:C.shadow}}>
+                padding:"20px 20px",marginBottom:14,boxShadow:C.shadow}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
                   gap:12,flexWrap:"wrap",marginBottom:12}}>
                   <div style={{flex:1}}>
@@ -5843,7 +5843,7 @@ function QueryGenerator({token,C}){
                     )}
                     {explainResult.mitre?.technique&&(
                       <a href={explainResult.mitre?.url||"#"} target="_blank" rel="noreferrer"
-                        style={{fontSize:11,padding:"4px 10px",borderRadius:6,fontWeight:600,
+                        style={{fontSize:11,padding:"4px 12px",borderRadius:6,fontWeight:600,
                           background:C.purple+"20",color:C.purple,border:`1px solid ${C.purple}30`,
                           textDecoration:"none"}}>
                         {explainResult.mitre.technique}
@@ -5852,7 +5852,7 @@ function QueryGenerator({token,C}){
                   </div>
                 </div>
                 {explainResult.estimated_fidelity&&(
-                  <div style={{fontSize:11,color:C.muted,padding:"6px 10px",background:C.surfaceHi,
+                  <div style={{fontSize:11,color:C.muted,padding:"8px 12px",background:C.surfaceHi,
                     borderRadius:6,display:"inline-block"}}>
                     Estimated fidelity: {explainResult.estimated_fidelity}
                   </div>
@@ -5889,7 +5889,7 @@ function QueryGenerator({token,C}){
               {/* 3-column detail grid */}
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:12,marginBottom:14}}>
                 {explainResult.what_it_catches?.length>0&&(
-                  <div style={{background:C.surface,border:`1px solid ${C.green}30`,borderRadius:10,padding:"14px 16px"}}>
+                  <div style={{background:C.surface,border:`1px solid ${C.green}30`,borderRadius:10,padding:"16px 16px"}}>
                     <div style={{fontSize:10,color:C.green,fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>✓ What It Catches</div>
                     {explainResult.what_it_catches.map((w,i)=>(
                       <div key={i} style={{fontSize:11,color:C.text,marginBottom:4,lineHeight:1.5}}>• {w}</div>
@@ -5897,7 +5897,7 @@ function QueryGenerator({token,C}){
                   </div>
                 )}
                 {explainResult.what_it_misses?.length>0&&(
-                  <div style={{background:C.surface,border:`1px solid ${C.amber}30`,borderRadius:10,padding:"14px 16px"}}>
+                  <div style={{background:C.surface,border:`1px solid ${C.amber}30`,borderRadius:10,padding:"16px 16px"}}>
                     <div style={{fontSize:10,color:C.amber,fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>✗ What It Misses</div>
                     {explainResult.what_it_misses.map((w,i)=>(
                       <div key={i} style={{fontSize:11,color:C.text,marginBottom:4,lineHeight:1.5}}>• {w}</div>
@@ -5905,7 +5905,7 @@ function QueryGenerator({token,C}){
                   </div>
                 )}
                 {explainResult.false_positives?.length>0&&(
-                  <div style={{background:C.surface,border:`1px solid ${C.red}20`,borderRadius:10,padding:"14px 16px"}}>
+                  <div style={{background:C.surface,border:`1px solid ${C.red}20`,borderRadius:10,padding:"16px 16px"}}>
                     <div style={{fontSize:10,color:C.red,fontWeight:600,marginBottom:8,textTransform:"uppercase"}}>⚠ False Positives</div>
                     {explainResult.false_positives.map((fp,i)=>(
                       <div key={i} style={{fontSize:11,color:C.text,marginBottom:4,lineHeight:1.5}}>• {fp}</div>
@@ -5922,7 +5922,7 @@ function QueryGenerator({token,C}){
                     🛠 Improvement Suggestions
                   </div>
                   {explainResult.improvements.map((imp,i)=>(
-                    <div key={i} style={{marginBottom:12,padding:"10px 14px",background:C.surfaceHi,borderRadius:8}}>
+                    <div key={i} style={{marginBottom:12,padding:"12px 16px",background:C.surfaceHi,borderRadius:8}}>
                       <div style={{fontSize:12,fontWeight:700,color:C.amber,marginBottom:4}}>
                         Issue: {imp.issue}
                       </div>
@@ -5965,7 +5965,7 @@ function GlobalSearch({token,C,onSelect,onCVELookup}){
 
   return(
     <div ref={ref} style={{position:"relative",maxWidth:440,width:"100%"}}>
-      <div style={{display:"flex",gap:6}}>
+      <div style={{display:"flex",gap:8}}>
         <input value={q} onChange={e=>setQ(e.target.value)}
           onKeyDown={e=>{if(e.key==="Enter")search();}}
           placeholder={isCVE?"Press Enter to look up this CVE across all sources...":"Global IOC search or CVE-XXXX-XXXX..."}
@@ -5983,9 +5983,9 @@ function GlobalSearch({token,C,onSelect,onCVELookup}){
       {isCVE&&q.trim()&&(
         <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,zIndex:300,
           background:C.surface,border:`1px solid ${C.accent}40`,borderRadius:10,
-          boxShadow:C.shadow,padding:"12px 14px",cursor:"pointer"}}
+          boxShadow:C.shadow,padding:"12px 16px",cursor:"pointer"}}
           onClick={()=>{onCVELookup&&onCVELookup(q.trim().toUpperCase());setOpen(false);setQ("");}}>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
             <span style={{fontSize:20}}>🔍</span>
             <div>
               <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi}}>
@@ -6008,7 +6008,7 @@ function GlobalSearch({token,C,onSelect,onCVELookup}){
             </div>
             {results.count===0&&<div style={{padding:16,fontSize:13,color:C.muted}}>No IOCs found.</div>}
             {results.results?.map(ioc=>(
-              <div key={ioc.id} onClick={()=>{onSelect(ioc);setOpen(false);}} style={{padding:"12px 14px",cursor:"pointer",borderBottom:`1px solid ${C.border}20`}}
+              <div key={ioc.id} onClick={()=>{onSelect(ioc);setOpen(false);}} style={{padding:"12px 16px",cursor:"pointer",borderBottom:`1px solid ${C.border}20`}}
                 onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHi} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
                   <span style={{fontSize:11,padding:"1px 6px",borderRadius:3,background:C.badge||C.surfaceHi,color:C.accentText,fontWeight:700}}>{ioc.type}</span>
@@ -6034,10 +6034,10 @@ function Dashboard({token,C}){
   useEffect(()=>{api("/stats/dashboard",{},token).then(r=>r.ok?r.json():null).then(d=>{if(d)setStats(d);});},[token]);
 
   if(!stats)return(
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14,marginBottom:24}}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:16,marginBottom:24}}>
       {[1,2,3,4].map(i=>(
         <div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,
-          borderRadius:12,padding:"22px 24px",height:90,opacity:.5}}/>
+          borderRadius:12,padding:"24px 24px",height:90,opacity:.5}}/>
       ))}
     </div>
   );
@@ -6217,7 +6217,7 @@ function ApiKeyModal({token, C, onClose}){
 
           {/* Quota banner if running low */}
           {anyQuotaLow&&(
-            <div style={{padding:"10px 14px",background:C.amber+"15",border:`1px solid ${C.amber}40`,
+            <div style={{padding:"12px 16px",background:C.amber+"15",border:`1px solid ${C.amber}40`,
               borderRadius:8,fontSize:12,color:C.amber,marginBottom:16}}>
               ⚠ You're running low on free daily checks. Add your API keys to continue without limits.
             </div>
@@ -6305,7 +6305,7 @@ function NoteCard({note,onEdit,onTogglePin,onArchive,onDelete,onToggleCheck,onTa
   const done=checklist.filter(i=>i.checked).length;
   return(
     <div onClick={()=>onEdit(note)}
-      style={{...ns, borderRadius:12, padding:"14px 16px",
+      style={{...ns, borderRadius:12, padding:"16px 16px",
         cursor:"pointer", position:"relative",
         transition:"box-shadow 0.15s",
         breakInside:"avoid", marginBottom:12}}>
@@ -6466,7 +6466,7 @@ function NoteEditor({editingNote,draftTitle,setDraftTitle,draftContent,setDraftC
               <button onClick={addCheckItem}
                 style={{background:"none",border:"none",cursor:"pointer",
                   fontSize:12,color:draftColor==="default"?C.muted:"rgba(255,255,255,0.6)",
-                  padding:"4px 0",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
+                  padding:"4px 0",fontFamily:"inherit",display:"flex",alignItems:"center",gap:8}}>
                 + Add item
               </button>
             </div>
@@ -6491,7 +6491,7 @@ function NoteEditor({editingNote,draftTitle,setDraftTitle,draftContent,setDraftC
         )}
 
         {/* Bottom toolbar */}
-        <div style={{display:"flex",alignItems:"center",gap:6,padding:"8px 12px",
+        <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
           borderTop:`1px solid rgba(255,255,255,0.1)`,flexWrap:"wrap"}}>
 
           {/* Type toggle */}
@@ -6499,7 +6499,7 @@ function NoteEditor({editingNote,draftTitle,setDraftTitle,draftContent,setDraftC
             {[["text","📝"],["checklist","☑️"]].map(([t,icon])=>(
               <button key={t} onClick={()=>setDraftType(t)}
                 style={{background:draftType===t?"rgba(255,255,255,0.2)":"transparent",
-                  border:"none",cursor:"pointer",padding:"4px 10px",
+                  border:"none",cursor:"pointer",padding:"4px 12px",
                   fontSize:12,color:draftType===t?"#fff":"rgba(255,255,255,0.6)",
                   fontFamily:"inherit"}}>
                 {icon} {t.charAt(0).toUpperCase()+t.slice(1)}
@@ -6513,13 +6513,13 @@ function NoteEditor({editingNote,draftTitle,setDraftTitle,draftContent,setDraftC
               title="Change color"
               style={{background:showColorPicker?"rgba(255,255,255,0.2)":"transparent",
                 border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,cursor:"pointer",
-                padding:"4px 10px",fontSize:12,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>
+                padding:"4px 12px",fontSize:12,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>
               🎨 Color
             </button>
             {showColorPicker&&(
               <div style={{position:"absolute",bottom:"calc(100% + 6px)",left:0,
                 background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
-                padding:10,display:"flex",flexWrap:"wrap",gap:6,width:200,zIndex:10,
+                padding:10,display:"flex",flexWrap:"wrap",gap:8,width:200,zIndex:10,
                 boxShadow:"0 8px 24px rgba(0,0,0,0.4)"}}>
                 {NOTE_COLORS.map(nc=>(
                   <button key={nc.id} title={nc.label}
@@ -6547,7 +6547,7 @@ function NoteEditor({editingNote,draftTitle,setDraftTitle,draftContent,setDraftC
                 fontSize:11,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>Add</button>
           </div>
 
-          <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+          <div style={{marginLeft:"auto",display:"flex",gap:8}}>
             <button onClick={onClose}
               style={{background:"transparent",border:"1px solid rgba(255,255,255,0.2)",
                 borderRadius:6,cursor:"pointer",padding:"5px 14px",
@@ -6742,9 +6742,9 @@ function WorkspacePage({token,C}){
 
       {/* Tag filter bar */}
       {allTags.length>0&&(
-        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
           <button onClick={()=>setTagFilter("")}
-            style={{fontSize:11,padding:"4px 10px",borderRadius:10,cursor:"pointer",
+            style={{fontSize:11,padding:"4px 12px",borderRadius:10,cursor:"pointer",
               border:`1px solid ${!tagFilter?C.accent:C.border}`,
               background:!tagFilter?C.accentDim:"transparent",
               color:!tagFilter?C.accentText:C.muted,fontFamily:"inherit"}}>
@@ -6752,7 +6752,7 @@ function WorkspacePage({token,C}){
           </button>
           {allTags.map(t=>(
             <button key={t} onClick={()=>setTagFilter(t===tagFilter?"":t)}
-              style={{fontSize:11,padding:"4px 10px",borderRadius:10,cursor:"pointer",
+              style={{fontSize:11,padding:"4px 12px",borderRadius:10,cursor:"pointer",
                 border:`1px solid ${tagFilter===t?C.accent:C.border}`,
                 background:tagFilter===t?C.accentDim:"transparent",
                 color:tagFilter===t?C.accentText:C.muted,fontFamily:"inherit"}}>
@@ -6760,7 +6760,7 @@ function WorkspacePage({token,C}){
             </button>
           ))}
           <button onClick={()=>setShowArchived(p=>!p)}
-            style={{fontSize:11,padding:"4px 10px",borderRadius:10,cursor:"pointer",
+            style={{fontSize:11,padding:"4px 12px",borderRadius:10,cursor:"pointer",
               border:`1px solid ${showArchived?C.amber:C.border}`,
               background:showArchived?C.amber+"15":"transparent",
               color:showArchived?C.amber:C.muted,fontFamily:"inherit",marginLeft:"auto"}}>
@@ -6989,7 +6989,7 @@ function AdvisoryBuilder({token,C}){
   if(result){
     return(
       <div style={{maxWidth:900}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:12}}>
           <div>
             <div style={{fontSize:16,fontWeight:700,color:C.white||C.textHi}}>Advisory Preview</div>
             <div style={{fontSize:11,color:C.muted}}>{result.subject}</div>
@@ -7029,7 +7029,7 @@ function AdvisoryBuilder({token,C}){
               <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi}}>Threat Indicators</div>
               <div style={{fontSize:10,color:C.muted}}>Select up to {MAX_IOCS} — {selectedIocIds.size} selected</div>
             </div>
-            <div style={{display:"flex",gap:6}}>
+            <div style={{display:"flex",gap:8}}>
               <select value={familyFilter} onChange={e=>setFamilyFilter(e.target.value)}
                 style={{fontSize:11,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"4px 8px",borderRadius:6,fontFamily:"inherit"}}>
                 <option value="fintech">🏦 Fintech / GCC</option>
@@ -7044,7 +7044,7 @@ function AdvisoryBuilder({token,C}){
               <button onClick={rescanSelected}
                 disabled={selectedIocIds.size===0||Object.keys(rescanning).length>0}
                 title="Re-check every selected indicator against live sources before it goes to a client"
-                style={{fontSize:11,padding:"4px 10px",borderRadius:6,fontFamily:"inherit",fontWeight:600,
+                style={{fontSize:11,padding:"4px 12px",borderRadius:6,fontFamily:"inherit",fontWeight:600,
                   cursor:selectedIocIds.size===0?"not-allowed":"pointer",
                   background:selectedIocIds.size?C.accentDim:"transparent",
                   border:`1px solid ${selectedIocIds.size?C.accent+"55":C.border}`,
@@ -7067,7 +7067,7 @@ function AdvisoryBuilder({token,C}){
               const disabled=!sel&&selectedIocIds.size>=MAX_IOCS;
               return(
                 <div key={ioc.id} onClick={()=>!disabled&&toggleIoc(ioc.id)}
-                  style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",
+                  style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
                     borderRadius:8,cursor:disabled?"not-allowed":"pointer",
                     background:sel?C.accentDim:C.surfaceHi,
                     border:`1px solid ${sel?C.accent:C.border}`,
@@ -7075,7 +7075,7 @@ function AdvisoryBuilder({token,C}){
                   <input type="checkbox" checked={sel} readOnly
                     style={{accentColor:C.accent,flexShrink:0,cursor:"pointer"}}/>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                    <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                       <span style={{fontSize:10,padding:"1px 6px",borderRadius:3,fontWeight:700,
                         background:C.accentDim,color:C.accentText}}>{ioc.type}</span>
                       {ioc.family&&<span style={{fontSize:10,padding:"1px 6px",borderRadius:3,
@@ -7085,7 +7085,7 @@ function AdvisoryBuilder({token,C}){
                     <div style={{fontSize:11,fontFamily:"monospace",color:C.text,marginTop:3,
                       wordBreak:"break-all",lineHeight:1.3}}>{ioc.value}</div>
                   </div>
-                  <div style={{display:"flex",alignItems:"center",gap:7,flexShrink:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                     {(()=>{ const r=rescanned[ioc.id];
                       if(!r) return <span style={{fontSize:10,color:C.muted}}>{ioc.confidence}%</span>;
                       if(r.error) return <span style={{fontSize:9.5,color:C.red}} title={r.error}>re-scan failed</span>;
@@ -7117,12 +7117,12 @@ function AdvisoryBuilder({token,C}){
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px",boxShadow:C.shadow,display:"flex",flexDirection:"column"}}>
           <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>CVE Advisories</div>
           <div style={{fontSize:10,color:C.muted,marginBottom:10}}>Surfaced from CISA KEV + EPSS · Actively exploited · Widely-used tech only</div>
-          <div style={{display:"flex",gap:6,marginBottom:10}}>
+          <div style={{display:"flex",gap:8,marginBottom:10}}>
             <input value={cveSearch} onChange={e=>setCveSearch(e.target.value)}
               onKeyDown={e=>e.key==="Enter"&&searchCve()}
               placeholder="Or add specific CVE-XXXX-XXXXX"
               style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-                color:C.inputText,padding:"6px 10px",borderRadius:6,fontSize:12,
+                color:C.inputText,padding:"8px 12px",borderRadius:6,fontSize:12,
                 outline:"none",fontFamily:"monospace"}}/>
             <Btn onClick={searchCve} disabled={cveSearching||selectedCves.length>=MAX_CVES} C={C}>{cveSearching?"...":"Add"}</Btn>
           </div>
@@ -7131,11 +7131,11 @@ function AdvisoryBuilder({token,C}){
               {selectedCves.map(cve=>{
                 const sc=cve.severity==="CRITICAL"?C.red:cve.severity==="HIGH"?C.amber:C.muted;
                 return(
-                  <div key={cve.id} style={{padding:"8px 10px",marginBottom:6,background:C.accentDim,
+                  <div key={cve.id} style={{padding:"8px 12px",marginBottom:6,background:C.accentDim,
                     border:`1px solid ${C.accent}40`,borderRadius:7,
                     display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                     <div style={{flex:1}}>
-                      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:3}}>
+                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:3}}>
                         <span style={{fontSize:11,fontWeight:700,color:C.accentText}}>{cve.id}</span>
                         {cve.severity&&<span style={{fontSize:10,padding:"1px 5px",borderRadius:3,
                           fontWeight:700,background:sc+"15",color:sc}}>{cve.severity} {cve.cvss_score||""}</span>}
@@ -7171,7 +7171,7 @@ function AdvisoryBuilder({token,C}){
                       cvss_score:cve.cvss_score,severity:cve.severity,vendor:cve.vendor,
                       product:cve.product,kev_date:cve.kev_date,ransomware:cve.ransomware,epss_pct:cve.epss_pct}]);
                   }}
-                  style={{padding:"8px 10px",marginBottom:5,borderRadius:7,cursor:disabled?"not-allowed":"pointer",
+                  style={{padding:"8px 12px",marginBottom:5,borderRadius:7,cursor:disabled?"not-allowed":"pointer",
                     background:already?C.accentDim:C.surfaceHi,border:`1px solid ${already?C.accent:C.border}`,opacity:disabled?0.4:1}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                     <div style={{flex:1,minWidth:0}}>
@@ -7222,7 +7222,7 @@ function AdvisoryBuilder({token,C}){
           </div>
           <div>
             <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>TLP Classification</div>
-            <div style={{display:"flex",gap:6}}>
+            <div style={{display:"flex",gap:8}}>
               {["WHITE","GREEN","AMBER","RED"].map(t=>(
                 <button key={t} onClick={()=>setTlp(t)}
                   style={{flex:1,padding:"7px 4px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",
@@ -7354,7 +7354,7 @@ function ConnectorsPage({token,C}){
       {/* Global schedule */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
         padding:"16px 20px",marginBottom:16,boxShadow:C.shadow}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
           <div>
             <div style={{fontSize:13,fontWeight:600,color:C.white||C.textHi}}>Auto-sync schedule</div>
             <div style={{fontSize:11,color:C.muted}}>Enabled connectors sync automatically on this interval</div>
@@ -7389,7 +7389,7 @@ function ConnectorsPage({token,C}){
                       <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi}}>{conn.name}</div>
                       <div style={{fontSize:10,color:C.muted}}>via {conn.source}</div>
                     </div>
-                    <label style={{display:"flex",alignItems:"center",gap:6,marginLeft:8,cursor:"pointer"}}>
+                    <label style={{display:"flex",alignItems:"center",gap:8,marginLeft:8,cursor:"pointer"}}>
                       <input type="checkbox" checked={enabled||false}
                         onChange={e=>setCfg(p=>({...p,[conn.enabled_key]:e.target.checked}))}
                         style={{accentColor:C.accent,width:15,height:15}}/>
@@ -7402,7 +7402,7 @@ function ConnectorsPage({token,C}){
                   {/* Settings */}
                   <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
                     {conn.settings.map(s=>(
-                      <label key={s.key} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:C.muted}}>
+                      <label key={s.key} style={{display:"flex",alignItems:"center",gap:8,fontSize:11,color:C.muted}}>
                         {s.label}:
                         <input type="number" min={s.min} max={s.max} value={cfg[s.key]||s.min}
                           onChange={e=>setCfg(p=>({...p,[s.key]:parseInt(e.target.value)||s.min}))}
@@ -7493,7 +7493,7 @@ function HealthPage({token,C}){
     return(
       <div style={{background:C.surfaceHi,border:`1px solid ${ok?C.border:C.red+"40"}`,
         borderRadius:10,padding:"12px 16px"}}>
-        <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:ok?0:8}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:ok?0:8}}>
           <StatusDot ok={ok}/>
           <div style={{flex:1}}>
             <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi}}>{title}</div>
@@ -7569,7 +7569,7 @@ function HealthPage({token,C}){
             Last checked: {lastRun.toLocaleTimeString()}
           </div>}
         </div>
-        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+        <div style={{display:"flex",gap:12,alignItems:"center"}}>
           {overall&&(
             <div style={{fontSize:12,fontWeight:700,padding:"6px 14px",borderRadius:8,
               background:overallColor+"15",border:`1px solid ${overallColor}40`,color:overallColor}}>
@@ -7637,7 +7637,7 @@ function HealthPage({token,C}){
       )}
 
       {/* Server-side script tip */}
-      <div style={{marginTop:20,padding:"14px 16px",background:C.surfaceHi,
+      <div style={{marginTop:20,padding:"16px 16px",background:C.surfaceHi,
         border:`1px solid ${C.border}`,borderRadius:10}}>
         <div style={{fontSize:12,fontWeight:600,color:C.white||C.textHi,marginBottom:6}}>
           Server-side health check script
@@ -7670,9 +7670,9 @@ function PasswordChangeCard({token,C}){
   }
   return(
     <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-      padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+      padding:"20px 20px",marginBottom:16,boxShadow:C.shadow}}>
       <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:14}}>Change Password</div>
-      <div style={{display:"grid",gap:10,maxWidth:360}}>
+      <div style={{display:"grid",gap:12,maxWidth:360}}>
         {[["Current Password",cur,setCur],["New Password",nw,setNw],["Confirm New Password",conf,setConf]].map(([label,val,set])=>(
           <div key={label}>
             <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>{label}</div>
@@ -7823,7 +7823,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
     <div style={{maxWidth:700}}>
       {/* Theme */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-        padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+        padding:"20px 20px",marginBottom:16,boxShadow:C.shadow}}>
         <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:14}}>
           UI Theme
         </div>
@@ -7842,7 +7842,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
 
       {/* API Keys */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-        padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+        padding:"20px 20px",marginBottom:16,boxShadow:C.shadow}}>
         <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:8}}>
           API Keys
         </div>
@@ -7858,7 +7858,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
       {/* ── ADMIN: IOC Feed Cleanup ── */}
       {isAdmin&&(
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-          padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+          padding:"20px 20px",marginBottom:16,boxShadow:C.shadow}}>
           <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:4}}>
             🧹 IOC Feed Cleanup
           </div>
@@ -7874,7 +7874,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
       {/* ── ADMIN: Access Requests ── */}
       {isAdmin&&(
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-          padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+          padding:"20px 20px",marginBottom:16,boxShadow:C.shadow}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
             <div>
               <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
@@ -7885,7 +7885,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
               </div>
             </div>
             <button onClick={loadAccessRequests}
-              style={{fontSize:11,padding:"5px 12px",borderRadius:6,background:C.surfaceHi,
+              style={{fontSize:11,padding:"4px 12px",borderRadius:6,background:C.surfaceHi,
                 border:`1px solid ${C.border}`,color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>
               {accessLoading?"...":"↻ Refresh"}
             </button>
@@ -7899,7 +7899,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {accessRequests.map(req=>(
                 <div key={req.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-                  flexWrap:"wrap",gap:10,padding:"12px 14px",background:C.surfaceHi,
+                  flexWrap:"wrap",gap:12,padding:"12px 16px",background:C.surfaceHi,
                   border:`1px solid ${C.border}`,borderRadius:9}}>
                   <div style={{minWidth:0}}>
                     <div style={{fontSize:13,fontWeight:600,color:C.white||C.textHi}}>{req.username}</div>
@@ -7909,7 +7909,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
                       Requested {new Date(req.requested_at).toLocaleDateString()}
                     </div>
                   </div>
-                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                  <div style={{display:"flex",gap:8,flexShrink:0}}>
                     <button onClick={()=>decideRequest(req.id,"approve","analyst")} disabled={decidingId===req.id}
                       style={{fontSize:11,padding:"6px 12px",borderRadius:6,cursor:"pointer",
                         background:C.green+"15",border:`1px solid ${C.green}40`,color:C.green,
@@ -7940,7 +7940,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
       {/* ── ADMIN: Notification Center ── */}
       {isAdmin&&notifSettings&&(
         <div style={{background:C.surface,border:`1px solid ${C.accent}30`,borderRadius:12,
-          padding:"18px 20px",marginBottom:16,boxShadow:C.shadow}}>
+          padding:"20px 20px",marginBottom:16,boxShadow:C.shadow}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
             <div>
               <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
@@ -7959,9 +7959,9 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
           </div>
 
           {/* Schedule toggles */}
-          <div style={{display:"flex",gap:10,marginBottom:18}}>
+          <div style={{display:"flex",gap:12,marginBottom:18}}>
             {[["daily_enabled","📅 Daily Brief (8 AM)"],["weekly_enabled","📊 Weekly Summary (Sunday)"]].map(([k,label])=>(
-              <label key={k} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",
+              <label key={k} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",
                 padding:"7px 14px",background:notifSettings[k]?C.accentDim:C.surfaceHi,
                 border:`1px solid ${notifSettings[k]?C.accent:C.border}`,
                 borderRadius:8,fontSize:12,fontWeight:600,
@@ -7978,7 +7978,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:16,marginBottom:16}}>
 
             {/* ntfy.sh */}
-            <div style={{padding:"14px 16px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
+            <div style={{padding:"16px 16px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
               <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
                 📱 ntfy (Push Notifications)
               </div>
@@ -7991,11 +7991,11 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
 
               <div style={{marginBottom:12}}>
                 <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>Server</div>
-                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:6}}>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:6}}>
                   {[["https://ntfy.sh","ntfy.sh (public)"],["custom","Self-hosted"]].map(([val,label])=>(
                     <button key={val} onClick={()=>setNotifSettings(p=>({...p,
                       ntfy_server:val==="custom"?(p.ntfy_server==="https://ntfy.sh"?"https://your-ntfy-server.com":p.ntfy_server):val}))}
-                      style={{padding:"4px 10px",borderRadius:6,border:`1px solid ${
+                      style={{padding:"4px 12px",borderRadius:6,border:`1px solid ${
                         (notifSettings.ntfy_server||"https://ntfy.sh")===(val==="custom"?"https://ntfy.sh":val)?C.border:C.accent}`,
                         background:(notifSettings.ntfy_server||"https://ntfy.sh")===(val==="custom"?"https://ntfy.sh":val)?C.surfaceHi:C.accentDim,
                         color:(notifSettings.ntfy_server||"https://ntfy.sh")===(val==="custom"?"https://ntfy.sh":val)?C.muted:C.accentText,
@@ -8023,7 +8023,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
                   {[["min","Min"],["low","Low"],["default","Default"],["high","High"],["urgent","Urgent ⚡"]].map(([val,label])=>(
                     <button key={val}
                       onClick={()=>setNotifSettings(p=>({...p,ntfy_priority:val}))}
-                      style={{padding:"4px 10px",borderRadius:6,border:`1px solid ${
+                      style={{padding:"4px 12px",borderRadius:6,border:`1px solid ${
                         (notifSettings.ntfy_priority||"urgent")===val?C.accent:C.border}`,
                         background:(notifSettings.ntfy_priority||"urgent")===val?C.accentDim:C.surfaceHi,
                         color:(notifSettings.ntfy_priority||"urgent")===val?C.accentText:C.muted,
@@ -8035,7 +8035,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
               </div>
 
               {/* Doze mode instructions */}
-              <div style={{padding:"10px 12px",background:C.accentDim,border:`1px solid ${C.accent}30`,
+              <div style={{padding:"12px 12px",background:C.accentDim,border:`1px solid ${C.accent}30`,
                 borderRadius:8,fontSize:10,color:C.accentText,lineHeight:1.8}}>
                 <div style={{fontWeight:700,marginBottom:4}}>📲 Android Doze Mode Setup</div>
                 <div style={{color:C.text}}>
@@ -8051,7 +8051,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
             </div>
 
             {/* Telegram */}
-            <div style={{padding:"14px 16px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
+            <div style={{padding:"16px 16px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
               <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
                 ✈️ Telegram Bot
               </div>
@@ -8068,7 +8068,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
             <summary style={{fontSize:12,fontWeight:600,color:C.muted,cursor:"pointer",marginBottom:8}}>
               📧 Email (SMTP) — expand to configure
             </summary>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:10}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:10}}>
               <NF label="Recipient Email" field="email_to" placeholder="you@email.com"/>
               <NF label="SMTP Host" field="smtp_host" placeholder="smtp.gmail.com"/>
               <NF label="SMTP Port" field="smtp_port" placeholder="587"/>
@@ -8105,7 +8105,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
 
           {/* Preview panel */}
           {preview&&(
-            <div style={{marginTop:16,padding:"14px 16px",background:C.surfaceHi,
+            <div style={{marginTop:16,padding:"16px 16px",background:C.surfaceHi,
               border:`1px solid ${C.border}`,borderRadius:10}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
                 <div style={{fontSize:11,fontWeight:700,color:C.accentText,textTransform:"uppercase"}}>
@@ -8125,7 +8125,7 @@ function SettingsPage({themeName,setThemeName,token,onLogout,C,me,onOpenApiKeys}
 
       {/* Logout */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
-        padding:"18px 20px",boxShadow:C.shadow}}>
+        padding:"20px 20px",boxShadow:C.shadow}}>
         <Btn onClick={onLogout} variant="danger" C={C}>Sign Out</Btn>
       </div>
     </div>
@@ -8335,7 +8335,7 @@ export default function App(){
                 </div>
               </>
             )}
-            {authErr&&<div style={{fontSize:12,color:C.red,marginBottom:16,padding:"10px 14px",background:C.red+"15",borderRadius:8,border:`1px solid ${C.red}30`}}>{authErr}</div>}
+            {authErr&&<div style={{fontSize:12,color:C.red,marginBottom:16,padding:"12px 16px",background:C.red+"15",borderRadius:8,border:`1px solid ${C.red}30`}}>{authErr}</div>}
             <Btn onClick={authTab==="login"?authLogin:authSignup} disabled={authLoading||!authUsername||!authPassword} C={C} full>{authLoading?"Please wait...":(authTab==="login"?"Sign In →":"Create Account →")}</Btn>
             <div style={{marginTop:16,fontSize:11,color:C.muted,textAlign:"center"}}>{API_BASE.replace("https://","")}</div>
           </div>
@@ -8422,7 +8422,7 @@ export default function App(){
       }}>
         {/* Logo */}
         <div style={{padding:"20px 20px 16px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
             <div style={{width:32,height:32,borderRadius:8,background:C.accent,
               display:"flex",alignItems:"center",justifyContent:"center"}}>
               <NavIcon name="shield" size={16} color="#fff"/>
@@ -8455,7 +8455,7 @@ export default function App(){
             return(
               <button key={n.id} className="nav-item" onClick={()=>setView(n.id)}
                 style={{
-                  display:"flex",alignItems:"center",gap:10,width:"100%",
+                  display:"flex",alignItems:"center",gap:12,width:"100%",
                   padding:"9px 12px",borderRadius:8,marginBottom:2,
                   border:"none",cursor:"pointer",textAlign:"left",
                   background:active?C.navActive:"transparent",
@@ -8472,8 +8472,8 @@ export default function App(){
         </nav>
 
         {/* User footer */}
-        <div style={{padding:"12px 14px",borderTop:`1px solid ${C.border}`}}>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div style={{padding:"12px 16px",borderTop:`1px solid ${C.border}`}}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
             <div style={{width:30,height:30,borderRadius:"50%",background:C.accentDim,
               display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
               <span style={{fontSize:12,fontWeight:700,color:C.accentText}}>
@@ -8516,9 +8516,9 @@ export default function App(){
                   color:C.accentText,borderRadius:8,cursor:"pointer",fontSize:12,
                   fontFamily:"inherit",fontWeight:600}}>STIX Export</button>
               <button onClick={()=>{setView("add");setAddResult(null);}}
-                style={{padding:"7px 16px",background:C.accent,border:"none",color:"#fff",
+                style={{padding:"8px 16px",background:C.accent,border:"none",color:"#fff",
                   borderRadius:8,cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600,
-                  display:"flex",alignItems:"center",gap:6}}>
+                  display:"flex",alignItems:"center",gap:8}}>
                 <NavIcon name="plus" size={14} color="#fff"/> Add IOC
               </button>
             </>}
@@ -8559,21 +8559,21 @@ export default function App(){
                   [["All",...TLP_LEVELS],filterTLP,setFilterTLP,"TLP"]].map(([opts,val,setVal,label],idx)=>(
                   <select key={idx} value={val} onChange={e=>setVal(e.target.value)}
                     style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,
-                      padding:"8px 10px",borderRadius:8,fontSize:12,outline:"none",fontFamily:"inherit"}}>
+                      padding:"8px 12px",borderRadius:8,fontSize:12,outline:"none",fontFamily:"inherit"}}>
                     <option value="All">{label}: All</option>
                     {opts.slice(1).map(o=><option key={o}>{o}</option>)}
                   </select>
                 ))}
                 <select value={filterCampaign} onChange={e=>setFilterCampaign(e.target.value)}
                   style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,
-                    padding:"8px 10px",borderRadius:8,fontSize:12,outline:"none",fontFamily:"inherit"}}>
+                    padding:"8px 12px",borderRadius:8,fontSize:12,outline:"none",fontFamily:"inherit"}}>
                   <option value="All">Campaign: All</option>
                   {campaigns.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
-                <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.muted,cursor:"pointer"}}>
+                <label style={{display:"flex",alignItems:"center",gap:4,fontSize:12,color:C.muted,cursor:"pointer"}}>
                   <input type="checkbox" checked={filterExpired} onChange={e=>setFilterExpired(e.target.checked)} style={{accentColor:C.accent}}/>Expired
                 </label>
-                <label style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.muted,cursor:"pointer"}}>
+                <label style={{display:"flex",alignItems:"center",gap:4,fontSize:12,color:C.muted,cursor:"pointer"}}>
                   <input type="checkbox" checked={filterFP} onChange={e=>setFilterFP(e.target.checked)} style={{accentColor:C.accent}}/>FP
                 </label>
               </div>
@@ -8592,7 +8592,7 @@ export default function App(){
                   {iocs.length===0?"No IOCs yet — add one above.":"No matches for current filters."}
                 </div>
               )}
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:10}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:12}}>
                 {filtered.map(ioc=>{
                   const canDelete=me?.role==="admin"||ioc.created_by===me?.id;
                   const conf=ioc.confidence||0;
@@ -8601,7 +8601,7 @@ export default function App(){
                     <div key={ioc.id} onClick={()=>setSelectedIOC(ioc)}
                       style={{background:C.surface,border:`1px solid ${
                         ioc.false_positive?C.amber+"50":ioc.expired?C.border:C.border}`,
-                        borderRadius:10,padding:"12px 14px",cursor:"pointer",
+                        borderRadius:10,padding:"12px 16px",cursor:"pointer",
                         boxShadow:C.shadow,transition:"border-color .12s, box-shadow .12s",
                         opacity:ioc.expired?0.65:1}}
                       onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.boxShadow=C.shadowMd||C.shadow;}}
@@ -8631,7 +8631,7 @@ export default function App(){
                         {ioc.campaign_id&&<span style={{fontSize:11,color:C.amber,fontWeight:500}}>📁 Campaign</span>}
                         {ioc.false_positive&&<span style={{fontSize:10,color:C.amber,border:`1px solid ${C.amber}40`,padding:"1px 5px",borderRadius:3,fontWeight:700}}>FP</span>}
                         {ioc.expired&&<span style={{fontSize:10,color:C.red,border:`1px solid ${C.red}40`,padding:"1px 5px",borderRadius:3,fontWeight:700}}>EXPIRED</span>}
-                        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
+                        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
                           <div style={{width:40,height:3,background:C.border,borderRadius:2,overflow:"hidden"}}>
                             <div style={{width:`${conf}%`,height:"100%",background:confColor,borderRadius:2}}/>
                           </div>
@@ -8640,7 +8640,7 @@ export default function App(){
                       </div>
 
                       {/* Bottom row: tags + MITRE + author */}
-                      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                         {(ioc.tags||[]).slice(0,3).map(t=><Tag key={t} label={t} C={C}/>)}
                         {(ioc.tags||[]).length>3&&<Tag label={`+${ioc.tags.length-3}`} C={C}/>}
                         {(ioc.mitre_techniques||[]).length>0&&(
@@ -8677,25 +8677,25 @@ export default function App(){
               )}
               {!addResult&&(<>
                 <div style={{marginBottom:20,padding:14,background:C.accentDim,border:`1px solid ${C.accent}28`,borderRadius:10,fontSize:13,color:C.accentText,lineHeight:1.7}}>Fanged IOCs normalized automatically. Confidence validated via VT, AbuseIPDB, URLhaus. Results cached 24h.</div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
                   <Field label="IOC Type" C={C}><Sel value={form.type} onChange={v=>setForm(p=>({...p,type:v}))} options={IOC_TYPES} C={C}/></Field>
                   <Field label="Industry" C={C}><Sel value={form.industry} onChange={v=>setForm(p=>({...p,industry:v}))} options={INDUSTRIES} C={C}/></Field>
                 </div>
                 <Field label="Indicator Value" C={C}><Inp value={form.value} onChange={v=>{setForm(p=>({...p,value:v}));setDupWarning(null);}} placeholder="e.g. hxxp://evil[.]com or 185[.]220[.]101[.]45" C={C}/></Field>
-                {dupWarning&&<div style={{marginBottom:14,padding:"10px 14px",background:C.amber+"10",border:`1px solid ${C.amber}40`,borderRadius:8,fontSize:13,color:C.amber}}>⚠ Already exists — added by <strong>{dupWarning.author||"unknown"}</strong> · conf {dupWarning.confidence}</div>}
+                {dupWarning&&<div style={{marginBottom:14,padding:"12px 16px",background:C.amber+"10",border:`1px solid ${C.amber}40`,borderRadius:8,fontSize:13,color:C.amber}}>⚠ Already exists — added by <strong>{dupWarning.author||"unknown"}</strong> · conf {dupWarning.confidence}</div>}
                 <div style={{display:"flex",gap:8,marginBottom:18,flexWrap:"wrap"}}>
                   <Btn onClick={aiEnrich} disabled={enriching||!form.value} variant="dim" C={C}>{enriching?"Pre-filling...":"⚡ Pre-fill"}</Btn>
                   <Btn onClick={()=>checkDup(form.value)} disabled={!form.value} variant="ghost" C={C}>Check Duplicate</Btn>
                   {enrichErr&&<span style={{fontSize:12,color:C.red,alignSelf:"center"}}>{enrichErr}</span>}
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
                   <Field label="TLP Level" C={C}><Sel value={form.tlp} onChange={v=>setForm(p=>({...p,tlp:v}))} options={TLP_LEVELS} C={C}/></Field>
                   <Field label="Base Confidence" C={C}><Inp value={form.confidence} onChange={v=>setForm(p=>({...p,confidence:v}))} type="number" C={C}/></Field>
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
                   <Field label="Expiry (days)" C={C}><Inp value={form.valid_days} onChange={v=>setForm(p=>({...p,valid_days:v}))} type="number" placeholder="90" C={C}/></Field>
                   <Field label="Campaign" C={C}>
-                    <select value={form.campaign_id} onChange={e=>setForm(p=>({...p,campaign_id:e.target.value}))} style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}>
+                    <select value={form.campaign_id} onChange={e=>setForm(p=>({...p,campaign_id:e.target.value}))} style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"12px 12px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit"}}>
                       <option value="">None</option>{campaigns.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                   </Field>
@@ -8704,15 +8704,15 @@ export default function App(){
                 <Field label="Tags (comma-separated)" C={C}><Inp value={form.tags} onChange={v=>setForm(p=>({...p,tags:v}))} placeholder="c2, malware, apt" C={C}/></Field>
                 <Field label="MITRE ATT&CK Techniques" C={C}>
                   <select onChange={e=>{if(e.target.value&&!form.mitre_techniques.includes(e.target.value)){setForm(p=>({...p,mitre_techniques:[...p.mitre_techniques,e.target.value]}));}e.target.value="";}}
-                    style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"10px 12px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit",marginBottom:8}}>
+                    style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"12px 12px",borderRadius:8,fontSize:14,outline:"none",fontFamily:"inherit",marginBottom:8}}>
                     <option value="">Add technique...</option>{MITRE_TECHNIQUES.map(t=><option key={t} value={t}>{t}</option>)}
                   </select>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                     {form.mitre_techniques.map(t=><span key={t} onClick={()=>setForm(p=>({...p,mitre_techniques:p.mitre_techniques.filter(x=>x!==t)}))} style={{fontSize:11,padding:"3px 8px",borderRadius:4,background:C.purple+"20",color:C.purple,fontFamily:"inherit",border:`1px solid ${C.purple}40`,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>{t.split(" - ")[0]} ×</span>)}
                   </div>
                 </Field>
-                {saveErr&&<div style={{fontSize:12,color:C.red,marginBottom:12,padding:"10px 14px",background:C.red+"10",borderRadius:8}}>{saveErr}</div>}
-                <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                {saveErr&&<div style={{fontSize:12,color:C.red,marginBottom:12,padding:"12px 16px",background:C.red+"10",borderRadius:8}}>{saveErr}</div>}
+                <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
                   <Btn onClick={addIOC} disabled={!form.value.trim()||saving} C={C}>{saving?"Validating & saving...":"Submit IOC"}</Btn>
                   <Btn onClick={()=>setView("feed")} variant="ghost" C={C}>Cancel</Btn>
                 </div>
@@ -8759,7 +8759,7 @@ export default function App(){
           {view==="import"&&(
             <div style={{maxWidth:700}}>
               <div style={{display:"flex",marginBottom:20,background:C.surfaceHi,borderRadius:10,padding:3,gap:2,flexWrap:"wrap"}}>
-                {["stix","taxii","misp","csv"].map(t=><button key={t} onClick={()=>{setImportTab(t);setImportResult(null);}} style={{padding:"7px 16px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600,background:importTab===t?C.accent:"transparent",color:importTab===t?"#fff":C.muted}}>{t.toUpperCase()}</button>)}
+                {["stix","taxii","misp","csv"].map(t=><button key={t} onClick={()=>{setImportTab(t);setImportResult(null);}} style={{padding:"8px 16px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600,background:importTab===t?C.accent:"transparent",color:importTab===t?"#fff":C.muted}}>{t.toUpperCase()}</button>)}
               </div>
               {importTab==="stix"&&(<><div style={{fontSize:12,color:C.muted,marginBottom:14,lineHeight:1.7}}>Paste a STIX 2.1 bundle. Each indicator is parsed, normalized, enriched, and stored.</div><Field label="STIX Bundle JSON" C={C}><Inp value={stixText} onChange={setStixText} placeholder='{"type":"bundle","spec_version":"2.1","objects":[...]}' C={C} rows={10}/></Field><Btn onClick={doImport} disabled={!stixText.trim()||importing} C={C}>{importing?"Importing...":"Import Bundle"}</Btn></>)}
               {importTab==="taxii"&&(<><div style={{fontSize:12,color:C.muted,marginBottom:14,lineHeight:1.7}}>Poll a remote TAXII 2.1 server and import all indicators.</div><Field label="TAXII Server URL" C={C}><Inp value={taxiiUrl} onChange={setTaxiiUrl} placeholder="https://taxii.example.com" C={C}/></Field><Field label="Collection ID" C={C}><Inp value={taxiiCollection} onChange={setTaxiiCollection} placeholder="collection-uuid" C={C}/></Field><Field label="Bearer Token (optional)" C={C}><Inp value={taxiiToken} onChange={setTaxiiToken} type="password" C={C}/></Field><Btn onClick={doImport} disabled={!taxiiUrl||!taxiiCollection||importing} C={C}>{importing?"Polling...":"Poll TAXII Server"}</Btn></>)}
@@ -8803,16 +8803,16 @@ export default function App(){
               </Card>
               <Card C={C} style={{overflow:"hidden",padding:0}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                  <thead><tr style={{background:C.surfaceHi,borderBottom:`1px solid ${C.border}`}}>{["Username","Role","Status","Created","",""].map((h,hi)=><th key={hi} style={{padding:"10px 14px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:700}}>{h}</th>)}</tr></thead>
+                  <thead><tr style={{background:C.surfaceHi,borderBottom:`1px solid ${C.border}`}}>{["Username","Role","Status","Created","",""].map((h,hi)=><th key={hi} style={{padding:"12px 16px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:700}}>{h}</th>)}</tr></thead>
                   <tbody>
                     {users.map((u,idx)=>(
                       <tr key={u.id} style={{borderBottom:`1px solid ${C.border}20`,background:idx%2===0?"transparent":C.surfaceHi+"40"}}>
-                        <td style={{padding:"10px 14px",color:C.white,fontWeight:500}}>{u.username}{u.id===me?.id&&<span style={{color:C.muted,fontSize:11}}> (you)</span>}</td>
-                        <td style={{padding:"10px 14px"}}><span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:u.role==="admin"?C.purple+"20":C.green+"20",color:u.role==="admin"?C.purple:C.green,fontWeight:600}}>{u.role}</span></td>
-                        <td style={{padding:"10px 14px"}}><span style={{fontSize:12,color:u.active?C.green:C.red,fontWeight:500}}>{u.active?"Active":"Disabled"}</span></td>
-                        <td style={{padding:"10px 14px",fontSize:12,color:C.muted}}>{new Date(u.created_at).toLocaleDateString()}</td>
-                        <td style={{padding:"10px 14px"}}>{u.id!==me?.id&&<button onClick={async()=>{await api(`/users/${u.id}/${u.active?"disable":"enable"}`,{method:"PATCH"},token);api("/users",{},token).then(r=>r.ok?r.json():[]).then(setUsers);}} style={{padding:"3px 10px",background:"none",border:`1px solid ${u.active?C.red:C.accent}40`,color:u.active?C.red:C.accentText,borderRadius:4,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>{u.active?"Disable":"Enable"}</button>}</td>
-                        <td style={{padding:"10px 14px"}}><button onClick={()=>setPermUser(permUser?.id===u.id?null:u)} style={{padding:"3px 10px",background:"none",border:`1px solid ${C.accent}40`,color:C.accentText,borderRadius:4,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>{permUser?.id===u.id?"Hide":"Permissions"}</button></td>
+                        <td style={{padding:"12px 16px",color:C.white,fontWeight:500}}>{u.username}{u.id===me?.id&&<span style={{color:C.muted,fontSize:11}}> (you)</span>}</td>
+                        <td style={{padding:"12px 16px"}}><span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:u.role==="admin"?C.purple+"20":C.green+"20",color:u.role==="admin"?C.purple:C.green,fontWeight:600}}>{u.role}</span></td>
+                        <td style={{padding:"12px 16px"}}><span style={{fontSize:12,color:u.active?C.green:C.red,fontWeight:500}}>{u.active?"Active":"Disabled"}</span></td>
+                        <td style={{padding:"12px 16px",fontSize:12,color:C.muted}}>{new Date(u.created_at).toLocaleDateString()}</td>
+                        <td style={{padding:"12px 16px"}}>{u.id!==me?.id&&<button onClick={async()=>{await api(`/users/${u.id}/${u.active?"disable":"enable"}`,{method:"PATCH"},token);api("/users",{},token).then(r=>r.ok?r.json():[]).then(setUsers);}} style={{padding:"4px 12px",background:"none",border:`1px solid ${u.active?C.red:C.accent}40`,color:u.active?C.red:C.accentText,borderRadius:4,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>{u.active?"Disable":"Enable"}</button>}</td>
+                        <td style={{padding:"12px 16px"}}><button onClick={()=>setPermUser(permUser?.id===u.id?null:u)} style={{padding:"4px 12px",background:"none",border:`1px solid ${C.accent}40`,color:C.accentText,borderRadius:4,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>{permUser?.id===u.id?"Hide":"Permissions"}</button></td>
                       </tr>
                     ))}
                   </tbody>
@@ -8832,18 +8832,18 @@ export default function App(){
                   <Field label="Role" C={C}><Sel value={newInviteRole} onChange={setNewInviteRole} options={["analyst","admin"]} C={C}/></Field>
                   <Btn onClick={async()=>{const r=await api("/invites",{method:"POST",body:JSON.stringify({role:newInviteRole})},token);if(r.ok){const d=await r.json();setInviteMsg(`Code: ${d.code} (${d.role})`);api("/invites",{},token).then(r=>r.ok?r.json():[]).then(setInvites);}}} C={C}>Generate</Btn>
                 </div>
-                {inviteMsg&&<div style={{marginTop:12,padding:"10px 14px",background:C.green+"10",border:`1px solid ${C.green}30`,borderRadius:8,fontSize:14,color:C.green,fontFamily:"monospace",fontWeight:700}}>{inviteMsg}</div>}
+                {inviteMsg&&<div style={{marginTop:12,padding:"12px 16px",background:C.green+"10",border:`1px solid ${C.green}30`,borderRadius:8,fontSize:14,color:C.green,fontFamily:"monospace",fontWeight:700}}>{inviteMsg}</div>}
               </Card>
               <Card C={C} style={{overflow:"hidden",padding:0}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                  <thead><tr style={{background:C.surfaceHi,borderBottom:`1px solid ${C.border}`}}>{["Code","Role","Status","Created"].map(h=><th key={h} style={{padding:"10px 14px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:700}}>{h}</th>)}</tr></thead>
+                  <thead><tr style={{background:C.surfaceHi,borderBottom:`1px solid ${C.border}`}}>{["Code","Role","Status","Created"].map(h=><th key={h} style={{padding:"12px 16px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:700}}>{h}</th>)}</tr></thead>
                   <tbody>
                     {invites.map((inv,idx)=>(
                       <tr key={inv.code} style={{borderBottom:`1px solid ${C.border}20`,background:idx%2===0?"transparent":C.surfaceHi+"40"}}>
-                        <td style={{padding:"10px 14px",fontFamily:"monospace",fontSize:12,color:inv.used?C.muted:C.accentText,textDecoration:inv.used?"line-through":"none"}}>{inv.code}</td>
-                        <td style={{padding:"10px 14px",fontSize:12,color:C.muted}}>{inv.role}</td>
-                        <td style={{padding:"10px 14px"}}><span style={{fontSize:12,color:inv.used?C.muted:C.green,fontWeight:500}}>{inv.used?"Used":"Available"}</span></td>
-                        <td style={{padding:"10px 14px",fontSize:12,color:C.muted}}>{new Date(inv.created_at).toLocaleDateString()}</td>
+                        <td style={{padding:"12px 16px",fontFamily:"monospace",fontSize:12,color:inv.used?C.muted:C.accentText,textDecoration:inv.used?"line-through":"none"}}>{inv.code}</td>
+                        <td style={{padding:"12px 16px",fontSize:12,color:C.muted}}>{inv.role}</td>
+                        <td style={{padding:"12px 16px"}}><span style={{fontSize:12,color:inv.used?C.muted:C.green,fontWeight:500}}>{inv.used?"Used":"Available"}</span></td>
+                        <td style={{padding:"12px 16px",fontSize:12,color:C.muted}}>{new Date(inv.created_at).toLocaleDateString()}</td>
                       </tr>
                     ))}
                   </tbody>
