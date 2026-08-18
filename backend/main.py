@@ -356,6 +356,12 @@ async def startup():
             id VARCHAR(100) PRIMARY KEY, username VARCHAR(50) UNIQUE NOT NULL,
             password TEXT NOT NULL, role VARCHAR(20) DEFAULT 'analyst',
             email VARCHAR(255), active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT NOW())""",
+        """CREATE TABLE IF NOT EXISTS user_permissions (
+            user_id VARCHAR(100) NOT NULL,
+            capability VARCHAR(60) NOT NULL,
+            granted BOOLEAN NOT NULL DEFAULT TRUE,
+            updated_by VARCHAR(100), updated_at TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (user_id, capability))""",
         """CREATE TABLE IF NOT EXISTS stored_files (
             id VARCHAR(100) PRIMARY KEY,
             filename VARCHAR(300) NOT NULL,
@@ -792,8 +798,74 @@ def get_current_user(token: str = Depends(oauth2), conn=Depends(get_db)):
     if not user: raise exc
     return user
 
-def require_admin(user=Depends(get_current_user)):
-    if user["role"] != "admin":
+# ── CAPABILITIES ──────────────────────────────────────────────────────────────
+# Roles alone could not express "this analyst may also run imports" without
+# promoting them to full admin. A capability is the unit of permission; a role is
+# just a starting set of them, and per-user grants/revokes layer on top.
+#
+# Only capabilities that are actually enforced on an endpoint appear here — a
+# matrix listing switches that do nothing would be worse than no matrix.
+CAPABILITIES = [
+    # key,                label,                     description,                                                        group
+    ("data.workspace",    "Live workspace data",     "See and use the real IOC feed, campaigns and assets. Without it the account is limited to stateless tools (CVE lookup, OSINT, query builder).", "Data"),
+    ("ioc.delete",        "Delete IOCs",             "Remove indicators from the feed.",                                  "Data"),
+    ("ioc.import",        "Import IOCs",             "Bulk-load indicators from CSV, STIX, TAXII or MISP.",               "Data"),
+    ("ioc.export",        "Export IOCs",             "Download the feed as CSV or a STIX bundle, and read the TAXII API.", "Data"),
+    ("tools.ai",          "AI tools",                "Query builder, query explainer and the AI diff explanation. These spend Groq quota.", "Tools"),
+    ("admin.panel",       "Admin area",              "Reach the admin pages at all: users, invites, connectors, health, notifications.", "Admin"),
+    ("admin.users",       "Manage users",            "Create accounts, change roles, enable/disable, and edit permissions.", "Admin"),
+    ("admin.maintenance", "Destructive maintenance", "Purge old CVEs, run the advisory-IOC cleanup, force feed syncs and CVE polls.", "Admin"),
+]
+CAPABILITY_KEYS = {c[0] for c in CAPABILITIES}
+
+# A role is a preset, not a cage: everything here can be overridden per user.
+ROLE_PRESETS = {
+    "explorer": set(),
+    "analyst":  {"data.workspace", "ioc.import", "ioc.export", "tools.ai"},
+    "admin":    {"data.workspace", "ioc.delete", "ioc.import", "ioc.export",
+                 "tools.ai", "admin.panel", "admin.users", "admin.maintenance"},
+}
+ROLES = list(ROLE_PRESETS.keys())
+
+
+def effective_caps(user, conn) -> set:
+    """Role preset, plus per-user grants, minus per-user revokes.
+
+    The root admin always resolves to everything — otherwise a mis-click in the
+    matrix could remove the last account able to fix the matrix.
+    """
+    if user["username"] == ROOT_ADMIN_USERNAME:
+        return set(CAPABILITY_KEYS)
+    caps = set(ROLE_PRESETS.get(user["role"], set()))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT capability, granted FROM user_permissions WHERE user_id = %s",
+                    (user["id"],))
+        for capability, granted in cur.fetchall():
+            if capability not in CAPABILITY_KEYS:
+                continue
+            caps.add(capability) if granted else caps.discard(capability)
+    except Exception:
+        conn.rollback()   # a missing table must not lock everyone out
+    return caps
+
+
+def require_cap(capability: str):
+    """Dependency factory: gate an endpoint on one capability."""
+    def _dep(user=Depends(get_current_user), conn=Depends(get_db)):
+        if capability not in effective_caps(user, conn):
+            label = next((c[1] for c in CAPABILITIES if c[0] == capability), capability)
+            raise HTTPException(status_code=403,
+                detail=f"Your account does not have the \"{label}\" permission. "
+                       f"An administrator can grant it under Users -> Permissions.")
+        return user
+    return _dep
+
+
+def require_admin(user=Depends(get_current_user), conn=Depends(get_db)):
+    # Now capability-backed, so granting admin.panel to an analyst genuinely
+    # works instead of requiring a full role promotion.
+    if "admin.panel" not in effective_caps(user, conn):
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
@@ -807,7 +879,7 @@ def require_root_admin(user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Not permitted")
     return user
 
-def require_full_access(user=Depends(get_current_user)):
+def require_full_access(user=Depends(get_current_user), conn=Depends(get_db)):
     """
     Blocks the 'explorer' role from sensitive data — the personal IOC
     feed, monitored assets, and campaigns. Explorers can still use every
@@ -815,7 +887,7 @@ def require_full_access(user=Depends(get_current_user)):
     read-only Bulk IOC Lookup) but can't see or modify the owner's
     actual tracked threat-intel data.
     """
-    if user["role"] == "explorer":
+    if "data.workspace" not in effective_caps(user, conn):
         raise HTTPException(status_code=403,
             detail="This is part of the live workspace, not available in demo/explorer mode. Request full access to unlock it.")
     return user
@@ -2380,11 +2452,13 @@ async def signup(request: Request, body: SignupRequest, conn=Depends(get_db)):
     return {"access_token":token,"token_type":"bearer","username":body.username,"role":role}
 
 @app.get("/auth/me")
-def me(user=Depends(get_current_user)):
-    return {"id":user["id"],"username":user["username"],"role":user["role"]}
+def me(user=Depends(get_current_user), conn=Depends(get_db)):
+    return {"id":user["id"],"username":user["username"],"role":user["role"],
+            "capabilities": sorted(effective_caps(user, conn)),
+            "is_root_admin": user["username"] == ROOT_ADMIN_USERNAME}
 
 @app.delete("/admin/purge-old-cves")
-def purge_old_cves(before_year: int = 2023, admin=Depends(require_admin), conn=Depends(get_db)):
+def purge_old_cves(before_year: int = 2023, admin=Depends(require_cap("admin.maintenance")), conn=Depends(get_db)):
     """Remove CVEs published before a given year. Default: remove pre-2023 CVEs."""
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM cve_findings WHERE published_date < %s", (f"{before_year}-01-01",))
@@ -2395,7 +2469,7 @@ def purge_old_cves(before_year: int = 2023, admin=Depends(require_admin), conn=D
     return {"removed": count, "message": f"Removed {count} CVEs published before {before_year}"}
 
 @app.post("/admin/cleanup-advisory-iocs")
-def cleanup_advisory_iocs(dry_run: bool = False, admin=Depends(require_admin), conn=Depends(get_db)):
+def cleanup_advisory_iocs(dry_run: bool = False, admin=Depends(require_cap("admin.maintenance")), conn=Depends(get_db)):
     """
     Purge IOCs that were auto-extracted from CVE advisory references.
     
@@ -2561,7 +2635,7 @@ def get_quota(user=Depends(get_current_user), conn=Depends(get_db)):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.post("/invites")
-def create_invite(body: InviteCreate, admin=Depends(require_admin), conn=Depends(get_db)):
+def create_invite(body: InviteCreate, admin=Depends(require_cap("admin.users")), conn=Depends(get_db)):
     code = uuid.uuid4().hex[:16].upper()
     cur  = conn.cursor()
     cur.execute("INSERT INTO invite_codes (code,role,created_by) VALUES (%s,%s,%s)", (code,body.role,admin["id"]))
@@ -2573,6 +2647,109 @@ def list_invites(admin=Depends(require_admin), conn=Depends(get_db)):
     cur.execute("SELECT * FROM invite_codes ORDER BY created_at DESC")
     return cur.fetchall()
 
+# ── PERMISSIONS ADMIN ─────────────────────────────────────────────────────────
+
+class PermissionUpdate(BaseModel):
+    # cap -> True (grant), False (revoke), or null (clear override, fall back to role)
+    overrides: dict
+
+class RoleUpdate(BaseModel):
+    role: str
+
+
+@app.get("/admin/capabilities")
+def list_capabilities(admin=Depends(require_cap("admin.users"))):
+    """Catalog for the permission matrix: what exists, and what each role starts with."""
+    return {
+        "capabilities": [{"key": k, "label": l, "description": d, "group": g}
+                         for k, l, d, g in CAPABILITIES],
+        "roles": ROLES,
+        "presets": {r: sorted(c) for r, c in ROLE_PRESETS.items()},
+        "root_admin": ROOT_ADMIN_USERNAME,
+    }
+
+
+@app.get("/admin/users/{user_id}/permissions")
+def get_user_permissions(user_id: str, admin=Depends(require_cap("admin.users")),
+                         conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT id, username, role FROM users WHERE id = %s", (user_id,))
+    target = cur.fetchone()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    cur.execute("SELECT capability, granted FROM user_permissions WHERE user_id = %s", (user_id,))
+    overrides = {r["capability"]: r["granted"] for r in cur.fetchall()
+                 if r["capability"] in CAPABILITY_KEYS}
+    return {
+        "user": dict(target),
+        "preset": sorted(ROLE_PRESETS.get(target["role"], set())),
+        "overrides": overrides,
+        "effective": sorted(effective_caps(dict(target), conn)),
+        "is_root_admin": target["username"] == ROOT_ADMIN_USERNAME,
+    }
+
+
+@app.put("/admin/users/{user_id}/permissions")
+def set_user_permissions(user_id: str, body: PermissionUpdate,
+                         admin=Depends(require_cap("admin.users")), conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT id, username, role FROM users WHERE id = %s", (user_id,))
+    target = cur.fetchone()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["username"] == ROOT_ADMIN_USERNAME:
+        raise HTTPException(status_code=400,
+            detail="The owner account always holds every permission and cannot be restricted.")
+    # Removing your own ability to manage users would strand the matrix.
+    if target["id"] == admin["id"] and body.overrides.get("admin.users") is False:
+        raise HTTPException(status_code=400,
+            detail="You cannot remove your own \"Manage users\" permission.")
+
+    for cap, val in body.overrides.items():
+        if cap not in CAPABILITY_KEYS:
+            raise HTTPException(status_code=400, detail=f"Unknown capability: {cap}")
+        if val is None:
+            cur.execute("DELETE FROM user_permissions WHERE user_id=%s AND capability=%s",
+                        (user_id, cap))
+        else:
+            cur.execute("""INSERT INTO user_permissions (user_id,capability,granted,updated_by,updated_at)
+                           VALUES (%s,%s,%s,%s,NOW())
+                           ON CONFLICT (user_id,capability)
+                           DO UPDATE SET granted=EXCLUDED.granted,
+                                         updated_by=EXCLUDED.updated_by, updated_at=NOW()""",
+                        (user_id, cap, bool(val), admin["username"]))
+    conn.commit()
+    cur.execute("SELECT capability, granted FROM user_permissions WHERE user_id = %s", (user_id,))
+    overrides = {r["capability"]: r["granted"] for r in cur.fetchall()}
+    return {"status": "updated", "overrides": overrides,
+            "effective": sorted(effective_caps(dict(target), conn))}
+
+
+@app.patch("/admin/users/{user_id}/role")
+def set_user_role(user_id: str, body: RoleUpdate,
+                  admin=Depends(require_cap("admin.users")), conn=Depends(get_db)):
+    """Promote or demote. Changing role swaps the preset; per-user overrides stay."""
+    if body.role not in ROLE_PRESETS:
+        raise HTTPException(status_code=400,
+            detail=f"Unknown role '{body.role}'. Valid roles: {', '.join(ROLES)}")
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT id, username, role FROM users WHERE id = %s", (user_id,))
+    target = cur.fetchone()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["username"] == ROOT_ADMIN_USERNAME and body.role != "admin":
+        raise HTTPException(status_code=400,
+            detail="The owner account cannot be demoted.")
+    if target["id"] == admin["id"] and body.role != "admin":
+        raise HTTPException(status_code=400,
+            detail="You cannot demote your own account.")
+    cur.execute("UPDATE users SET role = %s WHERE id = %s", (body.role, user_id))
+    conn.commit()
+    target = dict(target); target["role"] = body.role
+    return {"status": "updated", "user_id": user_id, "role": body.role,
+            "effective": sorted(effective_caps(target, conn))}
+
+
 @app.get("/users")
 def list_users(admin=Depends(require_admin), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -2580,7 +2757,7 @@ def list_users(admin=Depends(require_admin), conn=Depends(get_db)):
     return cur.fetchall()
 
 @app.post("/users", status_code=201)
-def create_user(body: UserCreate, admin=Depends(require_admin), conn=Depends(get_db)):
+def create_user(body: UserCreate, admin=Depends(require_cap("admin.users")), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT id FROM users WHERE username = %s", (body.username,))
     if cur.fetchone(): raise HTTPException(status_code=400, detail="Username already exists")
@@ -2590,13 +2767,13 @@ def create_user(body: UserCreate, admin=Depends(require_admin), conn=Depends(get
     conn.commit(); return {"id":uid,"username":body.username,"role":body.role}
 
 @app.patch("/users/{user_id}/disable")
-def disable_user(user_id: str, admin=Depends(require_admin), conn=Depends(get_db)):
+def disable_user(user_id: str, admin=Depends(require_cap("admin.users")), conn=Depends(get_db)):
     cur = conn.cursor()
     cur.execute("UPDATE users SET active = FALSE WHERE id = %s", (user_id,)); conn.commit()
     return {"status":"disabled"}
 
 @app.patch("/users/{user_id}/enable")
-def enable_user(user_id: str, admin=Depends(require_admin), conn=Depends(get_db)):
+def enable_user(user_id: str, admin=Depends(require_cap("admin.users")), conn=Depends(get_db)):
     cur = conn.cursor()
     cur.execute("UPDATE users SET active = TRUE WHERE id = %s", (user_id,)); conn.commit()
     return {"status":"enabled"}
@@ -2949,7 +3126,7 @@ def score_history(ioc_id: str, user=Depends(require_full_access), conn=Depends(g
     return cur.fetchall()
 
 @app.delete("/iocs/{ioc_id}")
-def delete_ioc(ioc_id: str, user=Depends(require_full_access), conn=Depends(get_db)):
+def delete_ioc(ioc_id: str, user=Depends(require_cap("ioc.delete")), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT created_by, value, type FROM iocs WHERE id = %s", (ioc_id,))
     ioc = cur.fetchone()
@@ -5166,7 +5343,7 @@ async def mitre_actor_lookup(name: str, user=Depends(get_current_user)):
 STIX_TYPE_MAP = {"ipv4-addr":"IPv4","ipv6-addr":"IPv6","domain-name":"Domain","url":"URL","email-addr":"Email"}
 
 @app.post("/iocs/import/stix")
-async def import_stix(body: STIXImport, user=Depends(require_full_access), conn=Depends(get_db)):
+async def import_stix(body: STIXImport, user=Depends(require_cap("ioc.import")), conn=Depends(get_db)):
     objects = body.bundle.get("objects",[]); results = {"imported":0,"skipped":0,"errors":[]}
     cur = conn.cursor()
     for obj in objects:
@@ -5200,7 +5377,7 @@ async def import_stix(body: STIXImport, user=Depends(require_full_access), conn=
     conn.commit(); return results
 
 @app.post("/iocs/import/taxii")
-async def poll_taxii(body: TAXIIPoll, user=Depends(require_full_access), conn=Depends(get_db)):
+async def poll_taxii(body: TAXIIPoll, user=Depends(require_cap("ioc.import")), conn=Depends(get_db)):
     headers = {"Accept":"application/taxii+json;version=2.1"}
     if body.token:   headers["Authorization"] = f"Bearer {body.token}"
     if body.api_key: headers["x-api-key"] = body.api_key
@@ -5229,7 +5406,7 @@ async def poll_taxii(body: TAXIIPoll, user=Depends(require_full_access), conn=De
     return {"taxii_url":url,"objects_received":len(objects),**result}
 
 @app.post("/iocs/import/misp")
-async def misp_pull(body: MISPPull, user=Depends(require_full_access), conn=Depends(get_db)):
+async def misp_pull(body: MISPPull, user=Depends(require_cap("ioc.import")), conn=Depends(get_db)):
     headers = {"Authorization":body.misp_key,"Accept":"application/json","Content-Type":"application/json"}
     url = f"{body.misp_url.rstrip('/')}/attributes/restSearch"
     payload = {"returnFormat":"json","limit":body.limit,"type":["ip-dst","ip-src","domain","url","md5","sha1","sha256"]}
@@ -5274,7 +5451,7 @@ async def misp_pull(body: MISPPull, user=Depends(require_full_access), conn=Depe
     conn.commit(); return results
 
 @app.post("/iocs/import/csv")
-async def import_csv(file: UploadFile = File(...), user=Depends(require_full_access), conn=Depends(get_db)):
+async def import_csv(file: UploadFile = File(...), user=Depends(require_cap("ioc.import")), conn=Depends(get_db)):
     content = await file.read()
     reader  = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
     results = {"imported":0,"skipped":0,"errors":[]}; cur = conn.cursor()
@@ -5300,7 +5477,7 @@ async def import_csv(file: UploadFile = File(...), user=Depends(require_full_acc
 
 @app.get("/stix/bundle")
 def stix_bundle(industry: Optional[str]=None, include_expired: bool=False,
-                user=Depends(require_full_access), conn=Depends(get_db)):
+                user=Depends(require_cap("ioc.export")), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     q = "SELECT * FROM iocs WHERE (false_positive IS NULL OR false_positive = FALSE)"; params = []
     if industry: q += " AND industry = %s"; params.append(industry)
@@ -6030,7 +6207,7 @@ Return as JSON: {{"subject": "TLP:{body.tlp} // Threat Advisory — {body.client
     return r.json()["choices"][0]["message"]["content"]
 
 @app.post("/query-gen/generate")
-async def generate_query(body: QueryGenRequest, user=Depends(get_current_user)):
+async def generate_query(body: QueryGenRequest, user=Depends(require_cap("tools.ai"))):
     if not GROQ_API_KEY:
         raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured. Add it to .env and restart.")
 
@@ -6050,7 +6227,7 @@ async def generate_query(body: QueryGenRequest, user=Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
 
 @app.post("/query-gen/explain")
-async def explain_query(body: QueryExplainRequest, user=Depends(get_current_user)):
+async def explain_query(body: QueryExplainRequest, user=Depends(require_cap("tools.ai"))):
     if not GROQ_API_KEY:
         raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured. Add it to .env and restart.")
 
@@ -6329,7 +6506,7 @@ class DiffExplainRequest(BaseModel):
 @app.post("/diff/explain")
 @limiter.limit("15/minute")
 async def explain_diff(request: Request, body: DiffExplainRequest,
-                       user=Depends(get_current_user)):
+                       user=Depends(require_cap("tools.ai"))):
     if not GROQ_API_KEY:
         raise HTTPException(status_code=503,
             detail="GROQ_API_KEY not configured. Add it in Settings → API Keys.")

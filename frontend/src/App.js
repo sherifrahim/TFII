@@ -4572,6 +4572,172 @@ function RedirectTracer({token,C}){
   );
 }
 
+// ── PERMISSIONS MATRIX ────────────────────────────────────────────────────────
+// Each capability is tri-state: inherit from the role preset, or explicitly
+// grant/revoke for this one account. Showing the inherited value next to the
+// override is what makes "why can this person do that?" answerable at a glance.
+function PermissionsPanel({user,token,C,onClose,onChanged}){
+  const [cat,setCat]=useState(null);
+  const [data,setData]=useState(null);
+  const [draft,setDraft]=useState({});
+  const [role,setRole]=useState(user.role);
+  const [busy,setBusy]=useState(false);
+  const [err,setErr]=useState("");
+  const [msg,setMsg]=useState("");
+
+  const load=useCallback(async()=>{
+    setErr("");
+    const [a,b]=await Promise.all([
+      api("/admin/capabilities",{},token),
+      api(`/admin/users/${user.id}/permissions`,{},token),
+    ]);
+    if(a.ok) setCat(await a.json());
+    if(b.ok){ const d=await b.json(); setData(d); setDraft(d.overrides||{}); setRole(d.user.role); }
+    else setErr(`Could not load permissions (${b.status})`);
+  },[token,user.id]);
+  useEffect(()=>{load();},[load]);
+
+  if(!cat||!data) return <Card C={C} style={{marginTop:16}}><div style={{color:C.muted,fontSize:13}}>Loading permissions…</div></Card>;
+
+  const isRoot=data.is_root_admin;
+  const preset=new Set(cat.presets[role]||[]);
+  const groups=[...new Set(cat.capabilities.map(c=>c.group))];
+
+  // inherit | grant | revoke
+  const stateOf=k=>draft[k]===undefined?"inherit":(draft[k]?"grant":"revoke");
+  const effective=k=>{const st=stateOf(k);return st==="inherit"?preset.has(k):st==="grant";};
+  const setState=(k,st)=>setDraft(d=>{
+    const n={...d};
+    if(st==="inherit") delete n[k]; else n[k]=(st==="grant");
+    return n;
+  });
+
+  const dirty=JSON.stringify(draft)!==JSON.stringify(data.overrides||{})||role!==data.user.role;
+
+  async function save(){
+    setBusy(true);setErr("");setMsg("");
+    try{
+      if(role!==data.user.role){
+        const r=await api(`/admin/users/${user.id}/role`,{method:"PATCH",body:JSON.stringify({role})},token);
+        if(!r.ok){const d=await r.json().catch(()=>({}));setErr(d.detail||"Role change failed");setBusy(false);return;}
+      }
+      // Send cleared keys as null so the server drops the override row
+      const payload={};
+      for(const c of cat.capabilities){
+        const was=(data.overrides||{})[c.key], now=draft[c.key];
+        if(was!==now) payload[c.key]=(now===undefined?null:now);
+      }
+      if(Object.keys(payload).length){
+        const r=await api(`/admin/users/${user.id}/permissions`,{method:"PUT",body:JSON.stringify({overrides:payload})},token);
+        if(!r.ok){const d=await r.json().catch(()=>({}));setErr(d.detail||"Save failed");setBusy(false);return;}
+      }
+      setMsg("Saved.");await load();onChanged&&onChanged();
+    }catch(e){setErr(String(e.message||e));}
+    setBusy(false);
+  }
+
+  const Seg=({k,val,label,tone})=>{
+    const active=stateOf(k)===val;
+    const col=tone==="grant"?C.green:tone==="revoke"?C.red:C.muted;
+    return(
+      <button onClick={()=>setState(k,val)} disabled={isRoot}
+        style={{padding:"3px 9px",fontSize:10.5,fontWeight:600,fontFamily:"inherit",
+          border:`1px solid ${active?col:C.border}`,borderRadius:5,
+          background:active?col+"1a":"transparent",color:active?col:C.muted,
+          cursor:isRoot?"not-allowed":"pointer",opacity:isRoot?.5:1}}>
+        {label}
+      </button>
+    );
+  };
+
+  return(
+    <Card C={C} style={{marginTop:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+        marginBottom:6,flexWrap:"wrap",gap:10}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:700,color:C.white||C.textHi}}>
+            Permissions — {data.user.username}
+          </div>
+          <div style={{fontSize:11.5,color:C.muted,marginTop:2}}>
+            Role sets the starting point; per-account grants and revokes layer on top.
+          </div>
+        </div>
+        <Btn onClick={onClose} variant="ghost" sm C={C}>Close</Btn>
+      </div>
+
+      {isRoot&&(
+        <div style={{background:C.amber+"12",border:`1px solid ${C.amber}40`,borderRadius:8,
+          padding:"9px 13px",fontSize:11.5,color:C.amber,margin:"10px 0"}}>
+          This is the owner account. It always holds every permission and cannot be
+          restricted or demoted — otherwise a mis-click here could lock everyone out.
+        </div>
+      )}
+
+      <div style={{display:"flex",alignItems:"center",gap:10,margin:"14px 0",flexWrap:"wrap"}}>
+        <span style={{fontSize:11.5,color:C.muted,fontWeight:600}}>Role</span>
+        <select value={role} onChange={e=>setRole(e.target.value)} disabled={isRoot}
+          style={{background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,
+            padding:"6px 10px",borderRadius:6,fontSize:12,fontFamily:"inherit",
+            cursor:isRoot?"not-allowed":"pointer"}}>
+          {cat.roles.map(r=><option key={r} value={r}>{r}</option>)}
+        </select>
+        <span style={{fontSize:11,color:C.muted}}>
+          preset grants {(cat.presets[role]||[]).length} of {cat.capabilities.length}
+        </span>
+        {role!==data.user.role&&(
+          <span style={{fontSize:10.5,padding:"2px 8px",borderRadius:20,fontWeight:600,
+            background:C.amber+"15",border:`1px solid ${C.amber}40`,color:C.amber}}>
+            {data.user.role} → {role} (unsaved)
+          </span>
+        )}
+      </div>
+
+      {groups.map(g=>(
+        <div key={g} style={{marginBottom:14}}>
+          <div style={{fontSize:10,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",
+            color:C.muted,marginBottom:6}}>{g}</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {cat.capabilities.filter(c=>c.group===g).map(c=>(
+              <div key={c.key} style={{display:"flex",alignItems:"flex-start",gap:12,
+                padding:"9px 11px",borderRadius:8,background:C.surfaceHi+"55",
+                border:`1px solid ${C.border}`}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+                    <span style={{fontSize:12.5,fontWeight:600,color:C.white||C.textHi}}>{c.label}</span>
+                    <span style={{fontSize:9.5,padding:"1px 6px",borderRadius:4,fontWeight:700,
+                      background:effective(c.key)?C.green+"18":C.red+"14",
+                      color:effective(c.key)?C.green:C.red}}>
+                      {effective(c.key)?"ALLOWED":"BLOCKED"}
+                    </span>
+                    {stateOf(c.key)!=="inherit"&&(
+                      <span style={{fontSize:9.5,color:C.amber}}>override</span>
+                    )}
+                  </div>
+                  <div style={{fontSize:11,color:C.muted,lineHeight:1.5,marginTop:2}}>{c.description}</div>
+                </div>
+                <div style={{display:"flex",gap:4,flexShrink:0}}>
+                  <Seg k={c.key} val="inherit" tone="muted"
+                    label={preset.has(c.key)?"Role ✓":"Role ✕"}/>
+                  <Seg k={c.key} val="grant"  tone="grant"  label="Grant"/>
+                  <Seg k={c.key} val="revoke" tone="revoke" label="Revoke"/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {err&&<div style={{fontSize:12,color:C.red,marginBottom:10}}>{err}</div>}
+      {msg&&<div style={{fontSize:12,color:C.green,marginBottom:10}}>{msg}</div>}
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <Btn onClick={save} disabled={busy||!dirty||isRoot} C={C}>{busy?"Saving…":"Save changes"}</Btn>
+        {dirty&&!isRoot&&<Btn onClick={()=>{setDraft(data.overrides||{});setRole(data.user.role);}} variant="ghost" sm C={C}>Discard</Btn>}
+        {!dirty&&<span style={{fontSize:11.5,color:C.muted}}>No unsaved changes</span>}
+      </div>
+    </Card>
+  );
+}
+
 // ── FILE STORE ────────────────────────────────────────────────────────────────
 function fmtBytes(n){
   if(n===0||n==null) return "0 B";
@@ -7909,6 +8075,7 @@ export default function App(){
     if(!SHARED_NAV.some(n=>n.id===view)) setView("dashboard");
   }
   const [showApiKeyModal,setShowApiKeyModal]=useState(false);
+  const [permUser,setPermUser]=useState(null);
   const [cvelookupId,setCvelookupId]=useState("");
   const [session,setSession]=useState(()=>{const t=localStorage.getItem("tf_token");return t?{token:t}:null;});
   const [me,setMe]=useState(null);
@@ -8512,14 +8679,14 @@ export default function App(){
             </div>
           )}
 
-          {view==="users"&&me?.role==="admin"&&(
+          {view==="users"&&(me?.capabilities||[]).includes("admin.users")&&(
             <div style={{maxWidth:800}}>
               <Card C={C} style={{marginBottom:24}}>
                 <div style={{fontSize:13,fontWeight:700,color:C.white,marginBottom:16}}>Create New User</div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12}}>
                   <Field label="Username" C={C}><Inp value={newUser.username} onChange={v=>setNewUser(p=>({...p,username:v}))} placeholder="analyst_name" C={C}/></Field>
                   <Field label="Password" C={C}><Inp value={newUser.password} onChange={v=>setNewUser(p=>({...p,password:v}))} type="password" placeholder="••••••••" C={C}/></Field>
-                  <Field label="Role" C={C}><Sel value={newUser.role} onChange={v=>setNewUser(p=>({...p,role:v}))} options={["analyst","admin"]} C={C}/></Field>
+                  <Field label="Role" C={C}><Sel value={newUser.role} onChange={v=>setNewUser(p=>({...p,role:v}))} options={["explorer","analyst","admin"]} C={C}/></Field>
                 </div>
                 {userErr&&<div style={{fontSize:12,color:C.red,marginBottom:10}}>{userErr}</div>}
                 {userMsg&&<div style={{fontSize:12,color:C.green,marginBottom:10}}>{userMsg}</div>}
@@ -8527,7 +8694,7 @@ export default function App(){
               </Card>
               <Card C={C} style={{overflow:"hidden",padding:0}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                  <thead><tr style={{background:C.surfaceHi,borderBottom:`1px solid ${C.border}`}}>{["Username","Role","Status","Created",""].map(h=><th key={h} style={{padding:"10px 14px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:700}}>{h}</th>)}</tr></thead>
+                  <thead><tr style={{background:C.surfaceHi,borderBottom:`1px solid ${C.border}`}}>{["Username","Role","Status","Created","",""].map((h,hi)=><th key={hi} style={{padding:"10px 14px",textAlign:"left",color:C.muted,fontSize:11,fontWeight:700}}>{h}</th>)}</tr></thead>
                   <tbody>
                     {users.map((u,idx)=>(
                       <tr key={u.id} style={{borderBottom:`1px solid ${C.border}20`,background:idx%2===0?"transparent":C.surfaceHi+"40"}}>
@@ -8536,11 +8703,15 @@ export default function App(){
                         <td style={{padding:"10px 14px"}}><span style={{fontSize:12,color:u.active?C.green:C.red,fontWeight:500}}>{u.active?"Active":"Disabled"}</span></td>
                         <td style={{padding:"10px 14px",fontSize:12,color:C.muted}}>{new Date(u.created_at).toLocaleDateString()}</td>
                         <td style={{padding:"10px 14px"}}>{u.id!==me?.id&&<button onClick={async()=>{await api(`/users/${u.id}/${u.active?"disable":"enable"}`,{method:"PATCH"},token);api("/users",{},token).then(r=>r.ok?r.json():[]).then(setUsers);}} style={{padding:"3px 10px",background:"none",border:`1px solid ${u.active?C.red:C.accent}40`,color:u.active?C.red:C.accentText,borderRadius:4,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>{u.active?"Disable":"Enable"}</button>}</td>
+                        <td style={{padding:"10px 14px"}}><button onClick={()=>setPermUser(permUser?.id===u.id?null:u)} style={{padding:"3px 10px",background:"none",border:`1px solid ${C.accent}40`,color:C.accentText,borderRadius:4,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>{permUser?.id===u.id?"Hide":"Permissions"}</button></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </Card>
+              {permUser&&<PermissionsPanel user={permUser} token={token} C={C}
+                onClose={()=>setPermUser(null)}
+                onChanged={()=>api("/users",{},token).then(r=>r.ok?r.json():[]).then(setUsers)}/>}
             </div>
           )}
 
