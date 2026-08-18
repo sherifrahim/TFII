@@ -719,7 +719,36 @@ async def send_notification(title: str, body: str, html: str, settings: dict):
         except Exception as e:
             errors.append(f"email error: {e}")
 
+    # Record the outcome. Notifications had been failing for a long time with
+    # nobody aware: the errors were returned, but the only caller printed them
+    # to a log nobody reads. Persisting the result is what lets /admin/health
+    # turn a silent failure into a visible one.
+    try:
+        channels = [c for c, on in (("ntfy", settings.get("ntfy_topic")),
+                                    ("telegram", settings.get("telegram_bot_token")),
+                                    ("email", settings.get("smtp_host"))) if on]
+        _record_notify_result(channels, errors)
+    except Exception:
+        pass
     return errors
+
+
+NOTIFY_RESULT_KEY = "notify_last_result"
+
+def _record_notify_result(channels, errors):
+    """Store the last send outcome in system_settings for the health check."""
+    payload = json.dumps({
+        "at": datetime.now(timezone.utc).isoformat(),
+        "channels": channels,
+        "errors": errors or [],
+        "ok": not errors,
+    })
+    conn = get_db_direct(); cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS system_settings (key VARCHAR PRIMARY KEY, value TEXT)")
+    cur.execute("""INSERT INTO system_settings (key,value) VALUES (%s,%s)
+                   ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value""",
+                (NOTIFY_RESULT_KEY, payload))
+    conn.commit(); conn.close()
 
 async def send_daily_brief_job():
     """APScheduler job — daily brief."""
@@ -3962,6 +3991,38 @@ async def health_detailed(admin=Depends(require_admin), conn=Depends(get_db)):
         }
     except Exception as e:
         report["checks"]["access_requests"] = {"ok": True, "pending": 0, "status": "N/A"}
+
+    # ── Notifications ────────────────────────────────────────────────────────
+    try:
+        nset = await get_notif_settings(conn)
+        configured = [c for c, on in (("ntfy", nset.get("ntfy_topic")),
+                                      ("telegram", nset.get("telegram_bot_token")),
+                                      ("email", nset.get("smtp_host"))) if on]
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM system_settings WHERE key = %s", (NOTIFY_RESULT_KEY,))
+        row = cur.fetchone()
+        if not configured:
+            report["checks"]["notifications"] = {
+                "ok": True, "status": "No channels configured — nothing to deliver."}
+        elif not row:
+            report["checks"]["notifications"] = {
+                "ok": True,
+                "status": f"{len(configured)} channel(s) configured; no send attempted yet."}
+        else:
+            last = json.loads(row[0])
+            when = str(last.get("at", ""))[:19].replace("T", " ")
+            if last.get("ok"):
+                report["checks"]["notifications"] = {
+                    "ok": True,
+                    "status": f"Last send OK {when} via {', '.join(last.get('channels') or [])}"}
+            else:
+                overall_ok = False
+                report["checks"]["notifications"] = {
+                    "ok": False,
+                    "status": f"Last send FAILED {when} — {'; '.join(last.get('errors') or [])[:150]}"}
+    except Exception as e:
+        conn.rollback()
+        report["checks"]["notifications"] = {"ok": True, "status": f"Unavailable: {e}"}
 
     report["overall"] = "ok" if overall_ok else "degraded"
     return report
