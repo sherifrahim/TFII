@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the TFII backup nightly
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+# The instance is not always up at 02:30; run on next boot if a window is missed.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

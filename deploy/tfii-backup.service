@@ -1,0 +1,10 @@
+[Unit]
+Description=TFII nightly backup (Postgres dump + file store)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tfii-backup
+# The host has under 1GB of RAM; keep the backup out of the way of the app.
+Nice=10
+IOSchedulingClass=idle

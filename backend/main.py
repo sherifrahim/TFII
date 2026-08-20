@@ -2744,6 +2744,16 @@ def set_user_permissions(user_id: str, body: PermissionUpdate,
                            DO UPDATE SET granted=EXCLUDED.granted,
                                          updated_by=EXCLUDED.updated_by, updated_at=NOW()""",
                         (user_id, cap, bool(val), admin["username"]))
+    # Changing what someone can do is exactly the event you want a trail for.
+    # The IOC endpoints already write here; the permission ones did not.
+    try:
+        cur.execute("""INSERT INTO audit_log (action,ioc_id,ioc_value,ioc_type,username,user_id)
+                       VALUES (%s,%s,%s,%s,%s,%s)""",
+                    ("permissions_changed", target["id"],
+                     f"{target['username']}: {', '.join(f'{k}={v}' for k,v in body.overrides.items())}"[:400],
+                     "user", admin["username"], admin["id"]))
+    except Exception:
+        pass
     conn.commit()
     cur.execute("SELECT capability, granted FROM user_permissions WHERE user_id = %s", (user_id,))
     overrides = {r["capability"]: r["granted"] for r in cur.fetchall()}
@@ -2770,6 +2780,17 @@ def set_user_role(user_id: str, body: RoleUpdate,
         raise HTTPException(status_code=400,
             detail="You cannot demote your own account.")
     cur.execute("UPDATE users SET role = %s WHERE id = %s", (body.role, user_id))
+    try:
+        cur.execute("""INSERT INTO audit_log (action,ioc_id,ioc_value,ioc_type,username,user_id)
+                       VALUES (%s,%s,%s,%s,%s,%s)""",
+                    # action is VARCHAR(20): "role_changed:analyst->admin" silently
+                    # overflowed and the bare except swallowed it. Keep the action a
+                    # short canonical verb and put the detail in ioc_value, which is TEXT.
+                    ("role_changed", target["id"],
+                     f"{target['username']}: {target['role']} -> {body.role}",
+                     "user", admin["username"], admin["id"]))
+    except Exception:
+        pass
     conn.commit()
     target = dict(target); target["role"] = body.role
     return {"status": "updated", "user_id": user_id, "role": body.role,
@@ -3102,7 +3123,8 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
     return {"results": results, "summary": summary}
 
 @app.post("/iocs/bulk-lookup")
-async def bulk_ioc_lookup(body: BulkLookupRequest, user=Depends(get_current_user), conn=Depends(get_db)):
+@limiter.limit("10/minute")
+async def bulk_ioc_lookup(request: Request, body: BulkLookupRequest, user=Depends(get_current_user), conn=Depends(get_db)):
     return await run_bulk_lookup(body.input, user, conn)
 
 @app.post("/iocs/bulk-lookup/file")
@@ -4011,7 +4033,16 @@ async def health_detailed(admin=Depends(require_admin), conn=Depends(get_db)):
         else:
             last = json.loads(row[0])
             when = str(last.get("at", ""))[:19].replace("T", " ")
-            if last.get("ok"):
+            age_h = (datetime.now(timezone.utc)
+                     - datetime.fromisoformat(last["at"])).total_seconds() / 3600
+            if last.get("ok") and nset.get("daily_enabled", True) and age_h > 48:
+                # The scheduler dying leaves the last success sitting green forever.
+                overall_ok = False
+                report["checks"]["notifications"] = {
+                    "ok": False,
+                    "status": f"Last send was {int(age_h)}h ago ({when}) but daily briefs "
+                              f"are enabled — the scheduler may have stopped."}
+            elif last.get("ok"):
                 report["checks"]["notifications"] = {
                     "ok": True,
                     "status": f"Last send OK {when} via {', '.join(last.get('channels') or [])}"}
@@ -4023,6 +4054,39 @@ async def health_detailed(admin=Depends(require_admin), conn=Depends(get_db)):
     except Exception as e:
         conn.rollback()
         report["checks"]["notifications"] = {"ok": True, "status": f"Unavailable: {e}"}
+
+    # ── Backups ──────────────────────────────────────────────────────────────
+    # A backup nobody checks is the same class of problem as a notification
+    # nobody checks: the failure is silence. Go red on staleness, not just error.
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM system_settings WHERE key = 'backup_last_result'")
+        row = cur.fetchone()
+        if not row:
+            overall_ok = False
+            report["checks"]["backups"] = {
+                "ok": False, "status": "No backup has ever run. The database is unrecoverable."}
+        else:
+            b = json.loads(row[0])
+            age_h = (datetime.now(timezone.utc)
+                     - datetime.fromisoformat(b["at"])).total_seconds() / 3600
+            when = str(b.get("at", ""))[:19].replace("T", " ")
+            if not b.get("ok"):
+                overall_ok = False
+                report["checks"]["backups"] = {
+                    "ok": False, "status": f"Last backup FAILED {when} — {b.get('detail','')}"}
+            elif age_h > 48:
+                overall_ok = False
+                report["checks"]["backups"] = {
+                    "ok": False,
+                    "status": f"Last backup was {int(age_h)}h ago ({when}). Nightly job may be dead."}
+            else:
+                report["checks"]["backups"] = {
+                    "ok": True,
+                    "status": f"Last backup OK {when} — {b.get('detail','')}, {b.get('kept',0)} retained"}
+    except Exception as e:
+        conn.rollback()
+        report["checks"]["backups"] = {"ok": True, "status": f"Unavailable: {e}"}
 
     report["overall"] = "ok" if overall_ok else "degraded"
     return report
@@ -4077,7 +4141,8 @@ async def public_search(q: str, conn=Depends(get_db)):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.post("/osint/lookup")
-async def osint_lookup(body: OSINTRequest, user=Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def osint_lookup(request: Request, body: OSINTRequest, user=Depends(get_current_user)):
     results = {"target":body.target,"type":body.target_type,"data":{}}
     try:
         if body.target_type in ("domain","ip"):
@@ -4803,7 +4868,8 @@ async def lookup_osv(cve_id: str) -> dict:
         return {"source":"OSV","status":"error","error":str(e)}
 
 @app.get("/cve/lookup")
-async def cve_multi_lookup(id: str, user=Depends(get_current_user)):
+@limiter.limit("40/minute")
+async def cve_multi_lookup(request: Request, id: str, user=Depends(get_current_user)):
     """
     Aggregate CVE data from NVD, CVE.org, OSV, EPSS, and CISA KEV.
     Returns all sources in parallel with their references and affected packages.

@@ -7559,6 +7559,7 @@ function HealthPage({token,C}){
             <CheckCard title="Disk" check={data.checks?.disk}/>
             <CheckCard title="Memory" check={data.checks?.memory}/>
             <CheckCard title="Notifications" check={data.checks?.notifications}/>
+            <CheckCard title="Backups" check={data.checks?.backups}/>
           </div>
           {/* Right column */}
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
