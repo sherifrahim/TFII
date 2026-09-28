@@ -28,6 +28,14 @@ Schema changes are additive and applied automatically at startup
 `admin_notes.investigation_id`, and indexes on the IOC/CVE tables. Nothing is
 dropped or rewritten, so rolling back the code leaves a working database.
 
+## Automated deploy (push to master)
+
+`.github/workflows/deploy.yml` builds the UI on the GitHub Actions runner,
+checks the backend compiles, uploads one release tarball, then on the server:
+installs requirements, swaps in `backend/*.py` (backup in `~/backend.pre-*`,
+automatic rollback if `/health` fails after restart) and swaps the UI build
+(previous one kept as `build.old`). Nothing is compiled on the server.
+
 ## Never build the frontend on the server
 
 The host has **~956MB RAM**. `npm run build` exhausts it and wedges the whole

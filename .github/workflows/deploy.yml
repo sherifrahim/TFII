@@ -12,7 +12,45 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy to server
+      # The UI is built here, never on the server: the host has ~956MB RAM and
+      # `npm run build` there wedges the whole machine (see deploy/README.md).
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          GENERATE_SOURCEMAP: "false"   # never publish source maps
+        run: |
+          npm ci --legacy-peer-deps
+          # config.js falls back to the page origin, which is where the API is
+          # served, so no domain substitution is needed for this deployment.
+          npm run build
+          test -f build/index.html
+
+      - name: Check backend compiles
+        run: python3 -m py_compile backend/*.py
+
+      - name: Package release
+        run: |
+          mkdir -p release/backend
+          cp -r frontend/build release/build
+          cp backend/*.py release/backend/
+          tar czf tfii-release.tar.gz -C release .
+
+      - name: Upload release to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          source: tfii-release.tar.gz
+          target: /tmp/tfii-deploy
+
+      - name: Install on server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -24,67 +62,51 @@ jobs:
             set -e
             echo "=== TFII Deploy at $(date) ==="
 
+            # Keep the server-side checkout current (scripts, docs, configs).
             sudo chown -R ubuntu:ubuntu /home/ubuntu/threatfeed-repo 2>/dev/null || true
             git config --global --add safe.directory /home/ubuntu/threatfeed-repo 2>/dev/null || true
+            cd /home/ubuntu/threatfeed-repo && git fetch origin master && git reset --hard origin/master
+            echo "✓ Repo updated"
 
-            cd /home/ubuntu/threatfeed-repo
-            git fetch origin master && git reset --hard origin/master
-            echo "✓ Code pulled"
+            D=/tmp/tfii-deploy
+            rm -rf "$D/x" && mkdir -p "$D/x"
+            tar xzf "$D/tfii-release.tar.gz" -C "$D/x"
+            test -f "$D/x/build/index.html"
 
-            # The backend is main.py plus sibling modules (intel_api.py, …);
-            # main.py imports them, so every *.py must ship together.
+            # ── Backend: every module ships together; roll back if health fails
+            APP=/home/ubuntu/threatfeed
             BACKEND_CHANGED=false
-            for f in backend/*.py; do
-              if ! diff -q "$f" "/home/ubuntu/threatfeed/$(basename "$f")" > /dev/null 2>&1; then
-                BACKEND_CHANGED=true
-              fi
+            for f in "$D"/x/backend/*.py; do
+              if ! diff -q "$f" "$APP/$(basename "$f")" > /dev/null 2>&1; then BACKEND_CHANGED=true; fi
             done
             if [ "$BACKEND_CHANGED" = true ]; then
-              /home/ubuntu/threatfeed/venv/bin/python -m py_compile backend/*.py
-              cp backend/*.py /home/ubuntu/threatfeed/
-              source /home/ubuntu/threatfeed/venv/bin/activate
-              pip install -r backend/requirements.txt --quiet
+              "$APP/venv/bin/python" -m py_compile "$D"/x/backend/*.py
+              "$APP/venv/bin/pip" install -r /home/ubuntu/threatfeed-repo/backend/requirements.txt --quiet
+              BK="$HOME/backend.pre-$(date +%Y%m%d-%H%M%S)"
+              mkdir -p "$BK" && cp "$APP"/*.py "$BK"/
+              cp "$D"/x/backend/*.py "$APP"/
               sudo systemctl restart threatfeed
-              sleep 3
-              if sudo systemctl is-active --quiet threatfeed; then
-                echo "✓ Backend deployed and running"
+              sleep 8
+              if curl -sf http://127.0.0.1:8000/health > /dev/null; then
+                echo "✓ Backend deployed and healthy (backup: $BK)"
               else
-                sudo journalctl -u threatfeed -n 20 --no-pager
+                echo "✗ Backend unhealthy — rolling back to $BK"
+                sudo journalctl -u threatfeed -n 30 --no-pager || true
+                cp "$BK"/*.py "$APP"/
+                sudo systemctl restart threatfeed
                 exit 1
               fi
             else
               echo "~ Backend unchanged"
             fi
 
-            # Restore real domain before copying frontend
-            REAL_DOMAIN=$(grep "^SERVER_URL" /home/ubuntu/threatfeed/.env | cut -d= -f2 | sed 's|https://||')
-            if [ -z "$REAL_DOMAIN" ]; then REAL_DOMAIN="threatintel.mooo.com"; fi
-            # The UI is a multi-file source tree now (App.js → Root.js, pages/,
-            # components/, legacy/). Stage it with the real domain substituted
-            # into config.js, then sync the whole tree.
-            rm -rf /tmp/tfii-src && cp -r frontend/src /tmp/tfii-src
-            sed -i "s|YOUR_DOMAIN|${REAL_DOMAIN}|g" /tmp/tfii-src/config.js
+            # ── Frontend: staged swap, previous build kept for one-mv rollback
+            UI=/home/ubuntu/threatfeed-ui
+            sudo chown -R root:root "$D/x/build"
+            sudo rm -rf "$UI/build.old"
+            if [ -d "$UI/build" ]; then sudo mv "$UI/build" "$UI/build.old"; fi
+            sudo mv "$D/x/build" "$UI/build"
+            echo "✓ Frontend deployed (rollback: sudo rm -rf $UI/build && sudo mv $UI/build.old $UI/build)"
 
-            FRONTEND_CHANGED=false
-            if ! diff -rq /tmp/tfii-src /home/ubuntu/threatfeed-ui/src > /dev/null 2>&1; then
-              rsync -a --delete /tmp/tfii-src/ /home/ubuntu/threatfeed-ui/src/
-              FRONTEND_CHANGED=true
-              echo "✓ Updated: frontend/src"
-            fi
-            for f in frontend/public/index.html; do
-              dest="/home/ubuntu/threatfeed-ui/${f#frontend/}"
-              if ! diff -q "$f" "$dest" > /dev/null 2>&1; then
-                cp "$f" "$dest"
-                FRONTEND_CHANGED=true
-                echo "✓ Updated: $f"
-              fi
-            done
-
-            if [ "$FRONTEND_CHANGED" = true ]; then
-              cd /home/ubuntu/threatfeed-ui && npm run build
-              echo "✓ Frontend built"
-            else
-              echo "~ Frontend unchanged"
-            fi
-
+            rm -rf "$D"
             echo "=== Done ==="
