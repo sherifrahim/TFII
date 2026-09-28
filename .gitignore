@@ -2,3 +2,7 @@
 # Python bytecode (from local syntax checks)
 __pycache__/
 *.pyc
+
+# Frontend build tooling (package.json is tracked; install output is not)
+node_modules/
+frontend/build/

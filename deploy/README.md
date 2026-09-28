@@ -15,6 +15,19 @@ What actually runs:
 cache rules and SPA fallback survive the box being rebuilt. If you change it on
 the server, copy it back.
 
+## What ships
+
+| Piece | Source in repo | Notes |
+|---|---|---|
+| Backend | `backend/*.py` | `main.py` imports `intel_api.py` (the `/v2/*` API). Always deploy every `*.py` together. |
+| Frontend | `frontend/src/**` | Entry `App.js` → `Root.js`; pages in `pages/`, shell in `shell/`, the original tools in `legacy/`. Only `react`/`react-dom`/`react-scripts` are required. |
+
+Schema changes are additive and applied automatically at startup
+(`intel_api.ensure_schema`): new tables `investigations`, `investigation_items`,
+`investigation_events`, `ioc_provenance`, new columns `iocs.last_seen` and
+`admin_notes.investigation_id`, and indexes on the IOC/CVE tables. Nothing is
+dropped or rewritten, so rolling back the code leaves a working database.
+
 ## Never build the frontend on the server
 
 The host has **~956MB RAM**. `npm run build` exhausts it and wedges the whole
@@ -25,8 +38,12 @@ killed build leaves no site at all.
 Build locally and ship the artifact:
 
 ```bash
-# 1. build (locally, with the server's own package.json / package-lock.json)
+# 1. build locally (frontend/package.json + package-lock.json are tracked)
+cd frontend && npm ci --legacy-peer-deps
+sed -i "s|YOUR_DOMAIN|threatintel.mooo.com|" src/config.js   # optional: config.js
+                                                                # falls back to the page origin
 GENERATE_SOURCEMAP=false npm run build
+git checkout src/config.js
 ```
 
 `GENERATE_SOURCEMAP=false` matters — production has never shipped `.map` files
@@ -56,11 +73,12 @@ Compile with the service's own interpreter *before* swapping, and roll back if
 health fails:
 
 ```bash
-cd ~/threatfeed && cp main.py ~/main.py.pre-$(date +%Y%m%d-%H%M%S) \
-  && venv/bin/python -m py_compile /tmp/main.py.new \
-  && cp /tmp/main.py.new main.py \
+# upload backend/*.py to /tmp/tfii-backend/ first
+cd ~/threatfeed && mkdir -p ~/backend.pre-$(date +%Y%m%d-%H%M%S) && cp *.py ~/backend.pre-*/ \
+  && venv/bin/python -m py_compile /tmp/tfii-backend/*.py \
+  && cp /tmp/tfii-backend/*.py . \
   && sudo systemctl restart threatfeed && sleep 6 \
-  && curl -sf http://127.0.0.1:8000/health && echo OK || echo "FAILED — restore ~/main.py.pre-*"
+  && curl -sf http://127.0.0.1:8000/health && echo OK || echo "FAILED — restore from ~/backend.pre-*"
 ```
 
 ## Caching

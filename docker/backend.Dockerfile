@@ -10,7 +10,8 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/main.py .
+# main.py imports sibling modules (intel_api.py), so ship every module
+COPY backend/*.py ./
 
 # Non-root user for security
 RUN useradd -m -u 1000 tfii && chown -R tfii:tfii /app

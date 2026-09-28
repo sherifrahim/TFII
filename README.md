@@ -32,17 +32,59 @@ See [Manual Deployment Guide](#manual-deployment) below.
 
 ## Features
 
-| Module | What it does |
-|--------|-------------|
-| **IOC Management** | Add, enrich, track indicators. VirusTotal + AbuseIPDB + URLhaus enrichment. STIX 2.1 export, TAXII 2.1 server |
-| **CVE Monitor** | Track your software stack. NVD polling every 6h. CISA KEV cross-reference, EPSS scoring, patch detection |
-| **CVE Intelligence** | Multi-source lookup: NVD, CVE.org, OSV, CVE Trends, EPSS, CISA KEV. Visual CVSS breakdown. PoC search (GitHub, Metasploit, Vulhub, ExploitDB) |
-| **CVE Report** | Generate professional advisory emails or summary briefs with one click |
-| **Detection Builder** | KQL/SPL query builder (3 production variants per use case). KQL Explainer — paste any query, get line-by-line analysis |
-| **Intel Wall** | Live RSS from CISA, SANS ISC, BleepingComputer, Krebs, and more |
-| **CVE Wall** | Vulnerability-specific advisories from 12 sources. Filterable by severity, time, source |
-| **OSINT** | DNS, WHOIS, Shodan, HaveIBeenPwned, MX in one tabbed view |
-| **Threat Actors** | MITRE ATT&CK integration — actor profiles, TTPs, malware, tools |
+TFII is organised as an analyst platform rather than a set of admin pages:
+
+| Area | What it does |
+|------|-------------|
+| **Command Center** | Live metrics with trends and sparklines (active / high-confidence / critical IOCs, new today, CVEs, unpatched, KEV, active campaigns), 30-day IOC activity, Threat Pulse (actively exploited KEV CVEs in your software, malware families with fresh indicators, moving campaigns), type distribution, CVE exposure, top actors & malware, recent intelligence, open investigations and connector health. Everything drills down. |
+| **IOC Intelligence** | Server-side paginated analyst table (thousands of rows) with search, type/source/TLP/confidence/time/campaign filters, facets, sorting, bulk actions (add to investigation, assign campaign, tag, mark FP). VirusTotal + AbuseIPDB + URLhaus enrichment, STIX 2.1 export, TAXII 2.1 server, STIX/TAXII/MISP/CSV import. |
+| **Entity Intelligence** | One page per indicator: reputation, confidence reasoning, enrichment, provenance, related IOCs (campaign, malware family, /24, shared tags), linked CVEs, interactive relationship graph, observation timeline and notes, generated KQL/SPL/YARA hunting queries, investigations. Untracked values open as observables with reputation lookup. |
+| **Relationship graph** | Zoom/pan, node selection and inspection, relationship-type and node-kind filters, expand-in-place, open entity. Used on entities, campaigns, actors, malware, investigations and the Entity Explorer. |
+| **CVE Intelligence** | Software view (per-product severity mix, KEV, unpatched, status), CVE view (paginated, filterable), Software Intelligence pages (severity distribution, CVEs by year, EPSS, KEV, affected versions, CWE, references, exposure-hunting queries), multi-source CVE lookup (NVD, CVE.org, OSV, EPSS, KEV, PoCs), CVE reports. NVD polling every 6h. |
+| **Threat Actors & Campaigns** | Actors attributed in campaigns, malware families seen in the feed, MITRE ATT&CK profiles, campaign pages with infrastructure graph and activity. |
+| **Intel Wall** | One merged feed (news + advisories) classified per item (CVE / APT / Ransomware / Malware / Vulnerability / IOC), severity from content, extracted CVE and actor entities, and an “Affects my software” cross-reference with your monitored assets. |
+| **Global Search / Command palette** | `Ctrl+K` anywhere: indicators, CVEs, software, actors, malware, campaigns, investigations, notes, recent entities/searches and actions (Add IOC, Create Investigation, Bulk Lookup, …). |
+| **Workspace** | Investigations with IOCs (tracked or untracked observables), infrastructure graph, saved queries/detections, timeline, notes, artifacts and Markdown report export — plus the original notes/checklists board. |
+| **OSINT Toolkit** | IOC lookup (DNS/RDAP/Shodan/HIBP), bulk IOC lookup, URL decoder, Safe Link extractor, User-Agent parser, redirect tracer, diff checker. |
+| **Notifications** | Grouped Critical / Intelligence / System centre; connector failures raise System notifications; every item links to where to act. |
+| **Platform** | Health, connectors (ThreatFox, MalwareBazaar, URLhaus), API usage, users/permissions/invites, settings, owner file store. |
+
+---
+
+## Architecture
+
+```
+frontend/src
+  App.js            entry → Root.js (auth, session, hash routing)
+  shell/            sidebar, top bar, command palette, notification centre, nav IA
+  pages/            Command Center, IOCs, Entity, CVE/Software, Actors, Campaigns,
+                    Intel Wall, Search/Explorer, OSINT, Workspace, Platform
+  components/       design-system primitives, charts, relationship graph, icons
+  design/           tfii.css (tokens + components), tokens.js
+  legacy/           the original, working tools, rendered inside the new shell
+backend
+  main.py           FastAPI app, auth/capabilities, v1 API, connectors, schedulers
+  intel_api.py      /v2 API: paginated IOCs, entities, graph, search, command
+                    centre, software, actors/malware/campaigns, investigations,
+                    intel wall, grouped notifications, API usage
+```
+
+The v1 API is unchanged; `/v2/*` is additive. Schema migrations are additive
+(`CREATE … IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`) and run at startup.
+
+### Local development
+
+```bash
+# backend
+python3 -m venv venv && . venv/bin/activate && pip install -r backend/requirements.txt
+export DB_HOST=localhost DB_NAME=threatfeeddb DB_USER=threatfeed DB_PASS=… SECRET_KEY=…
+cd backend && uvicorn main:app --port 8000
+
+# frontend (config.js falls back to the page origin; point it at the API for dev)
+cd frontend && npm ci --legacy-peer-deps
+sed -i 's|https://YOUR_DOMAIN|http://localhost:8000|' src/config.js   # don't commit this
+CI=true GENERATE_SOURCEMAP=false npm run build
+```
 
 ---
 

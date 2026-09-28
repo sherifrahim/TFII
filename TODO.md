@@ -7,7 +7,7 @@
 
 ## 🔴 High Priority
 
-- [ ] **Mode switcher** — IOC / CVE mode toggle in sidebar, nav changes per mode *(in progress)*
+- [x] **Mode switcher** — superseded: IOC and CVE are now intelligence domains in one navigation (2026-09 redesign)
 - [ ] **NVD API key** — Add free key at nvd.nist.gov/developers/request-an-api-key to increase rate limit from 5→50 req/30s
 - [ ] **HIBP API key** — Add to .env to enable email breach lookups in OSINT (haveibeenpwned.com/API/Key)
 
@@ -25,7 +25,7 @@
 - [ ] **YARA rule export** — Generate YARA rules from hash IOCs and string/URL IOCs
 - [ ] **Snort/Suricata rule export** — `alert tcp $HOME_NET any -> <ip> any` rules for IP/domain IOCs
 - [ ] **Webhook / Slack notification** — POST to Slack/Teams webhook when TLP:RED or high-confidence IOC added
-- [ ] **IOC relationship graph improvements** — Currently force-directed SVG. Could add: relationship type labels clickable, zoom/pan, export as PNG
+- [x] **IOC relationship graph improvements** — zoom/pan, node inspection, type filters, expand-in-place, Entity Explorer
 
 ### CVE Features
 - [ ] **Patch notes / SLA tracking** — Deferred. Was discussed but removed from scope. Future: add patch_notes text field, SLA deadline per severity (Critical=7d, High=30d), RAG status indicator

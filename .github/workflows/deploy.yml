@@ -31,8 +31,17 @@ jobs:
             git fetch origin master && git reset --hard origin/master
             echo "✓ Code pulled"
 
-            if ! diff -q backend/main.py /home/ubuntu/threatfeed/main.py > /dev/null 2>&1; then
-              cp backend/main.py /home/ubuntu/threatfeed/main.py
+            # The backend is main.py plus sibling modules (intel_api.py, …);
+            # main.py imports them, so every *.py must ship together.
+            BACKEND_CHANGED=false
+            for f in backend/*.py; do
+              if ! diff -q "$f" "/home/ubuntu/threatfeed/$(basename "$f")" > /dev/null 2>&1; then
+                BACKEND_CHANGED=true
+              fi
+            done
+            if [ "$BACKEND_CHANGED" = true ]; then
+              /home/ubuntu/threatfeed/venv/bin/python -m py_compile backend/*.py
+              cp backend/*.py /home/ubuntu/threatfeed/
               source /home/ubuntu/threatfeed/venv/bin/activate
               pip install -r backend/requirements.txt --quiet
               sudo systemctl restart threatfeed
@@ -50,13 +59,17 @@ jobs:
             # Restore real domain before copying frontend
             REAL_DOMAIN=$(grep "^SERVER_URL" /home/ubuntu/threatfeed/.env | cut -d= -f2 | sed 's|https://||')
             if [ -z "$REAL_DOMAIN" ]; then REAL_DOMAIN="threatintel.mooo.com"; fi
-            sed "s|YOUR_DOMAIN|${REAL_DOMAIN}|g" frontend/src/App.js > /tmp/App.js.patched
+            # The UI is a multi-file source tree now (App.js → Root.js, pages/,
+            # components/, legacy/). Stage it with the real domain substituted
+            # into config.js, then sync the whole tree.
+            rm -rf /tmp/tfii-src && cp -r frontend/src /tmp/tfii-src
+            sed -i "s|YOUR_DOMAIN|${REAL_DOMAIN}|g" /tmp/tfii-src/config.js
 
             FRONTEND_CHANGED=false
-            if ! diff -q /tmp/App.js.patched /home/ubuntu/threatfeed-ui/src/App.js > /dev/null 2>&1; then
-              cp /tmp/App.js.patched /home/ubuntu/threatfeed-ui/src/App.js
+            if ! diff -rq /tmp/tfii-src /home/ubuntu/threatfeed-ui/src > /dev/null 2>&1; then
+              rsync -a --delete /tmp/tfii-src/ /home/ubuntu/threatfeed-ui/src/
               FRONTEND_CHANGED=true
-              echo "✓ Updated: frontend/src/App.js"
+              echo "✓ Updated: frontend/src"
             fi
             for f in frontend/public/index.html; do
               dest="/home/ubuntu/threatfeed-ui/${f#frontend/}"

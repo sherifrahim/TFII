@@ -454,7 +454,7 @@ async def startup():
             id VARCHAR(100) PRIMARY KEY, cve_id VARCHAR(50) NOT NULL,
             asset_id VARCHAR(100) REFERENCES assets(id) ON DELETE CASCADE,
             UNIQUE(cve_id, asset_id),
-            asset_id VARCHAR(100), title TEXT, description TEXT,
+            title TEXT, description TEXT,
             cvss_score FLOAT, cvss_severity VARCHAR(20), cvss_vector TEXT,
             epss_score FLOAT, epss_percentile FLOAT,
             kev_listed BOOLEAN DEFAULT FALSE, kev_date TEXT,
@@ -473,9 +473,14 @@ async def startup():
             polled_at TIMESTAMP DEFAULT NOW())""",
     ]
 
+    # Commit per table: one failing statement used to roll back every table
+    # created before it in the same transaction, so a fresh database never
+    # got past startup.
     for sql in tables:
-        try: cur.execute(sql)
-        except Exception: conn.rollback()
+        try: cur.execute(sql); conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print(f"[startup] table DDL failed: {str(e).splitlines()[0][:160]}")
 
     # migrations
     for col, defn in [
@@ -1552,6 +1557,13 @@ def log_connector_run(conn, connector: str, result: dict):
         cur = conn.cursor()
         cur.execute("""INSERT INTO system_settings (key,value) VALUES (%s,%s)
             ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value""", (key, val))
+        # A connector that stops ingesting is otherwise only visible if someone
+        # opens the Connectors page; raise it in the notification centre.
+        if not result.get("ok"):
+            create_notification(conn, "connector_error",
+                f"Connector stopped ingesting: {connector}",
+                str(result.get("error") or "Unknown error")[:300], "warning",
+                {"connector": connector, "route": "/platform/connectors"})
         conn.commit()
     except Exception: pass
 
@@ -6658,4 +6670,23 @@ async def explain_diff(request: Request, body: DiffExplainRequest,
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# v2 INTELLIGENCE API — lives in intel_api.py next to this file. Dependencies are
+# handed over explicitly so that module never imports main (no circular import).
+# ═══════════════════════════════════════════════════════════════════════════════
+import sys as _sys
+from types import SimpleNamespace as _NS
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import intel_api as _intel_api
+
+_intel_api.register(app, _NS(
+    get_db=get_db, get_db_direct=get_db_direct,
+    get_current_user=get_current_user, require_full_access=require_full_access,
+    require_admin=require_admin, require_cap=require_cap, effective_caps=effective_caps,
+    refang=refang, defang=defang, detect_type=detect_type,
+    audit=audit, create_notification=create_notification,
+    fetch_rss=fetch_rss, fetch_cve_rss=fetch_cve_rss, RSS_FEEDS=RSS_FEEDS, CVE_FEEDS=CVE_FEEDS,
+))
 
