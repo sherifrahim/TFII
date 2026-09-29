@@ -27,6 +27,8 @@ jobs:
               out=$(curl -s -o /dev/null -m 25 -w "%{http_code} %{time_total}s" "$@" 2>&1) || out="curl-failed($?) $out"
               printf '%-26s %s\n' "$n" "$out"
             }
+            echo "=== 0. exception summaries with timestamps (last 40 min) ==="
+            sudo journalctl -u threatfeed --since "40 min ago" --no-pager -o short-iso | grep -v -i "bearer\|authorization" | grep -E "Error|Exception|\" 500 " | grep -v "^.*File \"" | sed -E 's/ [a-z0-9-]+ [a-z_]+\[[0-9]+\]:/ /' | tail -30 || true
             echo "=== 1. recent 5xx in the access log (last 20 min) ==="
             sudo journalctl -u threatfeed --since "20 min ago" --no-pager -o cat | grep -E '" (500|502|504) ' | sed -E 's/^INFO: +[0-9.:]+ - //' | tail -15 || true
             echo "=== 2. platform API keys configured (values never printed) ==="
