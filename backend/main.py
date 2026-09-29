@@ -2895,29 +2895,40 @@ def purge_old_cves(before_year: int = 2023, admin=Depends(require_cap("admin.mai
     conn.commit()
     return {"removed": count, "message": f"Removed {count} CVEs published before {before_year}"}
 
+def _on_trusted_domain(value: str) -> bool:
+    """True when the URL/domain's HOST is a trusted domain or a subdomain of one (not merely contains its name:
+    `not-github.com.evil.example` is not GitHub)."""
+    v = (value or "").strip().lower()
+    try:
+        host = urlparse(v if "://" in v else "//" + v).hostname or ""
+    except ValueError:
+        return False
+    return any(host == td or host.endswith("." + td) for td in TRUSTED_DOMAINS)
+
+# An indicator a threat feed or connector brought in carries its source in `enrichment` (and the abuse.ch
+# connectors add a `connector` tag). Feed indicators have no `created_by`, so "no created_by" alone must never
+# be read as "junk": the cleanup only considers rows with no feed provenance.
+NOT_FROM_A_FEED = "COALESCE(enrichment->>'source', '') = '' AND NOT ('connector' = ANY(COALESCE(tags, '{}')))"
+
 @app.post("/admin/cleanup-advisory-iocs")
 def cleanup_advisory_iocs(dry_run: bool = False, admin=Depends(require_cap("admin.maintenance")), conn=Depends(get_db)):
     """
     Purge IOCs that were auto-extracted from CVE advisory references.
-    
-    Nuclear mode: delete ALL URL/Domain IOCs that were auto-added,
-    regardless of what domain they point to. The old code was pulling
-    NVD reference URLs (changelog links, vendor release notes, LWN articles,
-    blogspot posts, etc.) and treating them as threat indicators. None of
-    them are. If a real threat URL needs to be in the feed it should be
-    added manually with intent.
-    
-    Also removes any URL/Domain matching TRUSTED_DOMAINS regardless of
-    how it got in.
-    
+
+    The old code pulled NVD reference URLs (changelog links, vendor release notes, LWN articles, blogspot
+    posts, etc.) and treated them as threat indicators. None of them are. This removes URL/Domain indicators that
+      1. were tagged auto-extracted / auto-added / public-lookup, or
+      2. sit on a trusted advisory/vendor/news domain (matched on the host, not a substring), or
+      3. have no owner and no feed provenance (orphans of the old automated paths).
+    Indicators that a threat feed or connector ingested (ThreatFox, URLhaus, OpenPhish, ...) are never touched by
+    rules 2 and 3: they have no owner by design. Use dry_run=true to preview.
+
     Safe to run multiple times.
     """
     cur = conn.cursor()
     removed = 0
 
-    # 1. Nuclear: delete ALL URLs/Domains that were auto-added by any automated path.
-    #    This covers: auto-extracted (old CVE poll), auto-added (old public search),
-    #    public-lookup. None of these should ever have been in the feed.
+    # 1. Auto-added by an old automated path: CVE reference extraction, public search, lookups.
     cur.execute("""
         SELECT id FROM iocs
         WHERE type IN ('URL', 'Domain')
@@ -2935,25 +2946,23 @@ def cleanup_advisory_iocs(dry_run: bool = False, admin=Depends(require_cap("admi
             cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
         removed += 1
 
-    # 2. Any URL/Domain that matches known advisory/vendor/news domains,
-    #    regardless of how it was tagged (catches ones that slipped through
-    #    without the auto-extracted tag via other paths).
+    # 2. Any URL/Domain on a known advisory/vendor/news domain, however it was tagged (never a feed's own).
     n_trusted = 0
-    cur.execute("SELECT id, value FROM iocs WHERE type IN ('URL', 'Domain')")
+    cur.execute(f"SELECT id, value FROM iocs WHERE type IN ('URL', 'Domain') AND {NOT_FROM_A_FEED}")
     for ioc_id, value in cur.fetchall():
-        if any(td in (value or "").lower() for td in TRUSTED_DOMAINS):
+        if _on_trusted_domain(value):
             if not dry_run:
                 cur.execute("DELETE FROM cve_ioc_links WHERE ioc_id = %s", (ioc_id,))
                 cur.execute("DELETE FROM iocs WHERE id = %s", (ioc_id,))
             n_trusted += 1
             removed += 1
 
-    # 3. Anything with no created_by (system-generated, never manually added).
-    #    These are orphan records from old automated ingestion paths.
-    cur.execute("""
+    # 3. No owner and no feed provenance: orphan records from old automated ingestion paths.
+    cur.execute(f"""
         SELECT id FROM iocs
         WHERE type IN ('URL', 'Domain')
         AND (created_by IS NULL OR created_by = '')
+        AND {NOT_FROM_A_FEED}
     """)
     orphans = cur.fetchall()
     n_orphan = len(orphans)
