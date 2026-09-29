@@ -1654,33 +1654,17 @@ async def sync_connectors(connectors: str = "all", admin=Depends(require_admin),
     """
     Manually trigger connector sync. connectors= all | threatfox | malwarebazaar | urlhaus
     """
-    auth_key = URLHAUS_AUTH_KEY or resolve_api_key(conn, "urlhaus", admin)[0]
-    if not auth_key:
+    if not _abusech_keys(conn):
         raise HTTPException(status_code=400,
             detail="No abuse.ch Auth-Key configured. Add URLHAUS_AUTH_KEY to .env or save it in Settings → API Keys.")
 
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT value FROM system_settings WHERE key = %s", (CONNECTOR_SETTINGS_KEY,))
-    row = cur.fetchone()
-    cfg = json.loads(row["value"]) if row else {}
-
+    cfg = _connector_cfg(conn)
     results = {}
-    run_all = connectors == "all"
-
-    if run_all or connectors == "threatfox":
-        r = await run_threatfox_connector(conn, auth_key, days_back=cfg.get("threatfox_days",1))
-        results["threatfox"] = r
-        log_connector_run(conn, "threatfox", r)
-
-    if run_all or connectors == "malwarebazaar":
-        r = await run_malwarebazaar_connector(conn, auth_key, limit=cfg.get("malwarebazaar_limit",100))
-        results["malwarebazaar"] = r
-        log_connector_run(conn, "malwarebazaar", r)
-
-    if run_all or connectors == "urlhaus":
-        r = await run_urlhaus_connector(conn, auth_key, limit=cfg.get("urlhaus_limit",100))
-        results["urlhaus"] = r
-        log_connector_run(conn, "urlhaus", r)
+    for fid in ("threatfox", "malwarebazaar", "urlhaus"):
+        if connectors == "all" or connectors == fid:
+            r = await _run_abusech(fid, conn, cfg)
+            results[fid] = r
+            log_connector_run(conn, fid, r)
 
     total_added = sum(v.get("added",0) for v in results.values())
     return {"status": "complete", "results": results, "total_added": total_added}
@@ -1701,6 +1685,40 @@ def _connector_cfg(conn) -> dict:
     cur.execute("SELECT value FROM system_settings WHERE key = %s", (CONNECTOR_SETTINGS_KEY,))
     row = cur.fetchone()
     return json.loads(row["value"]) if row else {}
+
+ABUSECH_REJECTED = ("Invalid Auth-Key", "HTTP 401", "HTTP 403")
+
+def _abusech_keys(conn) -> list:
+    """Candidate abuse.ch Auth-Keys, best first: the server's own, then keys saved by admin accounts.
+    A rotated or revoked .env key must not silently stop the feeds while a working key is on file."""
+    keys: list = []
+    def add(k):
+        if k and k not in keys:
+            keys.append(k)
+    add(URLHAUS_AUTH_KEY)
+    cur = conn.cursor()
+    cur.execute("""SELECT k.api_key_encrypted FROM user_api_keys k JOIN users u ON u.id = k.user_id
+                   WHERE k.service = 'urlhaus' AND u.role = 'admin' AND u.active = TRUE
+                     AND k.api_key_encrypted <> '' ORDER BY k.updated_at DESC""")
+    for (enc,) in cur.fetchall():
+        add(decrypt_key(enc))
+    return keys
+
+async def _run_abusech(feed_id: str, conn, cfg: dict) -> dict:
+    """Run ThreatFox / MalwareBazaar / URLhaus, moving on to the next key only when a key is rejected."""
+    keys = _abusech_keys(conn)
+    if not keys:
+        return {"ok": False, "error": "No abuse.ch Auth-Key configured (URLHAUS_AUTH_KEY, or save one in Settings → API keys)."}
+    fn = {"threatfox": run_threatfox_connector, "malwarebazaar": run_malwarebazaar_connector, "urlhaus": run_urlhaus_connector}[feed_id]
+    arg = {"threatfox": cfg.get("threatfox_days", 1), "malwarebazaar": cfg.get("malwarebazaar_limit", 100),
+           "urlhaus": cfg.get("urlhaus_limit", 100)}[feed_id]
+    res: dict = {}
+    for key in keys:
+        res = await fn(conn, key, arg)
+        if res.get("ok") or not any(m in str(res.get("error", "")) for m in ABUSECH_REJECTED):
+            return res
+    return {"ok": False, "error": f"abuse.ch rejected every Auth-Key on file ({res.get('error')}). Create a new key at auth.abuse.ch "
+                                   f"and save it in Settings → API keys, or update URLHAUS_AUTH_KEY."}
 
 def _feed_key(conn, feed_id: str, user=None) -> str:
     f = feeds.FEEDS[feed_id]
@@ -1751,14 +1769,7 @@ async def _run_feed_job(feed_id: str, user=None):
     try:
         cfg = _connector_cfg(conn)
         if feed_id in ABUSECH:
-            key = URLHAUS_AUTH_KEY or (resolve_api_key(conn, "urlhaus", user)[0] if user else "")
-            if not key:
-                res = {"ok": False, "error": "No abuse.ch Auth-Key configured (URLHAUS_AUTH_KEY)."}
-            else:
-                fn = {"threatfox": run_threatfox_connector, "malwarebazaar": run_malwarebazaar_connector, "urlhaus": run_urlhaus_connector}[feed_id]
-                arg = {"threatfox": cfg.get("threatfox_days", 1), "malwarebazaar": cfg.get("malwarebazaar_limit", 100),
-                       "urlhaus": cfg.get("urlhaus_limit", 100)}[feed_id]
-                res = await fn(conn, key, arg)
+            res = await _run_abusech(feed_id, conn, cfg)
         else:
             f = feeds.FEEDS[feed_id]
             key = _feed_key(conn, feed_id, user)
@@ -1793,11 +1804,12 @@ def connector_catalog(admin=Depends(require_admin), conn=Depends(get_db)):
     cur.execute("""SELECT COALESCE(NULLIF(enrichment->>'source',''), '') AS s, COUNT(*) AS n, MAX(created_at) AS newest,
             COUNT(*) FILTER (WHERE confidence >= 80) AS high FROM iocs GROUP BY 1""")
     stats = {r["s"]: r for r in cur.fetchall()}
+    abusech_keys = _abusech_keys(conn)
     out = []
     for fid, (name, kinds, home, about, flag, _iv) in ABUSECH.items():
         st = stats.get(name, {})
         out.append({"id": fid, "name": name, "kinds": kinds, "homepage": home, "about": about, "group": "abuse.ch",
-                    "enabled": bool(cfg.get(flag)), "needs_key": True, "key_configured": bool(URLHAUS_AUTH_KEY),
+                    "enabled": bool(cfg.get(flag)), "needs_key": True, "key_configured": bool(abusech_keys),
                     "reliability": int(100 * feeds.SOURCE_RELIABILITY.get(name, .5)), "limit": None,
                     "last_run": last.get(fid), "running": bool(FEED_JOBS.get(fid, {}).get("running")),
                     "iocs": st.get("n", 0), "high_confidence": st.get("high", 0),
@@ -1898,23 +1910,11 @@ async def scheduled_connector_sync():
         if not row: return
         cfg = json.loads(row["value"])
 
-        auth_key = URLHAUS_AUTH_KEY
-        if not auth_key: return
-
-        if cfg.get("threatfox_enabled"):
-            r = await run_threatfox_connector(conn, auth_key, days_back=cfg.get("threatfox_days",1))
-            log_connector_run(conn, "threatfox", r)
-            print(f"[connector] ThreatFox: +{r.get('added',0)} IOCs")
-
-        if cfg.get("malwarebazaar_enabled"):
-            r = await run_malwarebazaar_connector(conn, auth_key, limit=cfg.get("malwarebazaar_limit",100))
-            log_connector_run(conn, "malwarebazaar", r)
-            print(f"[connector] MalwareBazaar: +{r.get('added',0)} IOCs")
-
-        if cfg.get("urlhaus_enabled"):
-            r = await run_urlhaus_connector(conn, auth_key, limit=cfg.get("urlhaus_limit",100))
-            log_connector_run(conn, "urlhaus", r)
-            print(f"[connector] URLhaus: +{r.get('added',0)} IOCs")
+        for fid, label in (("threatfox", "ThreatFox"), ("malwarebazaar", "MalwareBazaar"), ("urlhaus", "URLhaus")):
+            if cfg.get(f"{fid}_enabled"):
+                r = await _run_abusech(fid, conn, cfg)
+                log_connector_run(conn, fid, r)
+                print(f"[connector] {label}: +{r.get('added',0)} IOCs" + ("" if r.get("ok") else f", error: {r.get('error')}"))
     except Exception as e:
         print(f"[connector] Scheduled sync error: {e}")
     finally:
