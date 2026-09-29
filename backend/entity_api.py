@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 import dnsintel
 import entities as E
+import geo
 import search as S
 import security
 
@@ -320,21 +321,9 @@ def register(app, d, h):
         return {"resolved": answers, "new_relationships": added}
 
     # ── Richer DNS records (NSLookup.io), cached ──────────────────────────────
-    def _dns_domain(raw):
-        v = (raw or "").strip().lower()
-        if "://" in v:
-            from urllib.parse import urlparse
-            v = urlparse(v).hostname or ""
-        v = v.rstrip(".")
-        try:
-            v = v.encode("idna").decode("ascii")            # internationalised names
-        except UnicodeError:
-            return None
-        return v if security.is_valid_domain(v) and not security.is_valid_ip(v) else None
-
     @app.get("/v2/dns")
     async def v2_dns(domain: str, refresh: bool = False, user=Depends(current), conn=Depends(get_db)):
-        key = _dns_domain(domain)
+        key = geo.lookup_host(domain)
         if not key:
             raise HTTPException(400, "Enter a domain name (or a URL) to look up its DNS records")
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

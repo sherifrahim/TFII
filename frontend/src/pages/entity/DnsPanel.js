@@ -99,6 +99,54 @@ export function DnsResult({ d }) {
   );
 }
 
+export function HistoryList({ h }) {
+  if (!h.addresses.length) return <div className="small faint">VirusTotal has no earlier addresses on record for this name.</div>;
+  return (
+    <>
+      <div className="small" style={{ marginBottom: 6 }}>
+        {h.not_cdn > 0
+          ? <>{h.not_cdn} of {h.total} past address{h.total === 1 ? " is" : "es are"} <strong>not a CDN</strong>: if the site moved behind a CDN later, these are the best clue to where it is really hosted.</>
+          : <>All {h.total} past address{h.total === 1 ? " is" : "es are"} CDN addresses, so there is no earlier origin on record.</>}
+      </div>
+      <dl className="kv" style={{ gridTemplateColumns: "minmax(120px, auto) 1fr" }}>
+        {h.addresses.map(a => (
+          <React.Fragment key={a.ip}>
+            <dt className="mono">{a.ip}</dt>
+            <dd className="small" style={{ overflowWrap: "anywhere" }}>
+              {a.cdn ? <Badge tone="low" outline>CDN: {a.cdn}</Badge> : <Badge tone="high" outline>not a CDN</Badge>}{" "}
+              {[a.org, a.asn, a.country].filter(Boolean).join(" · ")}
+              {a.last_seen && <span className="faint"> · last seen {a.last_seen}</span>}
+            </dd>
+          </React.Fragment>
+        ))}
+      </dl>
+    </>
+  );
+}
+
+function History({ host }) {
+  const [h, setH] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  async function load() {
+    setBusy(true); setErr(null);
+    try { setH(await apiJSON(`/v2/dns/history?domain=${encodeURIComponent(host)}`)); } catch (e) { setErr(e); }
+    setBusy(false);
+  }
+  return (
+    <Section title="Past addresses">
+      {!h && (
+        <div className="row" style={{ gap: 12, alignItems: "flex-start" }}>
+          <Button size="sm" loading={busy} onClick={load}>Show past addresses</Button>
+          <span className="small faint" style={{ maxWidth: 520 }}>What this name resolved to earlier (VirusTotal passive DNS, uses your VirusTotal key). Useful behind a CDN.</span>
+        </div>
+      )}
+      {err && <div className="small" style={{ color: "var(--critical)", marginTop: 6 }}>{err.message}</div>}
+      {h && <HistoryList h={h} />}
+    </Section>
+  );
+}
+
 // Looked up on request, not automatically: NSLookup.io allows 30 requests a minute per IP, shared by every user.
 export default function DnsPanel({ value, type }) {
   const host = dnsHost(value, type);
@@ -130,6 +178,7 @@ export default function DnsPanel({ value, type }) {
         </div>
       )}
       {d && <DnsResult d={d} />}
+      {d && <History host={host} />}
     </Panel>
   );
 }

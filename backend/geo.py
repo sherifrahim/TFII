@@ -13,10 +13,14 @@ Nothing here can prove where an attacker sits; the labels say what each fact is.
 """
 import ipaddress
 import logging
+import re
 import socket
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import httpx
+
+import security
 
 # httpx logs request URLs at INFO; nothing sensitive is in these, but keep the log quiet.
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -153,3 +157,52 @@ def cross_check(geo: Optional[dict], enrichment: Optional[dict]) -> Optional[dic
         geo["other_sources"] = others
         geo["agreement"] = "agree" if all(c == mine for c in others.values()) else "differ"
     return geo
+
+
+# ── registration (who registered the name, and when) ─────────────────────────
+_WHOIS_COUNTRY = re.compile(r"(?im)^\s*Registrant Country\s*:\s*([A-Za-z]{2})\s*$")
+
+
+def vt_registration(attrs: dict) -> Optional[dict]:
+    """Registrar, creation date and (when the WHOIS text is not redacted) the registrant country, taken from a
+    VirusTotal domain report we already fetched. Registrant data is self-declared and often redacted."""
+    if not isinstance(attrs, dict):
+        return None
+    out = {}
+    if attrs.get("registrar"):
+        out["registrar"] = str(attrs["registrar"])[:120]
+    created = attrs.get("creation_date")
+    if isinstance(created, (int, float)) and created > 0:
+        out["created"] = datetime.fromtimestamp(created, tz=timezone.utc).date().isoformat()
+    m = _WHOIS_COUNTRY.search(str(attrs.get("whois") or ""))
+    if m:
+        out["country"] = m.group(1).upper()
+    return out or None
+
+
+def add_registration(geo: Optional[dict], enrichment: Optional[dict], value_type: str) -> Optional[dict]:
+    """Attach `registration` from the VirusTotal answer (domains only). Creates the location record when the
+    name did not resolve, so a fresh registration is still visible."""
+    if value_type in IP_TYPES or not isinstance(enrichment, dict):
+        return geo
+    reg = (enrichment.get("virustotal") or {}).get("registration")
+    if not reg:
+        return geo
+    geo = dict(geo) if geo else {"kind": "unknown", "resolved_ips": [], "note": "The name did not resolve."}
+    geo["registration"] = reg
+    return geo
+
+
+def lookup_host(raw: str) -> Optional[str]:
+    """The DNS name to look up for what a user typed or pasted: a domain, or the host of a URL. None for IP
+    addresses and anything that is not a valid name."""
+    from urllib.parse import urlparse
+    v = (raw or "").strip().lower()
+    if "://" in v:
+        v = urlparse(v).hostname or ""
+    v = v.rstrip(".")
+    try:
+        v = v.encode("idna").decode("ascii")            # internationalised names
+    except UnicodeError:
+        return None
+    return v if security.is_valid_domain(v) and not security.is_valid_ip(v) else None

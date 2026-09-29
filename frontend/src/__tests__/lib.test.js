@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { safeUrl, installLinkGuard } from "../lib/safe";
 import { geoFacts, regionName } from "../lib/geo";
 import { runningBundle, servedBundle, isStale } from "../lib/update";
-import { dnsHost, DnsResult } from "../pages/entity/DnsPanel";
+import { dnsHost, DnsResult, HistoryList } from "../pages/entity/DnsPanel";
 import { entityPath, canonicalKind, KINDS } from "../lib/entity";
 import { entityRoute } from "../lib/router";
 import { detectType, refang, defang, confBand } from "../lib/format";
@@ -64,10 +64,20 @@ describe("location facts are labelled for what they are", () => {
     expect(f["TLD registry"].tone).toBe("muted");
     expect(f["IP location"]).toBeUndefined();
   });
-  test("behind a CDN no country is shown", () => {
-    const f = geoFacts({ kind: "cdn_edge", cdn: "Cloudflare", country: null, edge_country: "Italy", cctld_country_code: "MU" });
-    expect(f.map(x => x.label)).toEqual(["Behind CDN", "TLD registry"]);
-    expect(JSON.stringify(f)).not.toMatch(/Italy/);
+  test("behind a CDN the edge country is shown but labelled as the CDN's node, not the site's location", () => {
+    const f = by(geoFacts({ kind: "cdn_edge", cdn: "Cloudflare", country: null, edge_country: "Italy", cctld_country_code: "MU" }));
+    expect(Object.keys(f)).toEqual(["Behind CDN", "CDN edge node", "TLD registry"]);
+    expect(f["CDN edge node"]).toMatchObject({ value: "Italy", tone: "muted" });
+    expect(f["Behind CDN"].value).toMatch(/Cloudflare.*hidden/);
+    expect(f["Hosted in"]).toBeUndefined();
+    expect(f["IP location"]).toBeUndefined();
+  });
+  test("registration facts: registrar, age and registrant country", () => {
+    const f = by(geoFacts({ kind: "unknown", registration: { registrar: "Namecheap, Inc.", created: "2026-09-26", country: "MU" } }));
+    expect(f["Registered"].value).toContain("Namecheap, Inc.");
+    expect(f["Registered"].value).toContain("2026-09-26");
+    expect(f["Registrant country"].value).toBe("Mauritius");
+    expect(geoFacts({ kind: "hosting", country: "Italy", registration: {} }).map(x => x.label)).toEqual(["Hosted in"]);
   });
   test("an IP is an IP location, and a disagreement between sources is flagged", () => {
     const f = by(geoFacts({ kind: "ip", country: "Italy", agreement: "differ", other_sources: { AbuseIPDB: "DE" } }));
@@ -119,6 +129,15 @@ describe("DNS panel", () => {
     const html = renderToStaticMarkup(<DnsResult d={d} />);
     for (const t of ["140.82.121.4", "Github Inc.", "AS36459", "San Francisco, United States", "no network data", "dns1.p08.nsone.net", "mail.example.com",
       "v=spf1 -all", "p=none", "digicert.com", "hostmaster.example.com.", "No CAA record", "Check", "Good"]) expect(html).toContain(t);
+  });
+  test("past addresses say which are not a CDN, and what to conclude when all are", () => {
+    const some = renderToStaticMarkup(<HistoryList h={{ total: 2, not_cdn: 1, addresses: [
+      { ip: "104.16.1.1", cdn: "Cloudflare", org: "Cloudflare, Inc.", asn: "AS13335", country: "United States", last_seen: "2026-09-20" },
+      { ip: "93.184.216.34", cdn: null, org: "Example Hosting", asn: "AS64500", country: "Germany", last_seen: "2023-11-14" }] }} />);
+    for (const t of ["1 of 2 past addresses", "not a CDN", "CDN: Cloudflare", "Example Hosting", "Germany", "last seen 2023-11-14", "best clue"]) expect(some).toContain(t);
+    const none = renderToStaticMarkup(<HistoryList h={{ total: 1, not_cdn: 0, addresses: [{ ip: "104.16.1.1", cdn: "Cloudflare" }] }} />);
+    expect(none).toContain("no earlier origin on record");
+    expect(renderToStaticMarkup(<HistoryList h={{ total: 0, not_cdn: 0, addresses: [] }} />)).toContain("no earlier addresses");
   });
   test("missing records read as 'not published', not as errors", () => {
     const html = renderToStaticMarkup(<DnsResult d={{ addresses: [], cname: ["alias.example.com."], ns: [], mx: [], txt: [], soa: null, caa: [], spf: null, dmarc: null, signals: [] }} />);

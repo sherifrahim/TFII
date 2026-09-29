@@ -125,6 +125,8 @@ Bulk lookup and the observable page label every location by what it is, because 
 | `cdn_edge` | the address belongs to a CDN (Cloudflare, Akamai, Fastly, ...), which answers from the location nearest the asker, so **no country is claimed** (`edge_country` is kept separately) |
 | `unknown` | unresolvable; only the registry hint may be present |
 
+Behind a CDN the edge node's country is still shown, labelled **CDN edge node** (it follows the asker, so it is not the site's location). For domains the VirusTotal answer TFII already fetches adds `registration`: registrar, creation date (a very recent one is a signal) and the registrant country when the WHOIS text is not redacted (self-declared). `GET /v2/dns/history?domain=` (on request, uses the caller's VirusTotal key or quota) returns what the name resolved to before (passive DNS), each located and marked CDN or not: earlier non-CDN addresses are the best clue to the real host of a site that moved behind a CDN.
+
 `cctld_country_code` is the registry country of a real country-code TLD (`.mu` -> MU); it is a hint shown separately, never a location, and generic-use ccTLDs (`.io`, `.tv`, ...) are ignored.
 
 ## DNS records (`dnsintel.py`)

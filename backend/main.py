@@ -2056,8 +2056,12 @@ async def vt_domain(domain, conn=None, key: str = None, user_id: str = None):
     attrs = r.json().get("data",{}).get("attributes",{})
     stats = attrs.get("last_analysis_stats",{})
     mal = stats.get("malicious",0); total = sum(stats.values()) or 1
-    return {"source":"VirusTotal","malicious":mal,"total":total,"vt_score":round((mal/total)*100),
-            "country":attrs.get("country","?"),"link":f"https://www.virustotal.com/gui/domain/{domain}"}
+    out = {"source":"VirusTotal","malicious":mal,"total":total,"vt_score":round((mal/total)*100),
+           "country":attrs.get("country","?"),"link":f"https://www.virustotal.com/gui/domain/{domain}"}
+    reg = geoloc.vt_registration(attrs)          # registrar / creation date / registrant country: already in this answer
+    if reg:
+        out["registration"] = reg
+    return out
 
 async def vt_hash(h, conn=None, key: str = None, user_id: str = None):
     k = key if key is not None else VT_API_KEY
@@ -3578,6 +3582,7 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
                 force=False, existing=existing.get("enrichment") if existing else None, user=user)
             verdict_info = compute_verdict(enrichment)
             geo = geoloc.cross_check(geo, enrichment)        # IPs: does AbuseIPDB / VirusTotal agree on the country?
+            geo = geoloc.add_registration(geo, enrichment, ioc_type)      # domains: who registered it, and when
 
             return {
                 "input": raw, "refanged": refanged,
@@ -3603,6 +3608,52 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
         "info":       sum(1 for r in results if r["verdict"] == "info"),
     }
     return {"results": results, "summary": summary}
+
+@app.get("/v2/dns/history")
+@limiter.limit("20/minute")
+async def domain_address_history(request: Request, domain: str, user=Depends(get_current_user), conn=Depends(get_db)):
+    """Addresses a name resolved to in the past (VirusTotal passive DNS), each located and marked CDN or not.
+    When a site moved behind a CDN later, the earlier non-CDN addresses are the best clue to where it is really
+    hosted. Uses the caller's own VirusTotal key, or their free daily quota on the platform key."""
+    host = geoloc.lookup_host(domain)
+    if not host:
+        raise HTTPException(status_code=400, detail="Enter a domain name (or a URL) to look up")
+    key, _personal, quota = resolve_api_key(conn, "virustotal", user)
+    if not key:
+        raise HTTPException(status_code=400 if quota is None else 429,
+                            detail="No VirusTotal key available: add yours in Settings" if quota is None
+                            else f"Daily quota of {DAILY_FREE_QUOTA} free checks reached. Add your VirusTotal key in Settings.")
+    log_api_call(conn, "virustotal", host, False, user["id"])
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f"https://www.virustotal.com/api/v3/domains/{host}/resolutions", params={"limit": 40}, headers={"x-apikey": key})
+    except (httpx.TimeoutException, httpx.TransportError):
+        raise HTTPException(status_code=502, detail="VirusTotal could not be reached")
+    if r.status_code == 401:
+        raise HTTPException(status_code=400, detail="VirusTotal rejected the key")
+    if r.status_code == 429:
+        raise HTTPException(status_code=429, detail="VirusTotal is rate limiting requests; try again in a minute")
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"VirusTotal answered HTTP {r.status_code}")
+    seen, rows = set(), []
+    for item in (r.json().get("data") or []):
+        a = (item or {}).get("attributes") or {}
+        ip = str(a.get("ip_address") or "")
+        if not ip or ip in seen or not security.is_valid_ip(ip) or not ipaddress.ip_address(ip).is_global:
+            continue
+        seen.add(ip)
+        d = a.get("date")
+        rows.append({"ip": ip, "last_seen": datetime.fromtimestamp(d, tz=timezone.utc).date().isoformat() if isinstance(d, (int, float)) and d > 0 else None})
+    rows.sort(key=lambda x: x["last_seen"] or "", reverse=True)
+    rows = rows[:30]
+    located = await geo_org_lookup_batch([x["ip"] for x in rows])
+    for x in rows:
+        g = located.get(x["ip"]) or {}
+        org = g.get("org") or g.get("isp") or ""
+        x.update({"country": g.get("country"), "country_code": g.get("countryCode"), "org": org, "asn": g.get("as"),
+                  "cdn": geoloc.cdn_provider(g.get("org"), g.get("isp"), g.get("as"))})
+    return {"domain": host, "addresses": rows, "source": "VirusTotal passive DNS",
+            "not_cdn": sum(1 for x in rows if not x["cdn"]), "total": len(rows)}
 
 @app.post("/iocs/bulk-lookup")
 @limiter.limit("10/minute")
