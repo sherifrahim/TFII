@@ -12,6 +12,7 @@ hazard that a query string simply does not have.
     GET  /v2/entity/timeline | observations | raw | membership
     POST /v2/entity/status             triage status of an indicator
     POST /v2/entity/resolve-dns        domain → A/AAAA, recorded with provenance
+    GET  /v2/dns?domain=               richer DNS records (NSLookup.io): A/AAAA/NS/MX/TXT/SOA/CAA, SPF, DMARC (cached)
     POST /v2/entity/sync-mitre         materialise ATT&CK associations for an actor
     POST /v2/relationships             assert a typed relationship (with provenance)
     DELETE /v2/relationships/{id}
@@ -27,6 +28,7 @@ import psycopg2.extras
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
+import dnsintel
 import entities as E
 import search as S
 import security
@@ -316,6 +318,51 @@ def register(app, d, h):
                              actor=user["username"], summary=f"Resolved: {summary}", data=answers)
         conn.commit()
         return {"resolved": answers, "new_relationships": added}
+
+    # ── Richer DNS records (NSLookup.io), cached ──────────────────────────────
+    def _dns_domain(raw):
+        v = (raw or "").strip().lower()
+        if "://" in v:
+            from urllib.parse import urlparse
+            v = urlparse(v).hostname or ""
+        v = v.rstrip(".")
+        try:
+            v = v.encode("idna").decode("ascii")            # internationalised names
+        except UnicodeError:
+            return None
+        return v if security.is_valid_domain(v) and not security.is_valid_ip(v) else None
+
+    @app.get("/v2/dns")
+    async def v2_dns(domain: str, refresh: bool = False, user=Depends(current), conn=Depends(get_db)):
+        key = _dns_domain(domain)
+        if not key:
+            raise HTTPException(400, "Enter a domain name (or a URL) to look up its DNS records")
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT data, fetched_at, EXTRACT(EPOCH FROM (NOW() - fetched_at)) / 60 AS age FROM dns_intel_cache WHERE domain = %s", (key,))
+        row = cur.fetchone()
+        age = float(row["age"]) if row else None
+
+        def out(data, cached, **extra):
+            return {**data, "cached": cached, "age_minutes": None if age is None else int(age), **extra}
+        fresh = row is not None and age < dnsintel.CACHE_HOURS * 60
+        if fresh and not (refresh and age >= dnsintel.REFRESH_COOLDOWN_MINUTES):
+            return out(row["data"], True)
+        if not dnsintel.USER_LIMIT.allow(user["id"]):
+            if row:
+                return out(row["data"], True, stale=True, warning="Too many DNS lookups in the last minute; showing the saved answer.")
+            raise HTTPException(429, "Too many DNS lookups in the last minute; wait a moment and try again")
+        try:
+            data = await dnsintel.lookup(key)
+        except dnsintel.DnsApiError as e:
+            if row:                                            # a saved answer beats an error
+                return out(row["data"], True, stale=True, warning=str(e))
+            raise HTTPException({"invalid": 400, "rate_limited": 429, "busy": 429}.get(e.kind, 502), str(e))
+        cur.execute("""INSERT INTO dns_intel_cache (domain, data, fetched_at) VALUES (%s, %s, NOW())
+                       ON CONFLICT (domain) DO UPDATE SET data = EXCLUDED.data, fetched_at = NOW()""",
+                    (key, psycopg2.extras.Json(data)))
+        conn.commit()
+        age = 0.0
+        return out(data, False)
 
     # ── MITRE ATT&CK associations ─────────────────────────────────────────────
     @app.post("/v2/entity/sync-mitre")

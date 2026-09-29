@@ -127,6 +127,15 @@ Bulk lookup and the observable page label every location by what it is, because 
 
 `cctld_country_code` is the registry country of a real country-code TLD (`.mu` -> MU); it is a hint shown separately, never a location, and generic-use ccTLDs (`.io`, `.tv`, ...) are ignored.
 
+## DNS records (`dnsintel.py`)
+
+`GET /v2/dns?domain=` (any signed-in user) returns richer DNS records for a domain or a URL's host, from the public [NSLookup.io](https://www.nslookup.io) API: addresses with network owner and location, name servers, mail servers, TXT, CAA and SOA, plus SPF (parsed from TXT) and DMARC (`_dmarc.<domain>`), and plain-language observations (no SPF/DMARC, permissive SPF, DMARC `p=none`, no CAA, null-mail domain, many networks). The indicator page shows it as a **DNS records** panel for Domain and URL indicators.
+
+* **No API key.** The API is public and allows **30 requests a minute per IP**, shared by every TFII user. One lookup is three requests, so answers are cached per domain for 6 hours (`dns_intel_cache`), requests are paced to 24 a minute, each user gets 6 lookups a minute, and a refresh is ignored within 10 minutes of the last fetch. After a 429 the client backs off. If NSLookup.io is unavailable a saved answer is returned, marked `stale`.
+* **Looked up on request, not automatically**, and the domain name is sent to NSLookup.io.
+* Record TTLs are not shown: through a caching resolver they are the remaining cache time, not the published value.
+* `dns-lookup.yml` (manual) runs the client against the live API from the server and prints what it parsed.
+
 ## Indicator feeds and confidence (`feeds.py`)
 
 Sources are declared in `feeds.FEEDS` (URL + pure parser + reliability + expiry + interval); the three abuse.ch connectors

@@ -1,0 +1,40 @@
+name: DNS enrichment smoke test from the server (manual, read-only)
+
+# Manual only. Runs TFII's own NSLookup.io client (dnsintel.py) on the server against the live public API and
+# prints a summary of what it parsed. No key is involved (the API is public). Three requests per run.
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: "Domain to look up"
+        default: "github.com"
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lookup
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DOMAIN: ${{ github.event.inputs.domain }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          envs: DOMAIN
+          script: |
+            cd /home/ubuntu/threatfeed
+            DOMAIN="$DOMAIN" venv/bin/python - <<'PY'
+            import asyncio, os, json
+            import dnsintel
+            d = asyncio.run(dnsintel.lookup(os.environ["DOMAIN"]))
+            print("domain:", d["domain"], "| resolver:", d["resolver"], "| source:", d["source"])
+            print("addresses:", [(a["ip"], (a["geo"] or {}).get("org"), (a["geo"] or {}).get("country")) for a in d["addresses"]])
+            print("cname:", d["cname"], "| ns:", d["ns"][:4], "| mx:", d["mx"][:3])
+            print("soa:", d["soa"])
+            print("caa:", d["caa"][:4])
+            print("spf:", (d["spf"] or {}).get("all"), "| includes:", ((d["spf"] or {}).get("includes") or [])[:4], "| dmarc:", (d["dmarc"] or {}).get("policy"))
+            print("txt records:", len(d["txt"]))
+            for s in d["signals"]: print(f"  [{s['level']}] {s['text']}")
+            PY

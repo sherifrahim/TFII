@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { safeUrl, installLinkGuard } from "../lib/safe";
 import { geoFacts, regionName } from "../lib/geo";
 import { runningBundle, servedBundle, isStale } from "../lib/update";
+import { dnsHost, DnsResult } from "../pages/entity/DnsPanel";
 import { entityPath, canonicalKind, KINDS } from "../lib/entity";
 import { entityRoute } from "../lib/router";
 import { detectType, refang, defang, confBand } from "../lib/format";
@@ -94,6 +95,36 @@ describe("stale tab detection", () => {
     expect(isStale("main.7678bbfb.js", "main.7678bbfb.js")).toBe(false);
     expect(isStale(null, "main.7678bbfb.js")).toBe(false);
     expect(isStale("main.aaaa1111.js", null)).toBe(false);
+  });
+});
+
+describe("DNS panel", () => {
+  test("only domains and URLs with a real host are looked up", () => {
+    expect(dnsHost("Shop.Example.com.", "Domain")).toBe("shop.example.com");
+    expect(dnsHost("hxxp://Evil.example.mu/login?a=1", "URL")).toBe("evil.example.mu");
+    expect(dnsHost("http://1.2.3.4/x", "URL")).toBe("");
+    expect(dnsHost("http://[2001:db8::1]/x", "URL")).toBe("");
+    expect(dnsHost("1.2.3.4", "IPv4")).toBe("");
+    expect(dnsHost("not a url", "URL")).toBe("");
+    expect(dnsHost("", "Domain")).toBe("");
+  });
+  test("renders the records, the observations and the mail authentication", () => {
+    const d = {
+      addresses: [{ ip: "140.82.121.4", geo: { org: "Github Inc.", asn: "AS36459", city: "San Francisco", country: "United States" } }, { ip: "1.1.1.1", geo: null }],
+      cname: [], ns: ["dns1.p08.nsone.net"], mx: [{ priority: 0, host: "mail.example.com" }], txt: ["v=spf1 -all"],
+      soa: { host: "ns1.example.com.", admin: "hostmaster.example.com.", serial: 7 }, caa: [{ tag: "issue", value: "digicert.com" }],
+      spf: { record: "v=spf1 -all" }, dmarc: { record: "v=DMARC1; p=none", policy: "none" },
+      signals: [{ level: "warn", text: "No CAA record" }, { level: "ok", text: "fine" }],
+    };
+    const html = renderToStaticMarkup(<DnsResult d={d} />);
+    for (const t of ["140.82.121.4", "Github Inc.", "AS36459", "San Francisco, United States", "no network data", "dns1.p08.nsone.net", "mail.example.com",
+      "v=spf1 -all", "p=none", "digicert.com", "hostmaster.example.com.", "No CAA record", "Check", "Good"]) expect(html).toContain(t);
+  });
+  test("missing records read as 'not published', not as errors", () => {
+    const html = renderToStaticMarkup(<DnsResult d={{ addresses: [], cname: ["alias.example.com."], ns: [], mx: [], txt: [], soa: null, caa: [], spf: null, dmarc: null, signals: [] }} />);
+    expect(html).toContain("CNAME → alias.example.com.");
+    expect(html).toContain("No MX records");
+    expect(html.match(/not published/g).length).toBe(2);
   });
 });
 

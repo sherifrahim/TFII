@@ -140,6 +140,12 @@ MIGRATIONS = [
         O("CREATE INDEX IF NOT EXISTS idx_iocs_value_trgm ON iocs USING gin (value gin_trgm_ops)"),
         O("CREATE INDEX IF NOT EXISTS idx_cvef_title_trgm ON cve_findings USING gin (title gin_trgm_ops)"),
     ]),
+
+    (3, "dns_intel_cache", [
+        # NSLookup.io allows 30 requests a minute per IP, shared by every user, so answers are cached per domain.
+        R("""CREATE TABLE IF NOT EXISTS dns_intel_cache (
+            domain VARCHAR(253) PRIMARY KEY, data JSONB NOT NULL, fetched_at TIMESTAMP DEFAULT NOW())"""),
+    ]),
 ]
 
 

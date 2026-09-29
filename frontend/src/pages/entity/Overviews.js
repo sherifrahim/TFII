@@ -5,6 +5,7 @@ import { useSession } from "../../lib/session";
 import { timeAgo, detectionTemplates, typeGroup } from "../../lib/format";
 import { safeUrl } from "../../lib/safe";
 import { geoFacts } from "../../lib/geo";
+import DnsPanel from "./DnsPanel";
 import { LEGACY_C } from "../../design/tokens";
 import {
   Panel, Button, IconButton, Badge, SevBadge, TypeBadge, Field, Callout, EmptyState, CopyButton, useToast, actionable, rowAction,
@@ -98,6 +99,8 @@ export function IndicatorOverview({ env, canEdit, reload }) {
             </div>
           )}
         </Panel>
+
+        <DnsPanel value={ioc.value} type={ioc.type} />
 
         {relGroups.length > 0 && (
           <Panel title="Related indicators" sub="shared campaign, family, subnet or tag" tight>
@@ -249,6 +252,7 @@ export function ObservableOverview({ env }) {
           </>
         )}
       </Panel>
+      <DnsPanel value={hd.value} type={hd.type} />
     </div>
   );
 }
