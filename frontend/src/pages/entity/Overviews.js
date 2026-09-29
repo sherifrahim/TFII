@@ -4,6 +4,7 @@ import { navigate, enc } from "../../lib/router";
 import { useSession } from "../../lib/session";
 import { timeAgo, detectionTemplates, typeGroup } from "../../lib/format";
 import { safeUrl } from "../../lib/safe";
+import { geoFacts } from "../../lib/geo";
 import { LEGACY_C } from "../../design/tokens";
 import {
   Panel, Button, IconButton, Badge, SevBadge, TypeBadge, Field, Callout, EmptyState, CopyButton, useToast, actionable, rowAction,
@@ -231,8 +232,19 @@ export function ObservableOverview({ env }) {
           <>
             <div className="row" style={{ gap: 8, marginBottom: 8 }}>
               <Badge tone={tone[lookup.verdict] || "low"} dot>{lookup.verdict}</Badge>
-              {lookup.geo?.country && <span className="muted small">{lookup.geo.country} · {lookup.geo.org}</span>}
             </div>
+            {geoFacts(lookup.geo).length > 0 && (
+              <div className="stack" style={{ gap: 4, marginBottom: 8 }}>
+                {geoFacts(lookup.geo).map(f => (
+                  <div key={f.label} className="small" title={f.title}>
+                    <span className="faint">{f.label}: </span>
+                    <span style={{ color: f.tone === "warn" ? "var(--high)" : f.tone === "muted" ? "var(--text-3)" : "var(--text)" }}>{f.value}</span>
+                  </div>
+                ))}
+                {lookup.geo?.org && <div className="small faint">Owner: {lookup.geo.org}{lookup.geo.asn ? ` (${lookup.geo.asn})` : ""}{lookup.geo.resolved_ip ? ` · resolves to ${lookup.geo.resolved_ip}` : ""}</div>}
+                {lookup.geo?.note && <div className="small faint" style={{ maxWidth: 560 }}>{lookup.geo.note}</div>}
+              </div>
+            )}
             <div className="small muted" style={{ overflowWrap: "anywhere" }}>{lookup.reason}</div>
           </>
         )}

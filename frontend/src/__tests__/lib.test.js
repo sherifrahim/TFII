@@ -2,6 +2,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { safeUrl, installLinkGuard } from "../lib/safe";
+import { geoFacts, regionName } from "../lib/geo";
 import { entityPath, canonicalKind, KINDS } from "../lib/entity";
 import { entityRoute } from "../lib/router";
 import { detectType, refang, defang, confBand } from "../lib/format";
@@ -49,6 +50,32 @@ describe("link guard — blocks hostile links but not the page's own downloads",
     expect(blocked("blob:https://evil.example/abc", true)).toBe(true);          // someone else's blob
     expect(blocked("https://example.com/", false)).toBe(false);                 // ordinary links unchanged
     expect(blocked("#/iocs", false)).toBe(false);
+  });
+});
+
+describe("location facts are labelled for what they are", () => {
+  const by = f => Object.fromEntries(f.map(x => [x.label, x]));
+  test("a .mu domain hosted in Italy: hosting is not presented as origin, the registry is separate", () => {
+    const f = by(geoFacts({ kind: "hosting", country: "Italy", countries: [{ code: "IT", name: "Italy" }], cctld_country_code: "MU", note: "n" }));
+    expect(f["Hosted in"].value).toBe("Italy");
+    expect(f["TLD registry"].value).toBe("Mauritius (.mu)");
+    expect(f["TLD registry"].tone).toBe("muted");
+    expect(f["IP location"]).toBeUndefined();
+  });
+  test("behind a CDN no country is shown", () => {
+    const f = geoFacts({ kind: "cdn_edge", cdn: "Cloudflare", country: null, edge_country: "Italy", cctld_country_code: "MU" });
+    expect(f.map(x => x.label)).toEqual(["Behind CDN", "TLD registry"]);
+    expect(JSON.stringify(f)).not.toMatch(/Italy/);
+  });
+  test("an IP is an IP location, and a disagreement between sources is flagged", () => {
+    const f = by(geoFacts({ kind: "ip", country: "Italy", agreement: "differ", other_sources: { AbuseIPDB: "DE" } }));
+    expect(f["IP location"].value).toBe("Italy");
+    expect(f["Disagrees with"]).toMatchObject({ value: "AbuseIPDB: Germany", tone: "warn" });
+  });
+  test("nothing to show, and .uk, are handled", () => {
+    expect(geoFacts(null)).toEqual([]);
+    expect(geoFacts({ kind: "hosting", country: "Italy", cctld_country_code: "GB" }).find(x => x.label === "TLD registry").value).toBe("United Kingdom (.uk)");
+    expect(regionName("")).toBe("");
   });
 });
 

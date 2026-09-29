@@ -1,7 +1,6 @@
 import os, uuid, httpx, asyncio, base64, csv, io, re, json, socket, ipaddress, hashlib, secrets, shutil
 import html as _html   # aliased: one function uses a local named `html`
 import xml.etree.ElementTree as ET
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional
@@ -19,6 +18,7 @@ from pydantic import BaseModel
 import security
 import feeds
 import keycheck
+import geo as geoloc
 import entities
 import psycopg2, psycopg2.extras
 from dotenv import load_dotenv
@@ -2203,25 +2203,6 @@ async def geo_org_lookup_batch(ips: list) -> dict:
             continue
     return out
 
-_DNS_POOL = ThreadPoolExecutor(max_workers=24, thread_name_prefix="tf-dns")
-
-async def resolve_to_ip(value: str, ioc_type: str) -> Optional[str]:
-    """Resolve a Domain or URL's hostname to an IP for geo lookup. Returns None on failure."""
-    host = value
-    if ioc_type == "URL":
-        try:
-            from urllib.parse import urlparse
-            host = urlparse(value).hostname or value
-        except Exception:
-            return None
-    if ioc_type not in ("Domain","URL"):
-        return None
-    try:
-        # A dedicated pool: a batch of a couple of hundred names would otherwise queue behind the default executor.
-        return await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(_DNS_POOL, socket.gethostbyname, host), timeout=4)
-    except Exception:
-        return None
-
 def calc_confidence(results: dict, base: int) -> tuple:
     score = base; reasons = []
     vt = results.get("virustotal",{}); abuse = results.get("abuseipdb",{}); uh = results.get("urlhaus",{})
@@ -3517,13 +3498,33 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
         ioc_type = detect_type(refanged)
         parsed.append({"input": raw, "refanged": refanged, "type": ioc_type})
 
-    # ── Phase 2: resolve Domain/URL hostnames to IP for geo lookup ───────────
-    geo_ips = await asyncio.gather(*[resolve_to_ip(p["refanged"], p["type"]) for p in parsed])
-    for p, ip in zip(parsed, geo_ips):
-        p["geo_ip"] = ip if ip else (p["refanged"] if p["type"] in ("IPv4","IPv6") else None)
+    # ── Phase 2: resolve every Domain/URL to ALL its public IPs (a single record from the local resolver is
+    #    arbitrary, and CDN answers follow the asker's location) ────────────────
+    dns_sem = asyncio.Semaphore(20)
+
+    def host_of(p):
+        if p["type"] == "URL":
+            try:
+                return urlparse(p["refanged"]).hostname or ""
+            except ValueError:
+                return ""
+        return p["refanged"] if p["type"] == "Domain" else ""
+
+    async with httpx.AsyncClient(timeout=6) as dns_client:
+        async def ips_for(p):
+            p["host"] = host_of(p)
+            if p["type"] in geoloc.IP_TYPES:
+                return [p["refanged"]]
+            if not p["host"]:
+                return []
+            async with dns_sem:
+                return await geoloc.resolve_ips(p["host"], dns_client)
+        resolved = await asyncio.gather(*[ips_for(p) for p in parsed])
+    for p, ips in zip(parsed, resolved):
+        p["geo_ips"] = ips
 
     # ── Phase 3: one batched geo/ASN/org lookup for every unique IP ──────────
-    unique_ips = list({p["geo_ip"] for p in parsed if p["geo_ip"]})
+    unique_ips = list({ip for p in parsed for ip in p["geo_ips"]})
     geo_data   = await geo_org_lookup_batch(unique_ips) if unique_ips else {}
 
     # ── Phase 4: threat-intel enrichment (concurrency-limited) ───────────────
@@ -3531,19 +3532,9 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
     deadline = asyncio.get_running_loop().time() + BULK_DEADLINE_SECONDS
 
     def build_geo(item):
-        raw_geo = geo_data.get(item["geo_ip"]) if item["geo_ip"] else None
-        if not raw_geo or raw_geo.get("status") == "fail":
-            return None
-        org = raw_geo.get("org") or raw_geo.get("isp") or ""
-        return {
-            "country":        raw_geo.get("country"),
-            "country_code":   raw_geo.get("countryCode"),
-            "org":             org,
-            "isp":            raw_geo.get("isp"),
-            "asn":            raw_geo.get("as"),
-            "cloud_provider": detect_cloud_provider(org),
-            "resolved_ip":    item["geo_ip"] if item["type"] in ("Domain","URL") else None,
-        }
+        org0 = next(((geo_data.get(ip) or {}).get("org") or (geo_data.get(ip) or {}).get("isp") or "" for ip in item["geo_ips"] if geo_data.get(ip)), "")
+        return geoloc.describe_location(item["type"], item["host"] or item["refanged"], item["geo_ips"], geo_data,
+                                        cloud_provider=detect_cloud_provider(org0))
 
     async def process_one(item: dict) -> dict:
         async with sem:
@@ -3586,6 +3577,7 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
             enrichment = await enrich(ioc_type, refanged, 50, conn,
                 force=False, existing=existing.get("enrichment") if existing else None, user=user)
             verdict_info = compute_verdict(enrichment)
+            geo = geoloc.cross_check(geo, enrichment)        # IPs: does AbuseIPDB / VirusTotal agree on the country?
 
             return {
                 "input": raw, "refanged": refanged,

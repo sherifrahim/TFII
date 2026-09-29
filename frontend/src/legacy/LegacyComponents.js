@@ -5,6 +5,7 @@
 // API contracts are unchanged. New surfaces live under ../pages.
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { API_BASE } from "../config";
+import { geoFacts, regionName } from "../lib/geo";
 const TLP_COLORS = {
   WHITE:{color:"#9ca3af",bg:"#9ca3af15"},GREEN:{color:"#16a34a",bg:"#16a34a15"},
   AMBER:{color:"#d97706",bg:"#d9770615"},RED:{color:"#dc2626",bg:"#dc262615"},
@@ -1117,10 +1118,12 @@ invoice.pdf.exe`;
 
   function downloadCSV(){
     if(!results||results.length===0)return;
-    const headers=["input","refanged","type","verdict","score","reason","country","org","cloud_provider","already_tracked"];
+    const headers=["input","refanged","type","verdict","score","reason","location","location_kind","tld_registry_country","org","cloud_provider","already_tracked"];
     const rows=results.map(r=>[
       r.input, r.refanged, r.type, r.verdict, r.score||"", r.reason||"",
-      r.geo?.country||"", r.geo?.org||"", r.geo?.cloud_provider||"",
+      // the location column is only filled when it is a real location (not behind a CDN); the kind says what it is
+      (r.geo?.countries?.length?r.geo.countries.map(c=>c.name||regionName(c.code)).join(", "):r.geo?.country)||"", r.geo?.kind||"",
+      r.geo?.cctld_country_code?regionName(r.geo.cctld_country_code):"", r.geo?.org||"", r.geo?.cloud_provider||"",
       r.already_tracked?"yes":"no"
     ]);
     // Quote every cell that needs it, and defuse spreadsheet formulas: the indicators are pasted by users and
@@ -1312,12 +1315,13 @@ invoice.pdf.exe`;
                           background:C.accentDim,color:C.accentText}}>
                           {item.type}
                         </span>
-                        {geo?.country&&(
-                          <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:600,
-                            background:C.surfaceHi,color:C.text,border:`1px solid ${C.border}`}}>
-                            🌍 {geo.country}
+                        {geoFacts(geo).map(f=>(
+                          <span key={f.label} title={f.title} style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:600,
+                            background:C.surfaceHi,border:`1px solid ${f.tone==="warn"?C.amber:C.border}`,
+                            color:f.tone==="warn"?C.amber:f.tone==="muted"?C.muted:C.text}}>
+                            {f.tone==="primary"?"🌍 ":""}<span style={{fontWeight:400,color:C.muted}}>{f.label}: </span>{f.value}
                           </span>
-                        )}
+                        ))}
                         {geo?.cloud_provider&&(
                           <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,
                             background:C.purple+"15",color:C.purple}}>
@@ -1346,6 +1350,9 @@ invoice.pdf.exe`;
                           {geo.asn&&<span style={{marginLeft:6,color:C.muted}}>({geo.asn})</span>}
                           {geo.resolved_ip&&<span style={{marginLeft:6,color:C.muted}}>→ resolved to {geo.resolved_ip}</span>}
                         </div>
+                      )}
+                      {geo?.note&&(
+                        <div style={{fontSize:10.5,color:C.muted,marginBottom:4,lineHeight:1.5}}>{geo.note}</div>
                       )}
                       {item.reason&&(
                         <div style={{fontSize:11,color:C.muted,lineHeight:1.5}}>{item.reason}</div>
