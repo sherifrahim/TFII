@@ -1,0 +1,54 @@
+name: Probe the NSLookup.io API from the server (manual, read-only)
+
+# Manual only. Prints real sample responses of the public NSLookup.io DNS API (no key, no credentials) so the
+# parser is written against the actual format. A handful of requests only: the API allows 30 per minute per IP.
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: "Domain to look up"
+        default: "github.com"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DOMAIN: ${{ github.event.inputs.domain }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          envs: DOMAIN
+          script: |
+            cd /home/ubuntu/threatfeed
+            DOMAIN="$DOMAIN" venv/bin/python - <<'PY'
+            import json, os, time, httpx
+            d = os.environ["DOMAIN"]
+            def show(title, method, path, **kw):
+                t = time.time()
+                try:
+                    r = httpx.request(method, "https://www.nslookup.io" + path, timeout=25, headers={"User-Agent": "TFII/1.0"}, **kw)
+                    print(f"=== {title}: HTTP {r.status_code} in {time.time()-t:.1f}s, content-type={r.headers.get('content-type')}, "
+                          f"ratelimit={ {k: v for k, v in r.headers.items() if 'rate' in k.lower() or 'retry' in k.lower()} }")
+                    try:
+                        print(json.dumps(r.json(), indent=1)[:4200])
+                    except Exception:
+                        print(r.text[:600])
+                except Exception as e:
+                    print(f"=== {title}: FAILED {type(e).__name__}")
+            show("records (cloudflare)", "GET", "/api/v1/records", params={"domain": d, "server": "cloudflare"})
+            time.sleep(2)
+            show("records/other CAA", "GET", "/api/v1/records/other", params={"domain": d, "type": "CAA", "server": "cloudflare"})
+            time.sleep(2)
+            show("records/other SPF", "GET", "/api/v1/records/other", params={"domain": d, "type": "SPF", "server": "cloudflare"})
+            time.sleep(2)
+            show("records/other NS authoritative", "GET", "/api/v1/records/other", params={"domain": d, "type": "NS", "server": "authoritative"})
+            time.sleep(2)
+            show("dns-health", "GET", f"/api/v1/dns-health/{d}")
+            time.sleep(2)
+            show("invalid domain", "GET", "/api/v1/records", params={"domain": "not a domain!", "server": "cloudflare"})
+            PY
