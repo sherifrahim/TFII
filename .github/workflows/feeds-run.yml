@@ -30,6 +30,7 @@ jobs:
             FEEDS="$FEEDS" venv/bin/python - <<'PY' 2>&1 | grep -v "^\[WARN\]\|DeprecationWarning\|scheduler"
             import asyncio, json, os
             import main
+            main.refresh_platform_keys()   # platform calls use the admin's saved keys first
             ids = [x.strip() for x in os.environ["FEEDS"].split(",") if x.strip()]
             conn = main.get_db_direct()
             cfg = main._connector_cfg(conn)

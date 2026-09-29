@@ -120,7 +120,7 @@ Sources are declared in `feeds.FEEDS` (URL + pure parser + reliability + expiry 
 (ThreatFox, MalwareBazaar, URLhaus) keep their own runners but share the catalog, provenance and corroboration.
 Keyless today: **Feodo Tracker** (botnet C2), **OpenPhish**, **IPsum**, **CINS Army**, **Emerging Threats**, **blocklist.de**,
 **Phishing.Database**; **AlienVault OTX** needs `OTX_API_KEY` (or a key saved in Settings).
-Feed keys: scheduled runs use the server key (`URLHAUS_AUTH_KEY`, `OTX_API_KEY`) first and, if it is missing or rejected, a key saved on an **admin** account (used server-side, never returned). A run started by an admin uses the server key, then their own, then other users' saved keys; a non-admin's key is never used for platform feeds.
+Platform keys: every platform-level call (scheduled feeds, the NVD poller, shared/quota enrichment, LLM features) uses the key saved on an **admin** account first and the `.env` key second (`refresh_platform_keys()`: at startup, whenever an admin saves or removes a key, and every 5 minutes). abuse.ch runs also move on to the next key when one is rejected. A run started by an admin then tries their own key and, as the admin fallback, other users' saved keys. A non-admin's key is never a platform key. Keys are used server-side and never returned.
 
 * **Reliability + corroboration.** Each source has a reliability; some entries carry their own evidence (IPsum's blocklist count).
   Confidence = noisy-OR over the *distinct* sources that reported the indicator (`1 − Π(1 − rᵢ)`, capped at 97). It only ever

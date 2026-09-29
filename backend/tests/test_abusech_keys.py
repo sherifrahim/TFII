@@ -1,4 +1,4 @@
-"""abuse.ch connectors: a rejected server key falls through to the *triggering* user's own key, nobody else's."""
+"""Platform keys: the key saved on an admin account is used first, the .env key second, nobody else's for scheduled runs."""
 import asyncio
 
 import pytest
@@ -17,6 +17,8 @@ def setup(client, admin, analyst, monkeypatch):
             return {"ok": False, "error": "HTTP 500"}
         return {"ok": False, "error": "HTTP 403"}
     monkeypatch.setattr(main, "run_urlhaus_connector", fake)
+    monkeypatch.setitem(main._ENV_PLATFORM_KEYS, "urlhaus", "")
+    monkeypatch.setattr(main, "URLHAUS_AUTH_KEY", "")
     yield main, calls
     client.delete("/users/me/api-keys/urlhaus", headers=admin)
     client.delete("/users/me/api-keys/urlhaus", headers=analyst)
@@ -37,51 +39,31 @@ def _run(main, user=None):
         conn.close()
 
 
-def test_a_rejected_server_key_falls_through_to_the_starters_own_key(client, admin, db, setup, monkeypatch):
+def test_the_admins_saved_key_is_used_before_the_env_key(client, admin, setup, monkeypatch):
     main, calls = setup
-    monkeypatch.setattr(main, "URLHAUS_AUTH_KEY", "stale-env-key-0123456789")
+    monkeypatch.setitem(main._ENV_PLATFORM_KEYS, "urlhaus", "stale-env-key-0123456789")
     client.post("/users/me/api-keys/urlhaus", json={"api_key": "good-admin-key-0123456789"}, headers=admin)
-    assert _run(main, _user(db, "admin")) == {"ok": True, "added": 3}
-    assert calls == ["stale-env-key-0123456789", "good-admin-key-0123456789"]
+    assert _run(main) == {"ok": True, "added": 3}                  # scheduled run: no user
+    assert calls == ["good-admin-key-0123456789"]
 
 
-def test_a_scheduled_run_falls_back_to_a_key_saved_on_an_admin_account(client, admin, setup, monkeypatch):
+def test_a_rejected_admin_key_falls_back_to_the_env_key(client, admin, setup, monkeypatch):
     main, calls = setup
-    monkeypatch.setattr(main, "URLHAUS_AUTH_KEY", "stale-env-key-0123456789")
-    client.post("/users/me/api-keys/urlhaus", json={"api_key": "good-admin-key-0123456789"}, headers=admin)
-    assert _run(main) == {"ok": True, "added": 3}                  # no user: server key first, then the admin's
-    assert calls == ["stale-env-key-0123456789", "good-admin-key-0123456789"]
+    monkeypatch.setitem(main._ENV_PLATFORM_KEYS, "urlhaus", "good-env-key-0123456789")
+    client.post("/users/me/api-keys/urlhaus", json={"api_key": "stale-admin-key-0123456789"}, headers=admin)
+    assert _run(main) == {"ok": True, "added": 3}
+    assert calls == ["stale-admin-key-0123456789", "good-env-key-0123456789"]
 
 
-def test_a_scheduled_run_never_uses_a_non_admin_users_key(client, analyst, setup, monkeypatch):
+def test_a_scheduled_run_never_uses_a_non_admin_users_key(client, analyst, setup):
     main, calls = setup
-    monkeypatch.setattr(main, "URLHAUS_AUTH_KEY", "")
     client.post("/users/me/api-keys/urlhaus", json={"api_key": "good-analyst-key-0123456789"}, headers=analyst)
     res = _run(main)
     assert res["ok"] is False and "No abuse.ch Auth-Key" in res["error"] and calls == []
 
 
-def test_the_otx_feed_key_falls_back_the_same_way(client, admin, analyst, monkeypatch):
-    import main
-    monkeypatch.delenv("OTX_API_KEY", raising=False)
-    conn = main.get_db_direct()
-    try:
-        assert main._feed_key(conn, "otx") == ""
-        client.post("/users/me/api-keys/otx", json={"api_key": "analyst-otx-key-0123456789"}, headers=analyst)
-        assert main._feed_key(conn, "otx") == ""                    # a non-admin's key is never used
-        client.post("/users/me/api-keys/otx", json={"api_key": "admin-otx-key-0123456789"}, headers=admin)
-        assert main._feed_key(conn, "otx") == "admin-otx-key-0123456789"
-        monkeypatch.setenv("OTX_API_KEY", "server-otx-key-0123456789")
-        assert main._feed_key(conn, "otx") == "server-otx-key-0123456789"     # the server key still wins
-    finally:
-        conn.close()
-        client.delete("/users/me/api-keys/otx", headers=admin)
-        client.delete("/users/me/api-keys/otx", headers=analyst)
-
-
-def test_an_admin_started_run_may_fall_back_to_users_keys_but_nobody_else_can(client, analyst, analyst2, db, setup, monkeypatch):
+def test_an_admin_started_run_may_fall_back_to_users_keys_but_nobody_else_can(client, analyst, analyst2, db, setup):
     main, calls = setup
-    monkeypatch.setattr(main, "URLHAUS_AUTH_KEY", "")
     client.post("/users/me/api-keys/urlhaus", json={"api_key": "good-analyst-key-0123456789"}, headers=analyst)
     assert _run(main, _user(db, "admin")) == {"ok": True, "added": 3}          # admin fallback, used server-side
     assert calls == ["good-analyst-key-0123456789"]
@@ -92,12 +74,52 @@ def test_an_admin_started_run_may_fall_back_to_users_keys_but_nobody_else_can(cl
 
 def test_all_keys_rejected_says_so_and_a_non_auth_error_does_not_try_other_keys(client, admin, db, setup, monkeypatch):
     main, calls = setup
-    monkeypatch.setattr(main, "URLHAUS_AUTH_KEY", "stale-env-key-0123456789")
+    monkeypatch.setitem(main._ENV_PLATFORM_KEYS, "urlhaus", "stale-env-key-0123456789")
     client.post("/users/me/api-keys/urlhaus", json={"api_key": "also-stale-key-0123456789"}, headers=admin)
     res = _run(main, _user(db, "admin"))
     assert res["ok"] is False and "rejected every Auth-Key" in res["error"] and "auth.abuse.ch" in res["error"]
     assert len(calls) == 2
     calls.clear()
-    monkeypatch.setattr(main, "URLHAUS_AUTH_KEY", "broken-env-key-0123456789")      # upstream trouble, not a bad key
+    client.post("/users/me/api-keys/urlhaus", json={"api_key": "broken-admin-key-0123456789"}, headers=admin)   # upstream trouble, not a bad key
     res = _run(main, _user(db, "admin"))
-    assert res == {"ok": False, "error": "HTTP 500"} and calls == ["broken-env-key-0123456789"]
+    assert res == {"ok": False, "error": "HTTP 500"} and calls == ["broken-admin-key-0123456789"]
+
+
+def test_the_otx_feed_key_prefers_an_admin_saved_key(client, admin, analyst, monkeypatch):
+    import main
+    monkeypatch.setenv("OTX_API_KEY", "server-otx-key-0123456789")
+    conn = main.get_db_direct()
+    try:
+        assert main._feed_key(conn, "otx") == "server-otx-key-0123456789"
+        client.post("/users/me/api-keys/otx", json={"api_key": "analyst-otx-key-0123456789"}, headers=analyst)
+        assert main._feed_key(conn, "otx") == "server-otx-key-0123456789"       # a non-admin's key is never used
+        client.post("/users/me/api-keys/otx", json={"api_key": "admin-otx-key-0123456789"}, headers=admin)
+        assert main._feed_key(conn, "otx") == "admin-otx-key-0123456789"        # the admin's saved key wins
+    finally:
+        conn.close()
+        client.delete("/users/me/api-keys/otx", headers=admin)
+        client.delete("/users/me/api-keys/otx", headers=analyst)
+
+
+def test_saving_an_admin_key_repoints_every_platform_call_and_removing_it_restores_env(client, admin, monkeypatch):
+    import main
+    monkeypatch.setitem(main._ENV_PLATFORM_KEYS, "nvd", "env-nvd-key-0123456789")
+    monkeypatch.setattr(main, "NVD_API_KEY", "env-nvd-key-0123456789")
+    assert client.post("/users/me/api-keys/nvd", json={"api_key": "admin-nvd-key-0123456789"}, headers=admin).status_code == 200
+    try:
+        assert main.NVD_API_KEY == "admin-nvd-key-0123456789" and main.PLATFORM_KEYS["nvd"] == "admin-nvd-key-0123456789"
+    finally:
+        client.delete("/users/me/api-keys/nvd", headers=admin)
+    assert main.NVD_API_KEY == "env-nvd-key-0123456789" and main.PLATFORM_KEYS["nvd"] == "env-nvd-key-0123456789"
+
+
+def test_a_non_admins_key_never_becomes_a_platform_key(client, analyst, monkeypatch):
+    import main
+    monkeypatch.setitem(main._ENV_PLATFORM_KEYS, "groq", "")
+    monkeypatch.setattr(main, "GROQ_API_KEY", "")
+    client.post("/users/me/api-keys/groq", json={"api_key": "analyst-groq-key-0123456789"}, headers=analyst)
+    try:
+        main.refresh_platform_keys()
+        assert main.GROQ_API_KEY == "" and main.PLATFORM_KEYS["groq"] == ""
+    finally:
+        client.delete("/users/me/api-keys/groq", headers=analyst)

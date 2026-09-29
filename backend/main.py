@@ -70,6 +70,11 @@ PLATFORM_KEYS = {
     "urlhaus":     URLHAUS_AUTH_KEY,
     "otx":         os.getenv("OTX_API_KEY", ""),
 }
+# What .env provides. Platform-level calls (background feeds and pollers, shared enrichment, quota-based lookups)
+# use the key saved on an admin account first and this second: see refresh_platform_keys().
+_ENV_PLATFORM_KEYS = dict(PLATFORM_KEYS)
+_PLATFORM_GLOBALS = {"virustotal": "VT_API_KEY", "abuseipdb": "ABUSEIPDB_API_KEY", "shodan": "SHODAN_API_KEY",
+                     "nvd": "NVD_API_KEY", "groq": "GROQ_API_KEY", "urlhaus": "URLHAUS_AUTH_KEY"}
 
 # ── ENCRYPTION ────────────────────────────────────────────────────────────────
 def _get_fernet():
@@ -538,6 +543,7 @@ async def startup():
                " with the DOCUMENTED DEFAULT PASSWORD — change it now (Settings → Change Password)"))
 
     conn.commit(); cur.close(); conn.close()
+    refresh_platform_keys()
 
     # start scheduler
     try:
@@ -555,6 +561,7 @@ async def startup():
                           id="weekly_summary", replace_existing=True, misfire_grace_time=600)
         # Threat feed connectors — daily sync of ThreatFox/MalwareBazaar/URLhaus
         scheduler.add_job(scheduled_feed_sync, IntervalTrigger(hours=1), id="feed_sync", replace_existing=True)
+        scheduler.add_job(refresh_platform_keys, IntervalTrigger(minutes=5), id="platform_keys", replace_existing=True)
         scheduler.add_job(scheduled_connector_sync, IntervalTrigger(hours=24),
                           id="connector_sync", replace_existing=True, misfire_grace_time=3600)
         scheduler.start()
@@ -1701,20 +1708,39 @@ def _admin_saved_keys(conn, service: str) -> list:
                    ORDER BY k.updated_at DESC""", (service,))
     return [k for (enc,) in cur.fetchall() if (k := decrypt_key(enc))]
 
+def refresh_platform_keys(conn=None) -> None:
+    """Point every platform-level key (PLATFORM_KEYS and the module constants the many call sites read) at the key
+    saved on an admin account, falling back to the .env value. Runs at startup, whenever an admin saves or removes a
+    key, and every few minutes so other worker processes catch up. Keys are used server-side only."""
+    own = conn is None
+    try:
+        conn = conn or get_db_direct()
+        g = globals()
+        for svc in list(_ENV_PLATFORM_KEYS):
+            key = next(iter(_admin_saved_keys(conn, svc)), "") or _ENV_PLATFORM_KEYS.get(svc, "")
+            PLATFORM_KEYS[svc] = key
+            if svc in _PLATFORM_GLOBALS:
+                g[_PLATFORM_GLOBALS[svc]] = key
+    except Exception as e:
+        print(f"[keys] platform key refresh skipped: {type(e).__name__}")
+    finally:
+        if own and conn is not None:
+            try: conn.close()
+            except Exception: pass
+
 def _abusech_keys(conn, user=None) -> list:
-    """Candidate abuse.ch Auth-Keys, best first: the server's own, then the key of the person who started
-    the run, and, for an admin only (same rule as resolve_api_key), keys other users have saved. Scheduled
-    runs (no user) fall back to keys saved on admin accounts. A rotated or revoked .env key must not stop
-    the feeds while a working key is available."""
+    """Candidate abuse.ch Auth-Keys, best first: keys saved on admin accounts, then the server's .env key; for a
+    run started by a user, their own key, and (admins only, same rule as resolve_api_key) other users' keys.
+    A rejected key moves on to the next one, so one stale key never stops the feeds."""
     keys: list = []
     def add(k):
         if k and k not in keys:
             keys.append(k)
+    for k in _admin_saved_keys(conn, "urlhaus"):
+        add(k)
     add(URLHAUS_AUTH_KEY)
-    if user is None:
-        for k in _admin_saved_keys(conn, "urlhaus"):
-            add(k)
-    else:
+    add(_ENV_PLATFORM_KEYS.get("urlhaus", ""))
+    if user is not None:
         cur = conn.cursor()
         cur.execute("SELECT api_key_encrypted FROM user_api_keys WHERE user_id = %s AND service = 'urlhaus'", (user["id"],))
         row = cur.fetchone()
@@ -1750,7 +1776,7 @@ def _feed_key(conn, feed_id: str, user=None) -> str:
     if user is not None:
         return resolve_api_key(conn, "otx" if f.key_env == "OTX_API_KEY" else feed_id, user)[0] or ""
     service = "otx" if f.key_env == "OTX_API_KEY" else feed_id
-    return os.getenv(f.key_env, "") or next(iter(_admin_saved_keys(conn, service)), "")
+    return next(iter(_admin_saved_keys(conn, service)), "") or os.getenv(f.key_env, "")
 
 async def _auto_enrich(conn, created: list, limit: int) -> dict:
     """Enrich the highest-confidence indicators a feed run just created (VirusTotal / AbuseIPDB / URLhaus
@@ -3034,6 +3060,8 @@ def save_api_key(service: str, body: dict, user=Depends(get_current_user), conn=
         SET api_key_encrypted = EXCLUDED.api_key_encrypted, updated_at = NOW()""",
         (user["id"], service, encrypted))
     conn.commit()
+    if user["role"] == "admin":
+        refresh_platform_keys(conn)
     return {"status":"saved","service":service,"masked":mask_key(key)}
 
 @app.post("/users/me/api-keys/{service}/test")
@@ -3067,7 +3095,10 @@ def delete_api_key(service: str, user=Depends(get_current_user), conn=Depends(ge
         raise HTTPException(status_code=400, detail=f"Unknown service: {service}")
     cur = conn.cursor()
     cur.execute("DELETE FROM user_api_keys WHERE user_id = %s AND service = %s", (user["id"], service))
-    conn.commit(); return {"status":"deleted","service":service}
+    conn.commit()
+    if user["role"] == "admin":
+        refresh_platform_keys(conn)
+    return {"status":"deleted","service":service}
 
 @app.get("/users/me/quota")
 def get_quota(user=Depends(get_current_user), conn=Depends(get_db)):
