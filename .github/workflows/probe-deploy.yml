@@ -1,0 +1,36 @@
+name: Probe why the deploy step exits early (manual, read-only)
+
+# Manual only. Inspects the server's deploy folder and replays the extract/verify steps of the deploy script
+# on a scratch copy, printing each command's exit status. Deletes nothing in the real deploy folder.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          script: |
+            D=/tmp/tfii-deploy
+            echo "=== who am I, disk ==="; id; df -h /tmp /home / 2>&1 | head -6
+            echo "=== deploy folder ==="; ls -la --time-style=full-iso $D 2>&1 | head -12
+            echo "=== leftovers in x/ (owner matters: root-owned files cannot be removed by rm -rf as this user) ==="
+            ls -laR --time-style=full-iso $D/x 2>&1 | head -25
+            echo "=== tarball ==="; ls -la --time-style=full-iso $D/tfii-release.tar.gz 2>&1
+            echo "=== tarball listing (first 14 entries) ==="; tar tzf $D/tfii-release.tar.gz 2>&1 | head -14
+            echo "=== replay: extract to a scratch dir ==="
+            rm -rf /tmp/probe-x; mkdir -p /tmp/probe-x
+            tar xzf $D/tfii-release.tar.gz -C /tmp/probe-x; echo "tar exit=$?"
+            ls -la /tmp/probe-x | head; test -f /tmp/probe-x/build/index.html; echo "test -f build/index.html exit=$?"
+            echo "=== replay: could this user remove x/ ? (dry run: find files not owned by me) ==="
+            find $D/x ! -user "$(id -un)" 2>/dev/null | head -5; echo "(files in x/ not owned by me: $(find $D/x ! -user "$(id -un)" 2>/dev/null | wc -l))"
+            rm -rf /tmp/probe-x
+            echo "=== repo checkout state ==="; cd /home/ubuntu/threatfeed-repo && git log --oneline -1 && git status --short | head -5
+            echo "=== running backend modules vs repo ==="
+            ls -la --time-style=full-iso /home/ubuntu/threatfeed/*.py | awk '{print $6, $7, $9}' | head -20
