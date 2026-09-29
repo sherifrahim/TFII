@@ -57,6 +57,19 @@ jobs:
             Q "SELECT COUNT(*) AS findings, COUNT(DISTINCT cve_id) AS distinct_cves, MAX(created_at) AS newest FROM cve_findings"
             echo "--- poller log lines (last 24h) ---"
             sudo journalctl -u threatfeed --since "24 hours ago" --no-pager -o cat | grep -E "\[nvd\]|\[cve-poll\]|\[poll-now\]|\[kev\]" | tail -25 || true
+            echo "=== 6. API keys stored per user (presence and readability only) ==="
+            venv/bin/python - <<'PY' 2>&1 | grep -v "^\[WARN\]\|Deprecat\|scheduler"
+            import main
+            c = main.get_db_direct(); cu = c.cursor()
+            cu.execute("SELECT u.username, k.service, k.api_key_encrypted, k.updated_at FROM user_api_keys k JOIN users u ON u.id = k.user_id ORDER BY 1, 2")
+            rows = cu.fetchall()
+            print("user_api_keys rows:", len(rows))
+            for user, svc, enc, at in rows:
+                try: ok = bool(main.decrypt_key(enc))
+                except Exception: ok = False
+                print(f"  {user:14s} {svc:11s} readable={ok} updated={str(at)[:10]}")
+            cu.execute("SELECT version FROM schema_migrations ORDER BY 1"); print("migrations:", [r[0] for r in cu.fetchall()])
+            PY
             echo "=== 5. IOC connectors ==="
             Q "SELECT key, left(value, 220) FROM system_settings WHERE key LIKE 'connector%' ORDER BY key" 12
             Q "SELECT enrichment->>'source' AS source, COUNT(*) AS iocs, MAX(created_at) AS newest FROM iocs GROUP BY 1 ORDER BY 2 DESC LIMIT 8"
