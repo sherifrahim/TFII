@@ -21,7 +21,13 @@ jobs:
             venv/bin/python - <<'PY' 2>&1 | grep -v "^\[WARN\]\|Deprecat\|scheduler"
             import asyncio, main
             async def go():
-                print("--- platform keys (.env) ---")
+                print("--- platform keys as .env provides them ---")
+                for svc, key in main._ENV_PLATFORM_KEYS.items():
+                    if not key: print(f"{svc:11s} not set"); continue
+                    r = await main.keycheck.check_key(svc, key)
+                    print(f"{svc:11s} {r['status']}")
+                main.refresh_platform_keys()
+                print("--- platform keys as used now (admin saved key first, .env second) ---")
                 for svc, key in main.PLATFORM_KEYS.items():
                     if not key: print(f"{svc:11s} not set"); continue
                     r = await main.keycheck.check_key(svc, key)
