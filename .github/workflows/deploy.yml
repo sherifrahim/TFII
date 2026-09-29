@@ -52,8 +52,7 @@ jobs:
   deploy:
     needs: test
     # One deploy at a time. Every run uploads to, extracts in and finally deletes the same folder on the server,
-    # so two overlapping runs (a second push within ~3 minutes) destroyed each other's files and failed with
-    # "exit status 1" right after "Repo updated" - which left the newest commits undeployed. Queued runs wait;
+    # so two overlapping runs (a second push within ~3 minutes) destroyed each other's files. Queued runs wait;
     # a run still waiting when a newer push arrives is dropped, and the newer one ships everything (the server
     # checkout is reset to origin/master and the artifact is built from that commit).
     concurrency:
@@ -109,12 +108,12 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: 22
-          script_stop: true
           script: |
+            # `set -e` stops the script on a real error. Do NOT add `script_stop: true` to this step: it makes the
+            # action insert an exit-code check after every line, including inside `if [ ... ]` conditions, so a
+            # test that is merely false (e.g. "backend changed?" when only the frontend changed) aborted the whole
+            # deploy right after "Repo updated" and the new UI never shipped.
             set -e
-            # Trace every command (no secrets are used in this script): a step that exits silently otherwise leaves
-            # only "Process exited with status 1" and no hint which one it was.
-            set -x
             echo "=== TFII Deploy at $(date) ==="
 
             # Keep the server-side checkout current (scripts, docs, configs).
