@@ -133,7 +133,9 @@ kbd, .kbd { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); b
 }
 .btn:hover:not(:disabled) { background: var(--elevated-2); border-color: var(--border-strong); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
-.btn:focus-visible, .iconbtn:focus-visible, .sb-item:focus-visible, .tab:focus-visible { outline: 2px solid var(--gold-line); outline-offset: 1px; }
+.btn:focus-visible, .iconbtn:focus-visible, .sb-item:focus-visible, .tab:focus-visible, .chip:focus-visible, .menu-item:focus-visible,
+.list-row.clickable:focus-visible, .tbl tr.clickable:focus-visible, .hover-link:focus-visible, .link:focus-visible, a.tag:focus-visible { outline: 2px solid var(--gold-line); outline-offset: 1px; }
+.menu-item:focus-visible { background: var(--elevated); }
 .btn.primary { background: var(--gold); color: var(--on-gold); border-color: var(--gold); font-weight: 600; }
 .btn.primary:hover:not(:disabled) { background: var(--gold-hi); border-color: var(--gold-hi); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--text-3); }

@@ -5,13 +5,16 @@ import { useSession } from "../lib/session";
 import { fmtNum, fmtDate, timeAgo, toDate, IOC_TYPES, TLP_LEVELS, INDUSTRIES, detectType, refang } from "../lib/format";
 import {
   PageHeader, Panel, Button, IconButton, Badge, TypeBadge, TLPBadge, Conf, StatusBadge, SearchInput, Select, Pagination, Th,
-  SkeletonRows, EmptyState, ErrorState, Menu, Modal, Field, Callout, Tabs, useDebounced, useToast, CopyButton,
+  SkeletonRows, EmptyState, ErrorState, Menu, Modal, Field, Callout, Tabs, useDebounced, useToast, CopyButton, rowAction,
 } from "../components/ui";
 import InvestigationPicker from "../components/InvestigationPicker";
 import { API_BASE } from "../config";
 
 const TYPE_CHIPS = [["", "All"], ["ip", "IPs"], ["domain", "Domains"], ["url", "URLs"], ["hash", "Hashes"], ["email", "Emails"]];
-const STATUS_OPTS = [["active", "Active"], ["expired", "Expired"], ["false_positive", "False positive"], ["all", "All statuses"]];
+const STATUS_OPTS = [["live", "Live (all but expired / FP)"], ["active", "Active"], ["suspicious", "Suspicious"], ["confirmed", "Confirmed"], ["unknown", "Unknown"],
+  ["expired", "Expired"], ["false_positive", "False positive"], ["all", "All statuses"]];
+const ENRICH_LABEL = { enriched: "Enriched", not_enriched: "Not enriched", error: "Lookup failed" };
+const LIVE = ["active", "suspicious", "confirmed", "unknown"];
 const TYPE_GROUP_OF = { IPv4: "ip", IPv6: "ip", Domain: "domain", URL: "url", MD5: "hash", SHA1: "hash", SHA256: "hash", Email: "email" };
 
 export function IocIntel({ query }) {
@@ -22,13 +25,17 @@ export function IocIntel({ query }) {
   const dtext = useDebounced(text, 300);
   useEffect(() => { if (dtext !== q) setQuery({ q: dtext, offset: "" }); }, [dtext]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const params = {
+  const filters = {
     q, type: query.type || "", tlp: query.tlp || "", source: query.source || "", tag: query.tag || "",
-    campaign_id: query.campaign_id || "", min_conf: query.min_conf || "", status: query.status || "active",
-    since_days: query.since_days || "", sort: query.sort || "created", dir: query.dir || "desc",
-    limit: query.limit || 50, offset: query.offset || 0,
+    campaign_id: query.campaign_id || "", min_conf: query.min_conf || "", status: query.status || "live",
+    severity: query.severity || "", enrichment: query.enrichment || "", since_days: query.since_days || "",
+    last_seen_days: query.last_seen_days || "", expiring_days: query.expiring_days || "", analyst: query.analyst || "",
   };
+  const params = { ...filters, sort: query.sort || "created", dir: query.dir || "desc", limit: query.limit || 50, offset: query.offset || 0 };
   const { data, error, loading, reload } = useApi(`/v2/iocs${qs(params)}`);
+  // Counts and option lists load separately: paging and sorting never repeat them.
+  const facets = useApi(`/v2/iocs/facets${qs(filters)}`);
+  const options = useApi("/v2/iocs/filter-options");
   const campaigns = useApi("/campaigns");
   const [sel, setSel] = useState(new Set());
   const [picker, setPicker] = useState(null);
@@ -41,10 +48,10 @@ export function IocIntel({ query }) {
   const allSel = items.length > 0 && items.every(i => sel.has(i.id));
   const typeFacet = useMemo(() => {
     const out = {};
-    (data?.facets?.types || []).forEach(t => { const g = TYPE_GROUP_OF[t.k] || "other"; out[g] = (out[g] || 0) + Number(t.n); });
+    (facets.data?.types || []).forEach(t => { const g = TYPE_GROUP_OF[t.k] || "other"; out[g] = (out[g] || 0) + Number(t.n); });
     return out;
-  }, [data]);
-  const activeFilters = ["type", "tlp", "source", "tag", "campaign_id", "min_conf", "since_days"].filter(k => params[k]);
+  }, [facets.data]);
+  const activeFilters = ["type", "tlp", "source", "tag", "campaign_id", "min_conf", "since_days", "severity", "enrichment", "last_seen_days", "expiring_days", "analyst"].filter(k => params[k]);
 
   async function bulk(action, extra = {}) {
     try {
@@ -57,6 +64,10 @@ export function IocIntel({ query }) {
     if (!window.confirm(`Delete ${ioc.value}? This cannot be undone.`)) return;
     const r = await api(`/iocs/${enc(ioc.id)}`, { method: "DELETE" });
     if (r.ok) { toast("Indicator deleted", "ok"); reload(true); } else toast((await r.json().catch(() => ({}))).detail || "Delete failed", "error");
+  }
+  async function setStatus(ioc, status) {
+    try { await apiJSON("/v2/entity/status", { method: "POST", body: { ref: ioc.id, status, reason: "Set from IOC table" } }); toast(`Status set to ${status}`, "ok"); reload(true); facets.reload(true); }
+    catch (e) { toast(e.message, "error"); }
   }
   async function toggleFp(ioc) {
     const fp = ioc.status !== "false_positive";
@@ -80,11 +91,16 @@ export function IocIntel({ query }) {
         <Select value={params.status} onChange={v => set({ status: v })} options={STATUS_OPTS} />
         <Select value={params.tlp} onChange={v => set({ tlp: v })} options={[["", "Any TLP"], ...TLP_LEVELS.map(t => [t, `TLP:${t}`])]} />
         <Select value={params.source} onChange={v => set({ source: v })}
-          options={[["", "Any source"], ...((data?.facets?.sources || []).map(s => [s.k, `${s.k} (${fmtNum(s.n)})`])), ...(params.source && !(data?.facets?.sources || []).some(s => s.k === params.source) ? [[params.source, params.source]] : [])]} />
+          options={[["", "Any source"], ...((options.data?.sources || []).map(s => [s.k, `${s.k} (${fmtNum(s.n)})`])), ...(params.source && !(options.data?.sources || []).some(s => s.k === params.source) ? [[params.source, params.source]] : [])]} />
+        <Select value={params.severity} onChange={v => set({ severity: v })} options={[["", "Any severity"], ["critical", "Critical (≥90)"], ["high", "High (75–89)"], ["medium", "Medium (50–74)"], ["low", "Low (<50)"]]} />
         <Select value={params.min_conf} onChange={v => set({ min_conf: v })} options={[["", "Any confidence"], ["50", "≥ 50"], ["75", "≥ 75"], ["80", "≥ 80"], ["90", "≥ 90"]]} />
         <Select value={params.since_days} onChange={v => set({ since_days: v })} options={[["", "Any time"], ["1", "Last 24h"], ["7", "Last 7 days"], ["30", "Last 30 days"], ["90", "Last 90 days"]]} />
+        <Select value={params.last_seen_days} onChange={v => set({ last_seen_days: v })} options={[["", "Any last seen"], ["1", "Seen in 24h"], ["7", "Seen in 7 days"], ["30", "Seen in 30 days"]]} />
+        <Select value={params.expiring_days} onChange={v => set({ expiring_days: v })} options={[["", "Any expiry"], ["7", "Expires within 7 days"], ["30", "Expires within 30 days"]]} />
+        <Select value={params.enrichment} onChange={v => set({ enrichment: v })} options={[["", "Any enrichment"], ["enriched", "Enriched"], ["not_enriched", "Not enriched"], ["error", "Lookup failed"]]} />
         <Select value={params.campaign_id} onChange={v => set({ campaign_id: v })}
           options={[["", "Any campaign"], ...((campaigns.data || []).map(c => [c.id, c.name]))]} style={{ maxWidth: 180 }} />
+        {(options.data?.analysts || []).length > 0 && <Select value={params.analyst} onChange={v => set({ analyst: v })} options={[["", "Any analyst"], ...options.data.analysts.map(a => [a.k, a.k])]} style={{ maxWidth: 150 }} />}
         {activeFilters.length > 0 && <Button size="sm" variant="ghost" icon="x" onClick={() => set(Object.fromEntries(activeFilters.map(k => [k, ""])))}>Clear filters</Button>}
       </div>
       <div className="row wrap" style={{ gap: 6, marginBottom: 12 }}>
@@ -104,6 +120,8 @@ export function IocIntel({ query }) {
           <Button size="sm" icon="briefcase" onClick={() => setPicker("bulk")}>Add to investigation</Button>
           <Select value="" onChange={v => v && bulk("assign_campaign", { campaign_id: v === "__none" ? null : v })}
             options={[["", "Assign campaign…"], ["__none", "— Remove campaign —"], ...((campaigns.data || []).map(c => [c.id, c.name]))]} />
+          <Select value="" onChange={v => v && bulk("set_status", { status: v })}
+            options={[["", "Set status…"], ["suspicious", "Suspicious"], ["confirmed", "Confirmed"], ["unknown", "Unknown"], ["active", "Active (clear verdict)"]]} />
           <Button size="sm" icon="hash" onClick={() => setTagModal(true)}>Add tag</Button>
           <Button size="sm" icon="alert" onClick={() => bulk("mark_fp", { reason: "Bulk-marked from IOC table" })}>Mark FP</Button>
           <Button size="sm" variant="ghost" onClick={() => setSel(new Set())}>Clear</Button>
@@ -125,19 +143,21 @@ export function IocIntel({ query }) {
                 <Th id="type" label="Type" sort={params.sort} dir={params.dir} onSort={onSort} />
                 <Th id="confidence" label="Confidence" sort={params.sort} dir={params.dir} onSort={onSort} />
                 <Th id="source" label="Source" sort={params.sort} dir={params.dir} onSort={onSort} />
-                <th className="opt-lg">Tags</th>
+                <th className="opt-xl">Tags</th>
                 <th>Campaign / Actor</th>
                 <Th id="created" label="First seen" sort={params.sort} dir={params.dir} onSort={onSort} />
                 <Th id="last_seen" label="Last seen" sort={params.sort} dir={params.dir} onSort={onSort} className="opt-lg" />
+                <th className="opt-xl">Expires</th>
+                <th className="opt-xl">Enrichment</th>
                 <Th id="tlp" label="TLP" sort={params.sort} dir={params.dir} onSort={onSort} />
-                <th>Status</th>
+                <Th id="status" label="Status" sort={params.sort} dir={params.dir} onSort={onSort} />
                 <th className="opt-xl">Analyst</th>
                 <th style={{ width: 40 }} />
               </tr></thead>
               <tbody>
-                {loading && !data && <tr><td colSpan={13} style={{ padding: 0 }}><SkeletonRows rows={12} cols={7} /></td></tr>}
+                {loading && !data && <tr><td colSpan={15} style={{ padding: 0 }}><SkeletonRows rows={12} cols={7} /></td></tr>}
                 {data && items.length === 0 && (
-                  <tr><td colSpan={13}><EmptyState icon="crosshair" title="No indicators match"
+                  <tr><td colSpan={15}><EmptyState icon="crosshair" title="No indicators match"
                     desc={q || activeFilters.length ? "Try widening the filters or searching a partial value." : "Add an IOC, import a STIX bundle, or enable a feed connector."}
                     action={<Button size="sm" variant="primary" icon="plus" onClick={() => navigate("/iocs/new", q ? { value: q } : undefined)}>Add IOC</Button>} /></td></tr>
                 )}
@@ -145,8 +165,8 @@ export function IocIntel({ query }) {
                   const fresh = i.created_at && Date.now() - (toDate(i.created_at)?.getTime() || 0) < 864e5;
                   const tags = (i.tags || []).filter(t => !["connector", "bulk-lookup"].includes(t));
                   return (
-                    <tr key={i.id} className={`clickable ${sel.has(i.id) ? "selected" : ""}`} onClick={() => navigate(entityRoute("ioc", i.id))}
-                      style={{ opacity: i.status === "active" ? 1 : 0.6 }}>
+                    <tr key={i.id} className={`clickable ${sel.has(i.id) ? "selected" : ""}`} {...rowAction(() => navigate(entityRoute("ioc", i.id)))}
+                      style={{ opacity: LIVE.includes(i.status) ? 1 : 0.6 }}>
                       <td onClick={e => e.stopPropagation()}>
                         <input type="checkbox" className="check" checked={sel.has(i.id)} aria-label="Select"
                           onChange={() => setSel(s => { const n = new Set(s); n.has(i.id) ? n.delete(i.id) : n.add(i.id); return n; })} />
@@ -161,7 +181,7 @@ export function IocIntel({ query }) {
                       <td><TypeBadge type={i.type} /></td>
                       <td><Conf value={i.confidence} /></td>
                       <td className="muted">{i.source}</td>
-                      <td className="opt-lg" style={{ maxWidth: 180 }}>
+                      <td className="opt-xl" style={{ maxWidth: 180 }}>
                         <div className="row" style={{ gap: 3, overflow: "hidden" }}>
                           {tags.slice(0, 2).map(t => <span key={t} className="tag link" onClick={e => { e.stopPropagation(); set({ tag: t }); }}>{t}</span>)}
                           {tags.length > 2 && <span className="faint xs">+{tags.length - 2}</span>}
@@ -176,16 +196,20 @@ export function IocIntel({ query }) {
                       </td>
                       <td className="muted num" title={i.created_at}>{fmtDate(i.created_at)}</td>
                       <td className="muted num opt-lg">{timeAgo(i.last_seen)}</td>
+                      <td className="muted num opt-xl" title={i.valid_until || "No expiry"}>{i.valid_until ? fmtDate(i.valid_until) : "Never"}</td>
+                      <td className="muted opt-xl"><span style={{ color: i.enrichment_state === "error" ? "var(--high)" : undefined }}>{ENRICH_LABEL[i.enrichment_state] || "—"}</span></td>
                       <td><TLPBadge tlp={i.tlp} /></td>
                       <td><StatusBadge status={i.status} /></td>
                       <td className="muted opt-xl">{i.author || <span className="faint">connector</span>}</td>
                       <td onClick={e => e.stopPropagation()}>
                         <Menu trigger={t => <IconButton icon="more" size="sm" title="Actions" onClick={t} />} items={[
-                          { label: "Open entity", icon: "arrowRight", onClick: () => navigate(entityRoute("ioc", i.id)) },
+                          { label: "Open indicator", icon: "arrowRight", onClick: () => navigate(entityRoute("ioc", i.id)) },
                           { label: "Copy value", icon: "copy", onClick: () => { navigator.clipboard?.writeText(i.value); toast("Copied", "ok"); } },
-                          { label: "Add to investigation", icon: "briefcase", onClick: () => setPicker(i) },
-                          { label: "Open in graph", icon: "graph", onClick: () => navigate("/explorer", { kind: "ioc", id: i.id }) },
+                          { label: "Search globally", icon: "search", onClick: () => navigate("/search", { q: i.value }) },
+                          { label: "Add to Workspace", icon: "briefcase", onClick: () => setPicker(i) },
+                          { label: "Open in graph", icon: "graph", onClick: () => navigate("/explorer", { kind: "indicator", id: i.id }) },
                           "sep",
+                          ...["suspicious", "confirmed", "unknown", "active"].filter(st => st !== i.status).map(st => ({ label: `Set ${st}`, icon: "flag", onClick: () => setStatus(i, st) })),
                           { label: i.status === "false_positive" ? "Remove FP flag" : "Mark false positive", icon: "alert", onClick: () => toggleFp(i) },
                           can("ioc.delete") && (me?.role === "admin" || i.created_by === me?.id) && { label: "Delete", icon: "trash", danger: true, onClick: () => del(i) },
                         ]} />
@@ -200,9 +224,9 @@ export function IocIntel({ query }) {
       </Panel>
 
       {picker && (
-        <InvestigationPicker onClose={() => setPicker(null)} onPick={inv => picker === "bulk"
+        <InvestigationPicker withReason={picker !== "bulk"} onClose={() => setPicker(null)} onPick={(inv, reason) => picker === "bulk"
           ? apiJSON("/v2/iocs/bulk-action", { method: "POST", body: { ids: [...sel], action: "add_to_investigation", investigation_id: inv.id } })
-          : apiJSON(`/v2/investigations/${enc(inv.id)}/items`, { method: "POST", body: { item_type: "ioc", ref_id: picker.id } })} />
+          : apiJSON(`/v2/investigations/${enc(inv.id)}/entities`, { method: "POST", body: { kind: "indicator", ref: picker.id, reason } })} />
       )}
       {tagModal && <TagModal onClose={() => setTagModal(false)} onSave={tag => { setTagModal(false); bulk("add_tag", { tag }); }} />}
     </div>
@@ -395,7 +419,7 @@ export function ImportIocs() {
 export function ExportIocs() {
   const [busy, setBusy] = useState(false);
   const toast = useToast();
-  const { data } = useApi("/v2/iocs?limit=1&facets=false");
+  const { data } = useApi("/v2/iocs?limit=1&status=live");
   const rows = [
     ["TAXII discovery", `${API_BASE}/taxii/`],
     ["Collection ID", "a45ef559-3f21-4b78-9cde-ef0123456789"],

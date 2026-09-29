@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { entityPath } from "./entity";
 
 // Hash routing (#/ioc/indicator--…). The app is served from /ui/ by nginx and
 // the backend owns every other path, so hash routes give real deep links and
@@ -59,16 +60,7 @@ export function Link({ to, query, children, className, style, title, onClick, st
 }
 
 // Canonical routes for entity kinds, shared by search, graph and tables.
-export function entityRoute(kind, ref) {
-  switch (kind) {
-    case "ioc": return `/ioc/${enc(ref)}`;
-    case "observable": return `/observable/${enc(ref)}`;
-    case "cve": return `/cve/${enc(ref)}`;
-    case "campaign": return `/campaigns/${enc(ref)}`;
-    case "actor": return `/actors/${enc(ref)}`;
-    case "malware": return `/malware/${enc(ref)}`;
-    case "software": case "asset": return `/software/${enc(ref)}`;
-    case "investigation": return `/investigations/${enc(ref)}`;
-    default: return "/";
-  }
+// (Kept here for the many existing callers; the table lives in lib/entity.js.)
+export function entityRoute(kind, ref, inv) {
+  return entityPath(kind, ref, inv) || "/";
 }

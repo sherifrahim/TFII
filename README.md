@@ -64,13 +64,20 @@ frontend/src
   legacy/           the original, working tools, rendered inside the new shell
 backend
   main.py           FastAPI app, auth/capabilities, v1 API, connectors, schedulers
-  intel_api.py      /v2 API: paginated IOCs, entities, graph, search, command
-                    centre, software, actors/malware/campaigns, investigations,
-                    intel wall, grouped notifications, API usage
+  security.py       SSRF-safe HTTP client, URL/domain validators, security headers
+  migrations.py     numbered, additive schema migrations
+  entities.py       entity headers, relationship engine, provenance, timelines
+  search.py         provider-based global search
+  entity_api.py     /v2/entity*, /v2/search, relationships, workspace bridge
+  intel_api.py      /v2 API: paginated IOCs + facets, command centre, software,
+                    investigations, intel wall, notifications, API usage
+  tests/            pytest suite (own throwaway PostgreSQL database)
 ```
 
-The v1 API is unchanged; `/v2/*` is additive. Schema migrations are additive
-(`CREATE … IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`) and run at startup.
+The v1 API is unchanged; `/v2/*` is additive. Schema migrations are additive and
+run at startup. The data, entity, relationship and provenance models, the search
+architecture, endpoints and known limitations are documented in
+[docs/INTELLIGENCE_CORE.md](docs/INTELLIGENCE_CORE.md).
 
 ### Local development
 
@@ -84,6 +91,10 @@ cd backend && uvicorn main:app --port 8000
 cd frontend && npm ci --legacy-peer-deps
 sed -i 's|https://YOUR_DOMAIN|http://localhost:8000|' src/config.js   # don't commit this
 CI=true GENERATE_SOURCEMAP=false npm run build
+
+# tests (backend creates/drops its own database; frontend: lint + unit)
+cd backend && pip install -r requirements-dev.txt && python -m pytest
+cd frontend && npx eslint src --ext .js --max-warnings 0 && CI=true npm test
 ```
 
 ---
@@ -224,7 +235,7 @@ This will be changed to a public facing IOC and CVE feed very soon enough.
 
 ## Security Notes
 
-- Signup is invite-only — admins generate codes, no open registration
+- Signup: an invite code grants the role it was issued for; open signup (no code) only ever yields the restricted *explorer* role (no indicator database)
 - Rate limiting: login 10/min, signup 5/hr
 - Per-user API keys encrypted
 - Port 8000 (backend) not exposed externally — Nginx/Caddy proxies everything

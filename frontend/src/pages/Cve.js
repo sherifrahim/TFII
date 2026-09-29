@@ -2,15 +2,15 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useApi, apiJSON, qs, getToken } from "../lib/api";
 import { navigate, setQuery, entityRoute, enc } from "../lib/router";
 import { useSession, pushRecentEntity } from "../lib/session";
-import { fmtNum, fmtDate, timeAgo, normSev } from "../lib/format";
+import { fmtNum } from "../lib/format";
 import {
   PageHeader, Panel, Button, Badge, SevBadge, Tabs, KPI, SearchInput, Select, Pagination, Th, SkeletonRows,
   EmptyState, ErrorState, Loading, Callout, useDebounced, useToast, CopyButton, Segmented,
 } from "../components/ui";
 import { SevStack, YearBars, BarList } from "../components/charts";
 import { SEV_COLOR, T, LEGACY_C } from "../design/tokens";
-import InvestigationPicker from "../components/InvestigationPicker";
-import { AssetManager, CVEDetail, CVELookup, CVEReportModal } from "../legacy/LegacyComponents";
+import { safeUrl } from "../lib/safe";
+import { AssetManager, CVEDetail, CVELookup, CVEReportModal } from "../legacy/lazy";
 
 const STATUS = {
   kev_exposed: { label: "KEV exposure", tone: "critical" },
@@ -27,7 +27,7 @@ function EpssCell({ v }) {
 }
 function PatchCell({ available, url }) {
   return available
-    ? <span className="row" style={{ gap: 4 }}><Badge tone="success" dot>Patched</Badge>{url && <a href={url} target="_blank" rel="noreferrer" className="link xs" onClick={e => e.stopPropagation()}>fix ↗</a>}</span>
+    ? <span className="row" style={{ gap: 4 }}><Badge tone="success" dot>Patched</Badge>{safeUrl(url) && <a href={safeUrl(url)} target="_blank" rel="noreferrer" className="link xs" onClick={e => e.stopPropagation()}>fix ↗</a>}</span>
     : <Badge tone="high" outline>No patch</Badge>;
 }
 
@@ -35,9 +35,9 @@ export function CveIntel({ query }) {
   const { can } = useSession();
   const hasData = can("data.workspace");
   const tab = query.tab || (hasData ? "software" : "lookup");
-  const summary = useApi(hasData ? "/v2/command-center" : null);
-  const c = summary.data?.metrics?.cves;
-  const ex = useMemo(() => Object.fromEntries((summary.data?.metrics?.cve_exposure || []).map(r => [String(r.severity).toLowerCase(), Number(r.unpatched) + Number(r.patched)])), [summary.data]);
+  const summary = useApi(hasData ? "/v2/cve/summary" : null);
+  const c = summary.data;
+  const ex = useMemo(() => (c ? { critical: c.critical, high: c.high, medium: c.medium } : {}), [c]);
   const [polling, setPolling] = useState(false);
   const toast = useToast();
 
@@ -202,96 +202,71 @@ function CveView({ query }) {
   );
 }
 
-// ── Software Intelligence ───────────────────────────────────────────────────
-export function SoftwarePage({ id, tab = "overview" }) {
-  const { data, error, loading, reload } = useApi(`/v2/software/${enc(id)}`);
-  useEffect(() => { if (data?.software) pushRecentEntity({ kind: "software", ref: id, label: data.software.name }); }, [data, id]);
-  if (error) return <div className="page"><ErrorState error={error} onRetry={reload} /></div>;
-  if (loading && !data) return <div className="page"><Loading /></div>;
+// ── Software Intelligence (rendered inside the shared entity page) ──────────
+export function SoftwareActions({ hd }) {
+  return <Button size="sm" icon="list" onClick={() => navigate("/cve", { tab: "cves", asset_id: hd.ref })}>All CVEs in CVE View</Button>;
+}
+
+export function SoftwareOverview({ kd, hd, setTab }) {
+  const { data, error, loading, reload } = kd;
+  if (error) return <ErrorState error={error} onRetry={reload} />;
+  if (loading || !data) return <Loading label="Loading software intelligence" />;
   const s = data.software;
   const years = (() => {
     const m = {};
     data.by_year.forEach(r => { if (!r.year) return; m[r.year] = m[r.year] || { label: r.year }; m[r.year][String(r.severity).toLowerCase()] = Number(r.n); });
     return Object.values(m).sort((a, b) => a.label.localeCompare(b.label)).slice(-10);
   })();
-  const setTab = t => setQuery({ tab: t === "overview" ? "" : t });
-
   return (
-    <div className="page">
-      <div className="entity-head">
-        <div>
-          <div className="row" style={{ gap: 6, marginBottom: 6 }}>
-            <Badge outline>{s.asset_type || "application"}</Badge>
-            <Badge tone={STATUS[s.status].tone} dot>{STATUS[s.status].label}</Badge>
-            {s.criticality && <Badge outline>criticality: {s.criticality}</Badge>}
-          </div>
-          <h1 className="page-title" style={{ fontSize: 24 }}>{s.name}</h1>
-          <div className="page-sub">{[s.vendor, s.version && `version ${s.version}`].filter(Boolean).join(" · ") || "—"}{s.cpe && <> · <span className="mono faint">{s.cpe}</span></>}</div>
-        </div>
-        <div className="page-actions">
-          <Button size="sm" icon="list" onClick={() => navigate("/cve", { tab: "cves", asset_id: s.id })}>All CVEs in CVE View</Button>
-        </div>
-      </div>
+    <>
       <div className="facts">
-        <div className="fact"><div className="fact-l">Vulnerabilities</div><div className="fact-v num" style={{ fontSize: 18 }}>{fmtNum(s.total)}</div></div>
+        <div className="fact"><div className="fact-l">Status</div><div className="fact-v"><Badge tone={STATUS[s.status].tone} dot>{STATUS[s.status].label}</Badge></div></div>
         {["critical", "high", "medium", "low"].map(k => <div key={k} className="fact"><div className="fact-l" style={{ textTransform: "capitalize" }}><span className="sev-dot" style={{ background: SEV_COLOR[k], marginRight: 5 }} />{k}</div><div className="fact-v num" style={{ fontSize: 18 }}>{fmtNum(s[k])}</div></div>)}
-        <div className="fact"><div className="fact-l">CISA KEV</div><div className="fact-v num" style={{ fontSize: 18, color: s.kev ? SEV_COLOR.critical : undefined }}>{fmtNum(s.kev)}</div></div>
-        <div className="fact"><div className="fact-l">Unpatched</div><div className="fact-v num" style={{ fontSize: 18 }}>{fmtNum(s.unpatched)}</div></div>
         <div className="fact"><div className="fact-l">Peak EPSS</div><div className="fact-v"><EpssCell v={s.max_epss} /></div></div>
       </div>
-      <Tabs value={tab} onChange={setTab} tabs={[
-        { id: "overview", label: "Overview" }, { id: "vulns", label: "Vulnerabilities", count: s.total },
-        { id: "kev", label: "KEV", count: data.kev.length }, { id: "versions", label: "Affected Versions", count: data.versions.length },
-        { id: "detection", label: "Detection" }, { id: "refs", label: "References", count: data.advisories.length + data.reference_domains.length },
-      ]} />
-      {tab === "overview" && (
-        <div className="grid g-main-side">
-          <div className="stack">
-            <Panel title="Severity distribution"><SevStack counts={s} height={10} showLegend /></Panel>
-            <Panel title="CVEs by publication year" sub="stacked by severity">{years.length ? <YearBars rows={years} /> : <div className="faint small">No dated CVEs.</div>}</Panel>
-            <Panel title="Recent CVEs" tight actions={<Button size="xs" variant="ghost" onClick={() => setTab("vulns")}>All vulnerabilities</Button>}>
-              <CveRows rows={data.recent} />
-            </Panel>
-          </div>
-          <div className="stack">
-            <Panel title="Highest exploitation probability" sub="EPSS" tight><CveRows rows={data.top_epss} compact showEpss /></Panel>
-            <Panel title="Weakness types" sub="CWE">
-              <BarList items={data.cwes.map(w => ({ label: w.cwe, value: Number(w.n) }))} color={T.medium} empty="No CWE data" />
-            </Panel>
-            {data.linked_iocs > 0 && <Panel title="Linked indicators"><div className="small">{data.linked_iocs} IOCs were extracted from this software's CVE descriptions.</div></Panel>}
-          </div>
-        </div>
-      )}
-      {tab === "vulns" && <SoftwareVulns assetId={s.id} />}
-      {tab === "kev" && (
-        <Panel title="Known exploited vulnerabilities" sub="CISA KEV catalog" tight>
-          {data.kev.length ? <CveRows rows={data.kev} /> : <EmptyState icon="shield" title="No KEV entries" desc="None of this software's CVEs are in the CISA Known Exploited Vulnerabilities catalog." />}
-        </Panel>
-      )}
-      {tab === "versions" && (
-        <Panel title="Affected version ranges" sub="as published by NVD" tight>
-          {data.versions.length === 0 ? <EmptyState title="No version data" /> : (
-            <table className="tbl compact"><thead><tr><th>Affected versions</th><th className="r">CVEs</th><th className="r">Critical / High</th><th className="r">Unpatched</th></tr></thead>
-              <tbody>{data.versions.map((v, k) => (
-                <tr key={k}><td className="cellmono wrapcell">{v.versions}</td><td className="r num">{v.n}</td><td className="r num">{v.severe}</td><td className="r num">{v.unpatched}</td></tr>
-              ))}</tbody></table>
-          )}
-        </Panel>
-      )}
-      {tab === "detection" && <SoftwareDetection s={s} kev={data.kev} />}
-      {tab === "refs" && (
-        <div className="grid g2">
-          <Panel title="Vendor advisories & patches" tight>
-            {data.advisories.length === 0 ? <div className="faint small" style={{ padding: 16 }}>No vendor advisory references.</div> :
-              data.advisories.map(u => <a key={u} className="list-row clickable" href={u} target="_blank" rel="noreferrer"><span className="trunc link small">{u}</span></a>)}
-          </Panel>
-          <Panel title="Reference sources">
-            <BarList items={data.reference_domains.map(d => ({ label: d.domain, value: d.n }))} empty="No references" />
+      <div className="grid g-main-side">
+        <div className="stack">
+          <Panel title="Severity distribution"><SevStack counts={s} height={10} showLegend /></Panel>
+          <Panel title="CVEs by publication year" sub="stacked by severity">{years.length ? <YearBars rows={years} /> : <div className="faint small">No dated CVEs.</div>}</Panel>
+          <Panel title="Recent CVEs" tight actions={<Button size="xs" variant="ghost" onClick={() => setTab("vulns")}>All vulnerabilities</Button>}>
+            <CveRows rows={data.recent} />
           </Panel>
         </div>
-      )}
-    </div>
+        <div className="stack">
+          <Panel title="Highest exploitation probability" sub="EPSS" tight><CveRows rows={data.top_epss} compact showEpss /></Panel>
+          {data.cwes.length > 0 && <Panel title="Weakness types" sub="CWE"><BarList items={data.cwes.map(w => ({ label: w.cwe, value: Number(w.n) }))} color={T.medium} empty="No CWE data" /></Panel>}
+          {data.linked_iocs > 0 && <Panel title="Linked indicators"><div className="small">{data.linked_iocs} IOCs were extracted from this software's CVE descriptions.</div></Panel>}
+        </div>
+      </div>
+    </>
   );
+}
+
+// Software-specific tabs the shared page appends after its own. Only tabs with
+// content are returned, matching the shared page's "no empty sections" rule.
+export function softwareTabs(data, hd) {
+  if (!data) return [];
+  const s = data.software;
+  const out = [];
+  if (s.total > 0) out.push({ id: "vulns", label: "Vulnerabilities", count: s.total, render: () => <SoftwareVulns assetId={s.id} /> });
+  if (data.kev.length > 0) out.push({ id: "kev", label: "KEV", count: data.kev.length, render: () => (
+    <Panel title="Known exploited vulnerabilities" sub="CISA KEV catalog" tight><CveRows rows={data.kev} /></Panel>) });
+  if (data.versions.length > 0) out.push({ id: "versions", label: "Affected Versions", count: data.versions.length, render: () => (
+    <Panel title="Affected version ranges" sub="as published by NVD" tight>
+      <table className="tbl compact"><thead><tr><th>Affected versions</th><th className="r">CVEs</th><th className="r">Critical / High</th><th className="r">Unpatched</th></tr></thead>
+        <tbody>{data.versions.map((v, k) => (
+          <tr key={k}><td className="cellmono wrapcell" style={{ overflowWrap: "anywhere" }}>{v.versions}</td><td className="r num">{v.n}</td><td className="r num">{v.severe}</td><td className="r num">{v.unpatched}</td></tr>
+        ))}</tbody></table>
+    </Panel>) });
+  out.push({ id: "detection", label: "Detections", render: () => <SoftwareDetection s={s} kev={data.kev} /> });
+  if (data.advisories.length + data.reference_domains.length > 0) out.push({ id: "refs", label: "References", count: data.advisories.length + data.reference_domains.length, render: () => (
+    <div className="grid g2">
+      <Panel title="Vendor advisories & patches" tight>
+        {data.advisories.filter(safeUrl).map(u => <a key={u} className="list-row clickable" href={safeUrl(u)} target="_blank" rel="noreferrer"><span className="trunc link small">{u}</span></a>)}
+      </Panel>
+      <Panel title="Reference sources"><BarList items={data.reference_domains.map(d => ({ label: d.domain, value: d.n }))} empty="No references" /></Panel>
+    </div>) });
+  return out;
 }
 
 function SoftwareVulns({ assetId }) {
@@ -345,68 +320,28 @@ DeviceTvmSoftwareVulnerabilities
   );
 }
 
-// ── CVE page (tracked finding + multi-source lookup) ────────────────────────
-export function CvePage({ cveId }) {
-  const { can } = useSession();
-  const hasData = can("data.workspace");
-  const finding = useApi(hasData ? `/cves/${enc(cveId)}` : null);
+// ── CVE page for accounts without indicator-database access ─────────────────
+// Full-access accounts use the shared entity page; explorers get the public,
+// multi-source lookup only (the tracked-finding data is behind data.workspace).
+export function CvePublicPage({ cveId }) {
   const [report, setReport] = useState(false);
-  const [picker, setPicker] = useState(false);
   useEffect(() => { pushRecentEntity({ kind: "cve", ref: cveId, label: cveId }); }, [cveId]);
-  const f = finding.data;
-  const sev = f ? normSev(f.cvss_severity, f.cvss_score) : null;
-
   return (
     <div className="page">
       <div className="entity-head">
         <div>
-          <div className="row" style={{ gap: 6, marginBottom: 6 }}>
-            <Badge outline>Vulnerability</Badge>
-            {f && <SevBadge severity={sev} score={f.cvss_score} />}
-            {f?.kev_listed && <Badge tone="critical" dot>CISA KEV</Badge>}
-            {f && <PatchCell available={f.patch_available} url={f.patch_url} />}
-            {hasData && finding.error?.status === 404 && <Badge outline>Not in monitored software</Badge>}
-          </div>
+          <div className="row" style={{ gap: 6, marginBottom: 6 }}><Badge outline>Vulnerability</Badge></div>
           <div className="row" style={{ gap: 6 }}><div className="entity-value">{cveId}</div><CopyButton value={cveId} /></div>
-          {f?.title && <div className="page-sub" style={{ maxWidth: 900 }}>{f.title.replace(/^CVE-\d+-\d+:\s*/, "")}</div>}
         </div>
         <div className="page-actions">
           <Button size="sm" icon="fileText" onClick={() => setReport(true)}>Generate report</Button>
-          <a className="btn sm" href={`https://nvd.nist.gov/vuln/detail/${cveId}`} target="_blank" rel="noreferrer">NVD ↗</a>
-          {hasData && <Button size="sm" variant="primary" icon="briefcase" onClick={() => setPicker(true)}>Add to investigation</Button>}
+          <a className="btn sm" href={`https://nvd.nist.gov/vuln/detail/${enc(cveId)}`} target="_blank" rel="noreferrer">NVD ↗</a>
         </div>
       </div>
-      {f && (
-        <div className="grid g-main-side" style={{ marginBottom: 16 }}>
-          <Panel title="In your environment">
-            <dl className="kv">
-              <dt>Software</dt><dd>{f.asset_id ? <a className="link" href={`#${entityRoute("software", f.asset_id)}`}>{f.asset_name}</a> : f.asset_name}</dd>
-              <dt>CVSS</dt><dd><span className="num">{f.cvss_score ?? "—"}</span> <span className="mono faint xs">{f.cvss_vector}</span></dd>
-              <dt>EPSS</dt><dd><EpssCell v={f.epss_score} />{f.epss_percentile != null && <span className="faint"> · percentile {(f.epss_percentile * 100).toFixed(0)}</span>}</dd>
-              <dt>Weakness</dt><dd>{f.cwe || "—"}</dd>
-              <dt>Affected versions</dt><dd className="mono xs">{f.affected_versions || "—"}</dd>
-              <dt>Published</dt><dd>{f.published_date || "—"}</dd>
-              <dt>First tracked</dt><dd>{fmtDate(f.created_at)} ({timeAgo(f.created_at)})</dd>
-              {f.patch_detected_at && <><dt>Patch detected</dt><dd>{fmtDate(f.patch_detected_at)}</dd></>}
-            </dl>
-            {f.description && <div className="small muted" style={{ marginTop: 12, lineHeight: 1.6 }}>{f.description}</div>}
-          </Panel>
-          <Panel title="Linked indicators" tight>
-            {(f.linked_iocs || []).length === 0 ? <div className="faint small" style={{ padding: 16 }}>No IOCs extracted from this CVE.</div> :
-              f.linked_iocs.map(i => (
-                <div key={i.id} className="list-row clickable" onClick={() => navigate(entityRoute("ioc", i.id))}>
-                  <span className="badge type">{i.type}</span><span className="mono trunc">{i.value}</span>
-                </div>
-              ))}
-          </Panel>
-        </div>
-      )}
       <Panel title="Multi-source intelligence" sub="NVD · CVE.org · OSV · EPSS · CISA KEV · public PoCs">
         <div className="legacy-host"><CVELookup token={getToken()} C={LEGACY_C} initialId={cveId} key={cveId} /></div>
       </Panel>
       {report && <CVEReportModal cveId={cveId} token={getToken()} C={LEGACY_C} onClose={() => setReport(false)} />}
-      {picker && <InvestigationPicker onClose={() => setPicker(false)}
-        onPick={inv => apiJSON(`/v2/investigations/${enc(inv.id)}/items`, { method: "POST", body: { item_type: "cve", ref_id: cveId } })} />}
     </div>
   );
 }

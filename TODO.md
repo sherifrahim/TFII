@@ -5,6 +5,18 @@
 
 ---
 
+## Phase 3 candidates (not started)
+
+- [ ] **Sandbox integration** — `SandboxProvider` abstraction, CAPE lab, browser sandbox (deliberately on hold)
+- [ ] **Per-object ownership/ACLs** beyond the coarse roles (see docs/INTELLIGENCE_CORE.md → known limitations)
+- [ ] **HttpOnly cookie sessions** instead of `localStorage` JWTs (needs CSRF protection)
+- [ ] **Shared cache / rate-limit store** (Redis) if more than one worker is ever run
+- [ ] **Certificate & passive-DNS entities** — only once TFII ingests that data
+- [ ] **Relationship review workflow** — confirm/dispute analyst-asserted edges, edge confidence decay
+- [ ] **Scheduled DNS re-resolution** for tracked domains (currently on-demand, recorded with provenance)
+
+---
+
 ## 🔴 High Priority
 
 - [x] **Mode switcher** — superseded: IOC and CVE are now intelligence domains in one navigation (2026-09 redesign)

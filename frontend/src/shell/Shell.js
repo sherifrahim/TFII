@@ -10,7 +10,7 @@ import CommandPalette from "./CommandPalette";
 
 export default function Shell({ route, crumbs, children }) {
   const { me, can, logout } = useSession();
-  const [collapsed, setCollapsed] = useLocal("tf_sidebar_collapsed", false);
+  const [collapsed, setCollapsed] = useLocal("tf_sidebar_collapsed", typeof window !== "undefined" && window.innerWidth < 900);
   const [palette, setPalette] = useState(false);
   const openPalette = useCallback(() => setPalette(true), []);
 
@@ -122,10 +122,12 @@ function NotificationCenter() {
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
-    const poll = () => api("/notifications/count").then(r => (r.ok ? r.json() : null)).then(d => { if (alive && d) setCount(d.count); }).catch(() => {});
+    // No polling while the tab is hidden; refresh as soon as it is shown again.
+    const poll = () => { if (document.hidden) return; api("/notifications/count").then(r => (r.ok ? r.json() : null)).then(d => { if (alive && d) setCount(d.count); }).catch(() => {}); };
     poll();
     const t = setInterval(poll, 60000);
-    return () => { alive = false; clearInterval(t); };
+    document.addEventListener("visibilitychange", poll);
+    return () => { alive = false; clearInterval(t); document.removeEventListener("visibilitychange", poll); };
   }, [enabled]);
 
   const load = useCallback(async () => {

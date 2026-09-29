@@ -50,7 +50,6 @@ export function trendPct(cur, prev) {
 export const IOC_TYPES = ["IPv4", "IPv6", "Domain", "URL", "MD5", "SHA1", "SHA256", "Email", "CVE"];
 export const TLP_LEVELS = ["WHITE", "GREEN", "AMBER", "RED"];
 export const INDUSTRIES = ["General", "Fintech", "Medical", "Gaming", "Retail", "Energy", "Government", "Telecom"];
-export const REL_TYPES = ["related_to", "resolves_to", "dropped_by", "communicates_with", "variant_of", "delivers", "uses"];
 
 export function typeGroup(t) {
   if (t === "IPv4" || t === "IPv6") return "ip";

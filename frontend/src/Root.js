@@ -1,27 +1,33 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import "./design/tfii.css";
 import { API_BASE } from "./config";
 import { api, apiJSON, TOKEN_KEY, getToken } from "./lib/api";
 import { useRoute } from "./lib/router";
+import { installLinkGuard } from "./lib/safe";
 import { SessionContext } from "./lib/session";
 import { ToastProvider, Button, Callout, Loading } from "./components/ui";
 import { LEGACY_C } from "./design/tokens";
 import Shell from "./shell/Shell";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { activeNav } from "./shell/nav";
-import { ApiKeyModal, DemoLockedPage } from "./legacy/LegacyComponents";
+import { ApiKeyModal, DemoLockedPage } from "./legacy/lazy";
 
 import CommandCenter from "./pages/CommandCenter";
 import { IocIntel, AddIoc, ImportIocs, ExportIocs } from "./pages/Iocs";
-import { IocEntity, ObservablePage } from "./pages/Entity";
-import { CveIntel, SoftwarePage, CvePage } from "./pages/Cve";
-import { ActorsPage, ActorPage, MalwarePage } from "./pages/Actors";
-import { CampaignsPage, CampaignPage } from "./pages/Campaigns";
+import EntityPage from "./pages/EntityPage";
+import { CveIntel, CvePublicPage } from "./pages/Cve";
+import { ActorsPage, ActorPublicPage } from "./pages/Actors";
+import { CampaignsPage } from "./pages/Campaigns";
 import IntelWall from "./pages/IntelWall";
 import { SearchPage, ExplorerPage } from "./pages/Search";
-import OsintToolkit from "./pages/Osint";
 import { WorkspacePage, InvestigationPage } from "./pages/Workspace";
-import { HealthPage, ConnectorsPage, ApiUsagePage, UsersPage, SettingsPage, FilesPage,
-  QueryPage, GeoPage, AdvisoriesPage, ReportsPage } from "./pages/Platform";
+// Platform / OSINT screens sit on the large legacy component library, so they
+// load on demand rather than with the first paint.
+const OsintToolkit = lazy(() => import("./pages/Osint"));
+const platform = name => lazy(() => import("./pages/Platform").then(m => ({ default: m[name] })));
+const HealthPage = platform("HealthPage"), ConnectorsPage = platform("ConnectorsPage"), ApiUsagePage = platform("ApiUsagePage"),
+  UsersPage = platform("UsersPage"), SettingsPage = platform("SettingsPage"), FilesPage = platform("FilesPage"),
+  QueryPage = platform("QueryPage"), GeoPage = platform("GeoPage"), AdvisoriesPage = platform("AdvisoriesPage"), ReportsPage = platform("ReportsPage");
 
 function Login({ onToken }) {
   const [tab, setTab] = useState("login");
@@ -89,21 +95,25 @@ function resolve(route, ctx) {
       if (b === "import") return { crumbs: [IOC, { label: "Import" }], el: <ImportIocs /> };
       if (b === "export") return { crumbs: [IOC, { label: "Export" }], el: <ExportIocs /> };
       return { crumbs: [IOC], el: <IocIntel query={q} /> };
-    case "ioc": return { crumbs: [IOC, { label: "Entity" }], el: <IocEntity id={b} tab={q.tab} /> };
-    case "observable": return { crumbs: [IOC, { label: "Observable" }], el: <ObservablePage value={b} /> };
+    // Every entity kind renders through one page (pages/EntityPage.js); `inv`
+    // carries the investigation the analyst came from.
+    case "ioc": return { crumbs: [IOC, { label: "Indicator" }], el: <EntityPage kind="indicator" refv={b} tab={q.tab} inv={q.inv} /> };
+    case "observable": return { crumbs: [IOC, { label: "Indicator" }], el: <EntityPage kind="indicator" refv={b} tab={q.tab} inv={q.inv} /> };
     case "cve":
-      if (b) return { crumbs: [CVE, { label: b.toUpperCase() }], el: <CvePage cveId={b.toUpperCase()} /> };
+      if (b && !ctx.hasData) return { crumbs: [CVE, { label: b.toUpperCase() }], el: <CvePublicPage cveId={b.toUpperCase()} /> };
+      if (b) return { crumbs: [CVE, { label: b.toUpperCase() }], el: <EntityPage kind="cve" refv={b.toUpperCase()} tab={q.tab} inv={q.inv} /> };
       return { crumbs: [CVE], el: <CveIntel query={q} /> };
-    case "software": return { crumbs: [CVE, { label: "Software" }], el: <SoftwarePage id={b} tab={q.tab} /> };
+    case "software": return { crumbs: [CVE, { label: "Software" }], el: <EntityPage kind="software" refv={b} tab={q.tab} inv={q.inv} /> };
     case "actors":
-      if (b) return { crumbs: [{ label: "Threat Actors", to: "/actors" }, { label: b }], el: <ActorPage name={b} /> };
+      if (b && !ctx.hasData) return { crumbs: [{ label: "Threat Actors", to: "/actors" }, { label: b }], el: <ActorPublicPage name={b} /> };
+      if (b) return { crumbs: [{ label: "Threat Actors", to: "/actors" }, { label: b }], el: <EntityPage kind="actor" refv={b} tab={q.tab} inv={q.inv} /> };
       return { crumbs: [{ label: "Threat Actors" }], el: <ActorsPage query={q} /> };
-    case "malware": return { crumbs: [{ label: "Threat Actors", to: "/actors" }, { label: "Malware" }, { label: b }], el: <MalwarePage name={b} /> };
+    case "malware": return { crumbs: [{ label: "Threat Actors", to: "/actors" }, { label: "Malware" }, { label: b }], el: <EntityPage kind="malware" refv={b} tab={q.tab} inv={q.inv} /> };
     case "campaigns":
-      if (b) return { crumbs: [{ label: "Campaigns", to: "/campaigns" }, { label: "Campaign" }], el: <CampaignPage id={b} /> };
+      if (b) return { crumbs: [{ label: "Campaigns", to: "/campaigns" }, { label: "Campaign" }], el: <EntityPage kind="campaign" refv={b} tab={q.tab} inv={q.inv} /> };
       return { crumbs: [{ label: "Campaigns" }], el: <CampaignsPage /> };
     case "intel": return { crumbs: [{ label: "Intel Wall" }], el: <IntelWall query={q} /> };
-    case "search": return { crumbs: [{ label: "Global Search" }], el: <SearchPage q={q.q || ""} /> };
+    case "search": return { crumbs: [{ label: "Global Search" }], el: <SearchPage q={q.q || ""} kinds={q.kinds || ""} /> };
     case "explorer": return { crumbs: [{ label: "Entity Explorer" }], el: <ExplorerPage query={q} /> };
     case "osint": return { crumbs: [{ label: "OSINT Toolkit", to: "/osint" }, ...(b ? [{ label: b }] : [])], el: <OsintToolkit tool={b} /> };
     case "query": return { crumbs: [{ label: "Query Builder" }], el: <QueryPage /> };
@@ -133,6 +143,7 @@ export default function Root() {
   const [meErr, setMeErr] = useState(null);
   const [showKeys, setShowKeys] = useState(false);
   const route = useRoute();
+  useEffect(() => installLinkGuard(), []);
 
   const logout = useCallback(() => {
     try { localStorage.removeItem(TOKEN_KEY); } catch {}
@@ -178,7 +189,7 @@ export default function Root() {
         <Shell route={route} crumbs={crumbs}>
           {locked
             ? <div className="page narrow legacy-host"><DemoLockedPage token={token} C={LEGACY_C} featureLabel={nav.label} /></div>
-            : <React.Fragment key={route.path}>{el}</React.Fragment>}
+            : <ErrorBoundary key={route.path}><Suspense fallback={<div className="page"><Loading label="Loading" /></div>}>{el}</Suspense></ErrorBoundary>}
         </Shell>
         {showKeys && (
           <ApiKeyModal token={token} C={LEGACY_C} onClose={() => {

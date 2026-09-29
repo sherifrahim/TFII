@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Button, SearchInput, Loading, ErrorState, useToast } from "./ui";
+import { Modal, Button, SearchInput, Loading, ErrorState, useToast, actionable } from "./ui";
 import { useApi, apiJSON } from "../lib/api";
 import { timeAgo } from "../lib/format";
 import { navigate, enc } from "../lib/router";
@@ -7,17 +7,18 @@ import { SEV_COLOR } from "../design/tokens";
 
 // Pick (or create) an investigation, then hand it to `onPick`. `onPick` returns
 // a promise; the modal closes and toasts when it resolves.
-export default function InvestigationPicker({ title = "Add to investigation", onPick, onClose }) {
+export default function InvestigationPicker({ title = "Add to investigation", onPick, onClose, withReason = false }) {
   const { data, error, loading, reload } = useApi("/v2/investigations?status=open,active,monitoring");
   const [q, setQ] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(null);
+  const [reason, setReason] = useState("");
   const toast = useToast();
 
   async function pick(inv) {
     setBusy(inv.id);
     try {
-      await onPick(inv);
+      await onPick(inv, reason.trim());
       toast(<span>Added to <a className="link" href={`#/investigations/${enc(inv.id)}`}>{inv.key} {inv.name}</a></span>, "ok");
       onClose();
     } catch (e) {
@@ -38,6 +39,12 @@ export default function InvestigationPicker({ title = "Add to investigation", on
   return (
     <Modal title={title} onClose={onClose}
       footer={<Button variant="ghost" onClick={() => { onClose(); navigate("/workspace"); }}>Open Workspace</Button>}>
+      {withReason && (
+        <div className="field" style={{ marginBottom: 12 }}>
+          <label>Why is this relevant? <span className="faint">(optional, shown wherever it appears in the investigation)</span></label>
+          <input className="input" value={reason} maxLength={500} onChange={e => setReason(e.target.value)} placeholder="e.g. C2 contacted by the dropper from the phishing email" />
+        </div>
+      )}
       <div className="row" style={{ gap: 8, marginBottom: 12 }}>
         <input className="input" style={{ flex: 1 }} placeholder="New investigation name…" value={name}
           onChange={e => setName(e.target.value)} onKeyDown={e => e.key === "Enter" && create()} />
@@ -49,7 +56,7 @@ export default function InvestigationPicker({ title = "Add to investigation", on
       {data && list.length === 0 && <div className="faint small" style={{ padding: 12 }}>No open investigations.</div>}
       <div style={{ maxHeight: 320, overflow: "auto" }}>
         {list.map(inv => (
-          <div key={inv.id} className="list-row clickable" style={{ padding: "0 8px" }} onClick={() => !busy && pick(inv)}>
+          <div key={inv.id} className="list-row clickable" style={{ padding: "0 8px" }} {...actionable(() => !busy && pick(inv))}>
             <span className="sev-dot" style={{ background: SEV_COLOR[inv.severity] }} />
             <span className="mono faint xs">{inv.key}</span>
             <span className="trunc" style={{ flex: 1, color: "var(--text)" }}>{inv.name}</span>

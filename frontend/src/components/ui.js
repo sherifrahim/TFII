@@ -55,6 +55,19 @@ export function useLocal(key, initial) {
   return [v, set];
 }
 
+// Props that make a clickable row/div reachable and operable from the keyboard.
+export function actionable(fn) {
+  return {
+    role: "link", tabIndex: 0, onClick: fn,
+    onKeyDown: e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fn(e); } },
+  };
+}
+
+// Same, for <tr>: keeps the row role but makes it focusable and operable.
+export function rowAction(fn) {
+  return { tabIndex: 0, onClick: fn, onKeyDown: e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fn(e); } } };
+}
+
 // ── Buttons ───────────────────────────────────────────────────────────────────
 export function Button({ variant, size, icon, iconRight, children, className = "", loading, ...rest }) {
   const cls = ["btn", variant, size, className].filter(Boolean).join(" ");
@@ -127,11 +140,27 @@ export function Conf({ value }) {
   );
 }
 
+// One vocabulary for every entity: indicator triage states plus the lifecycle
+// words other kinds use (tracked, monitored, known_exploited …).
+const STATUS_BADGE = {
+  active: { tone: "success", dot: true, label: "Active" },
+  confirmed: { tone: "critical", dot: true, label: "Confirmed" },
+  suspicious: { tone: "high", dot: true, label: "Suspicious" },
+  unknown: { tone: "low", outline: true, label: "Unknown" },
+  expired: { tone: "low", outline: true, label: "Expired" },
+  false_positive: { tone: "high", outline: true, label: "False positive" },
+  untracked: { tone: "low", outline: true, label: "Not tracked" },
+  tracked: { tone: "gold", dot: true, label: "Tracked" },
+  observed: { tone: "violet", dot: true, label: "Observed" },
+  monitored: { tone: "success", dot: true, label: "Monitored" },
+  inactive: { tone: "low", outline: true, label: "Inactive" },
+  known_exploited: { tone: "critical", dot: true, label: "Known exploited" },
+};
 export function StatusBadge({ status }) {
-  if (status === "false_positive") return <Badge tone="high" outline>False positive</Badge>;
-  if (status === "expired") return <Badge tone="low" outline>Expired</Badge>;
-  return <Badge tone="success" dot>Active</Badge>;
+  const s = STATUS_BADGE[status] || (status ? { tone: "low", outline: true, label: String(status).replace(/_/g, " ") } : STATUS_BADGE.active);
+  return <Badge tone={s.tone} dot={s.dot} outline={s.outline}>{s.label}</Badge>;
 }
+export const STATUS_OPTIONS = ["active", "suspicious", "confirmed", "unknown", "false_positive"].map(k => [k, STATUS_BADGE[k].label]);
 
 export function Mono({ children, copy, title, className = "", style }) {
   return (
@@ -281,16 +310,33 @@ export function Loading({ label = "Loading" }) {
 }
 
 // ── Overlays ──────────────────────────────────────────────────────────────────
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
+// Dialog: focus moves in on open, Tab stays inside, Escape closes, and focus
+// returns to whatever opened it.
 export function Modal({ title, onClose, children, footer, wide }) {
+  const box = useRef(null);
+  const titleId = useRef(`m${Math.random().toString(36).slice(2, 8)}`).current;
   useEffect(() => {
-    const h = e => { if (e.key === "Escape") onClose(); };
+    const prev = document.activeElement;
+    const el = box.current;
+    if (el && !el.contains(document.activeElement)) (el.querySelector("input,textarea,select") || el.querySelector(FOCUSABLE))?.focus();
+    const h = e => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
+      if (e.key !== "Tab" || !el) return;
+      const f = [...el.querySelectorAll(FOCUSABLE)].filter(n => n.offsetParent !== null);
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
     window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
+    return () => { window.removeEventListener("keydown", h); if (prev && prev.focus && document.contains(prev)) prev.focus(); };
   }, [onClose]);
   return (
     <div className="overlay" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true">
-        <div className="modal-h"><h3>{title}</h3><IconButton icon="x" size="sm" title="Close" onClick={onClose} /></div>
+      <div ref={box} className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div className="modal-h"><h3 id={titleId}>{title}</h3><IconButton icon="x" size="sm" title="Close" onClick={onClose} /></div>
         <div className="modal-b">{children}</div>
         {footer && <div className="modal-f">{footer}</div>}
       </div>
@@ -302,13 +348,24 @@ export function Menu({ trigger, items, align = "right", width }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useClickOutside(ref, () => setOpen(false), open);
+  useEffect(() => { if (open) ref.current?.querySelector(".menu-item:not([disabled])")?.focus(); }, [open]);
+  // Arrow keys move between items, Escape closes and returns focus to the trigger.
+  function onKey(e) {
+    if (!open) return;
+    if (e.key === "Escape") { e.stopPropagation(); setOpen(false); ref.current?.querySelector("button")?.focus(); return; }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const els = [...ref.current.querySelectorAll(".menu-item:not([disabled])")];
+    const i = els.indexOf(document.activeElement);
+    els[(i + (e.key === "ArrowDown" ? 1 : -1) + els.length) % els.length]?.focus();
+  }
   return (
-    <div ref={ref} style={{ position: "relative", display: "inline-flex" }} onClick={e => e.stopPropagation()}>
+    <div ref={ref} style={{ position: "relative", display: "inline-flex" }} onClick={e => e.stopPropagation()} onKeyDown={onKey}>
       {trigger(() => setOpen(o => !o), open)}
       {open && (
-        <div className="popover menu" style={{ top: "calc(100% + 4px)", [align]: 0, minWidth: width }}>
-          {items.filter(Boolean).map((it, i) => it === "sep" ? <div key={i} className="menu-sep" /> : (
-            <button key={i} className="menu-item" onClick={() => { setOpen(false); it.onClick(); }}
+        <div className="popover menu" role="menu" style={{ top: "calc(100% + 4px)", [align]: 0, minWidth: width }}>
+          {items.filter(Boolean).map((it, i) => it === "sep" ? <div key={i} className="menu-sep" role="separator" /> : (
+            <button key={i} className="menu-item" role="menuitem" onClick={() => { setOpen(false); it.onClick(); }}
               style={it.danger ? { color: "var(--critical)" } : undefined} disabled={it.disabled}>
               {it.icon && <Icon name={it.icon} size={14} />}{it.label}
             </button>

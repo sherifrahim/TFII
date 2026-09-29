@@ -15,6 +15,8 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel
 
+import security
+import entities
 import psycopg2, psycopg2.extras
 from dotenv import load_dotenv
 from passlib.context import CryptContext
@@ -29,11 +31,16 @@ if not SECRET_KEY:
     print("[WARN] SECRET_KEY not set in .env — generated a random one. JWTs will invalidate on restart. Set SECRET_KEY in .env!")
 ALGORITHM          = "HS256"
 TOKEN_EXPIRE       = int(os.getenv("TOKEN_EXPIRE_MINUTES", "120"))   # default 2h, was 8h
+# The UI is served from the same origin as this API (nginx / Caddy), so CORS is
+# only needed for a separately-hosted dev UI. Unset means same-origin only; the
+# old default of "*" let any website script this API from a visitor's browser.
 ALLOWED_ORIGINS    = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
-if not ALLOWED_ORIGINS:
-    ALLOWED_ORIGINS = ["*"]   # fallback — set ALLOWED_ORIGINS in .env for production
 ADMIN_DEFAULT_USER = "admin"
-ADMIN_DEFAULT_PASS = "TFeed@99"
+# First-run admin only (created when the users table is empty). The historical
+# default is public in the README, so set ADMIN_INITIAL_PASSWORD on new installs
+# and change it after first login.
+ADMIN_DEFAULT_PASS = os.getenv("ADMIN_INITIAL_PASSWORD", "TFeed@99")
+MIN_PASSWORD_LEN   = 10
 VT_API_KEY         = os.getenv("VT_API_KEY", "")
 ABUSEIPDB_API_KEY  = os.getenv("ABUSEIPDB_API_KEY", "")
 SHODAN_API_KEY     = os.getenv("SHODAN_API_KEY", "")
@@ -172,14 +179,30 @@ pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2  = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 limiter = Limiter(key_func=get_remote_address)
-app     = FastAPI(title="ThreatFeed Intelligence Platform")
+# Interactive docs enumerate every route for anyone who can reach the host.
+# Opt in with ENABLE_API_DOCS=1 for development.
+_DOCS = os.getenv("ENABLE_API_DOCS", "") == "1"
+app     = FastAPI(title="ThreatFeed Intelligence Platform",
+                  docs_url="/docs" if _DOCS else None,
+                  redoc_url="/redoc" if _DOCS else None,
+                  openapi_url="/openapi.json" if _DOCS else None)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# Auth is a Bearer header, never a cookie, so credentialed CORS is unnecessary.
 app.add_middleware(CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"])
+security.install_security_headers(app)
+
+
+@app.exception_handler(httpx.HTTPError)
+async def _upstream_unreachable(request: Request, exc: httpx.HTTPError):
+    """Any upstream (NVD, VirusTotal, feeds …) failing must read as a 502 the UI can
+    explain — not a bare 500 — and must not echo the request URL or headers."""
+    print(f"[upstream] {request.method} {request.url.path}: {type(exc).__name__}")
+    return JSONResponse(status_code=502, content={"detail": f"An upstream service could not be reached ({type(exc).__name__})."})
 
 TLP_IDS = {
     "WHITE": "marking-definition--613f2e26-407d-48c7-9eca-b8e91df99dc9",
@@ -503,7 +526,9 @@ async def startup():
     if cur.fetchone()[0] == 0:
         cur.execute("INSERT INTO users (id,username,password,role) VALUES (%s,%s,%s,%s)",
             (f"user--{uuid.uuid4()}", ADMIN_DEFAULT_USER, pwd_ctx.hash(ADMIN_DEFAULT_PASS), "admin"))
-        print("[startup] Default admin created")
+        print("[startup] Default admin created" +
+              ("" if os.getenv("ADMIN_INITIAL_PASSWORD") else
+               " with the DOCUMENTED DEFAULT PASSWORD — change it now (Settings → Change Password)"))
 
     conn.commit(); cur.close(); conn.close()
 
@@ -1100,7 +1125,7 @@ def list_notes(
     admin=Depends(require_admin), conn=Depends(get_db)
 ):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    filters = ["archived = %s"]; params = [archived]
+    filters = ["archived = %s", "investigation_id IS NULL"]; params = [archived]
     if q:
         filters.append("(title ILIKE %s OR content ILIKE %s)")
         params += [f"%{q}%", f"%{q}%"]
@@ -1320,6 +1345,44 @@ async def get_connector_settings(conn) -> dict:
     except Exception: pass
     return {}
 
+def _feed_time(s):
+    try: return datetime.strptime(s[:19], "%Y-%m-%d %H:%M:%S") if s else None
+    except Exception: return None
+
+def _ingest_feed_ioc(cur, conn, *, type_, value, defanged, tlp, confidence, description, tags, enrichment,
+                     valid_days, source, source_ref=None, observed_at=None):
+    """Insert a feed indicator, or record a fresh sighting of one TFII already holds.
+    Either way an observation is written, so provenance shows every feed that vouched
+    for the value. Returns True only for a brand-new indicator."""
+    cur.execute("SAVEPOINT feed_ioc")
+    try:
+        cur.execute("SELECT id FROM iocs WHERE value = %s AND type = %s LIMIT 1", (value, type_))
+        row = cur.fetchone()
+        key = entities.normalize_indicator(value)[0]
+        if row:
+            cur.execute("UPDATE iocs SET last_seen = NOW() WHERE id = %s", (row[0],))
+            entities.record_observation(conn, "indicator", key, "sighting", source, "feed", source_ref=source_ref,
+                                        observed_at=observed_at, confidence=confidence,
+                                        summary=f"Seen again in {source} feed")
+            cur.execute("RELEASE SAVEPOINT feed_ioc")
+            return False
+        cur.execute("""
+            INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,
+                description,tags,enrichment,valid_until,last_seen)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+            ON CONFLICT DO NOTHING
+        """, (f"indicator--{uuid.uuid4()}", type_, value, defanged, "General", tlp, confidence, description,
+              tags, psycopg2.extras.Json(enrichment), datetime.now(timezone.utc) + timedelta(days=valid_days)))
+        created = cur.rowcount > 0
+        if created:
+            entities.record_observation(conn, "indicator", key, "ingested", source, "feed", source_ref=source_ref,
+                                        observed_at=observed_at, confidence=confidence, summary=description[:300])
+        cur.execute("RELEASE SAVEPOINT feed_ioc")
+        return created
+    except Exception:
+        cur.execute("ROLLBACK TO SAVEPOINT feed_ioc")
+        raise
+
 async def run_threatfox_connector(conn, auth_key: str, days_back: int = 1) -> dict:
     """
     Pull recent IOCs from ThreatFox (abuse.ch).
@@ -1383,24 +1446,13 @@ async def run_threatfox_connector(conn, auth_key: str, days_back: int = 1) -> di
                 if malware: ioc_tags.append(malware.lower().replace(" ","_")[:30])
                 if tags: ioc_tags.extend(tags[:3])
 
-                cur.execute("""
-                    INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,
-                        description,tags,enrichment,valid_until)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    ON CONFLICT DO NOTHING
-                """, (
-                    f"indicator--{uuid.uuid4()}", tfii_type, canonical, defanged,
-                    "General", tlp, confidence, desc, ioc_tags,
-                    psycopg2.extras.Json({
-                        "source": "ThreatFox",
-                        "malware_family": malware,
-                        "threat_type": threat_type,
-                        "threatfox_id": item.get("id"),
-                        "enriched_at": datetime.now(timezone.utc).isoformat(),
-                    }),
-                    datetime.now(timezone.utc) + timedelta(days=90)
-                ))
-                if cur.rowcount > 0: added += 1
+                ok = _ingest_feed_ioc(cur, conn, type_=tfii_type, value=canonical, defanged=defanged, tlp=tlp,
+                    confidence=confidence, description=desc, tags=ioc_tags, valid_days=90, source="ThreatFox",
+                    source_ref=f"https://threatfox.abuse.ch/ioc/{item['id']}/" if item.get("id") else None,
+                    observed_at=_feed_time(item.get("first_seen")),
+                    enrichment={"source": "ThreatFox", "malware_family": malware, "threat_type": threat_type,
+                                "threatfox_id": item.get("id"), "enriched_at": datetime.now(timezone.utc).isoformat()})
+                if ok: added += 1
                 else: skipped += 1
             except Exception as e:
                 errors.append(str(e)[:80])
@@ -1448,27 +1500,15 @@ async def run_malwarebazaar_connector(conn, auth_key: str, limit: int = 100) -> 
                         ioc_tags.append(malware.lower().replace(" ","_")[:30])
                     if file_type: ioc_tags.append(file_type.lower()[:20])
 
-                    cur.execute("""
-                        INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,
-                            description,tags,enrichment,valid_until)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                        ON CONFLICT DO NOTHING
-                    """, (
-                        f"indicator--{uuid.uuid4()}", hash_type, hash_val, hash_val,
-                        "General", "RED", 85,
-                        f"MalwareBazaar: {malware} ({file_type})" if file_type else f"MalwareBazaar: {malware}",
-                        ioc_tags,
-                        psycopg2.extras.Json({
-                            "source": "MalwareBazaar",
-                            "malware_family": malware,
-                            "file_type": file_type,
-                            "sha256": sha256,
-                            "md5": md5,
-                            "enriched_at": datetime.now(timezone.utc).isoformat(),
-                        }),
-                        datetime.now(timezone.utc) + timedelta(days=180)
-                    ))
-                    if cur.rowcount > 0: added += 1
+                    ok = _ingest_feed_ioc(cur, conn, type_=hash_type, value=hash_val, defanged=hash_val, tlp="RED",
+                        confidence=85, valid_days=180, source="MalwareBazaar",
+                        observed_at=_feed_time(sample.get("first_seen")),
+                        source_ref=f"https://bazaar.abuse.ch/sample/{sha256}/" if sha256 else None,
+                        description=f"MalwareBazaar: {malware} ({file_type})" if file_type else f"MalwareBazaar: {malware}",
+                        tags=ioc_tags,
+                        enrichment={"source": "MalwareBazaar", "malware_family": malware, "file_type": file_type,
+                                    "sha256": sha256, "md5": md5, "enriched_at": datetime.now(timezone.utc).isoformat()})
+                    if ok: added += 1
                     else: skipped += 1
             except Exception as e:
                 errors.append(str(e)[:80])
@@ -1517,27 +1557,15 @@ async def run_urlhaus_connector(conn, auth_key: str, limit: int = 100) -> dict:
                 if threat: ioc_tags.append(threat.lower().replace(" ","_")[:30])
                 if tags:   ioc_tags.extend([t.lower() for t in tags[:3] if t])
 
-                cur.execute("""
-                    INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,
-                        description,tags,enrichment,valid_until)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    ON CONFLICT DO NOTHING
-                """, (
-                    f"indicator--{uuid.uuid4()}", "URL", canonical, defang(canonical,"URL"),
-                    "General", "RED", 85,
-                    f"URLhaus: {threat or 'malware distribution URL'} [{status}]",
-                    ioc_tags,
-                    psycopg2.extras.Json({
-                        "source": "URLhaus",
-                        "url_status": status,
-                        "threat": threat,
-                        "urlhaus_id": item.get("id"),
-                        "urlhaus_reference": item.get("urlhaus_reference",""),
-                        "enriched_at": datetime.now(timezone.utc).isoformat(),
-                    }),
-                    datetime.now(timezone.utc) + timedelta(days=30)  # shorter TTL — URLs go offline fast
-                ))
-                if cur.rowcount > 0: added += 1
+                ok = _ingest_feed_ioc(cur, conn, type_="URL", value=canonical, defanged=defang(canonical, "URL"),
+                    tlp="RED", confidence=85, valid_days=30,  # shorter TTL — URLs go offline fast
+                    source="URLhaus", observed_at=_feed_time(item.get("date_added")),
+                    source_ref=security.safe_http_url(item.get("urlhaus_reference") or ""),
+                    description=f"URLhaus: {threat or 'malware distribution URL'} [{status}]", tags=ioc_tags,
+                    enrichment={"source": "URLhaus", "url_status": status, "threat": threat,
+                                "urlhaus_id": item.get("id"), "urlhaus_reference": item.get("urlhaus_reference", ""),
+                                "enriched_at": datetime.now(timezone.utc).isoformat()})
+                if ok: added += 1
                 else: skipped += 1
             except Exception as e:
                 errors.append(str(e)[:80])
@@ -1938,6 +1966,19 @@ def calc_confidence(results: dict, base: int) -> tuple:
     if not reasons: reasons.append("No external sources returned data — using base confidence")
     return min(max(score,5),99), reasons
 
+_HEX_LEN = {"MD5": 32, "SHA1": 40, "SHA256": 64}
+
+def _valid_for_enrichment(ioc_type: str, value: str) -> bool:
+    if ioc_type in ("IPv4", "IPv6"):
+        return security.is_valid_ip(value)
+    if ioc_type == "Domain":
+        return security.is_valid_domain(value)
+    if ioc_type in _HEX_LEN:
+        return bool(re.fullmatch(rf"[0-9a-fA-F]{{{_HEX_LEN[ioc_type]}}}", value or ""))
+    if ioc_type == "URL":
+        return security.safe_http_url(value) is not None
+    return True   # Email / CVE / Filename have no upstream lookup
+
 async def enrich(ioc_type: str, value: str, base: int, conn=None,
                  force: bool = False, existing: dict = None, user: dict = None) -> dict:
     if not force and existing and is_cache_fresh(existing):
@@ -1947,6 +1988,13 @@ async def enrich(ioc_type: str, value: str, base: int, conn=None,
 
     results = {}
     user_id = user.get("id") if user else None
+
+    # The value is interpolated into upstream URLs (and the API key rides along),
+    # so it must be exactly what its type claims. Junk is stored, just not sent.
+    if not _valid_for_enrichment(ioc_type, value):
+        return {"note": f"Not a valid {ioc_type}; enrichment skipped.",
+                "calculated_confidence": base, "confidence_reasons": ["Enrichment skipped: invalid value for type"],
+                "enriched_at": datetime.now(timezone.utc).isoformat()}
 
     def get_key(svc):
         if conn and user:
@@ -2450,6 +2498,19 @@ async def scheduled_cve_poll():
 # AUTH ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _check_password(pw: str):
+    if len(pw or "") < MIN_PASSWORD_LEN:
+        raise HTTPException(status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LEN} characters.")
+    if len(pw) > 128:
+        raise HTTPException(status_code=400, detail="Password too long (max 128).")
+
+def _check_new_credentials(username: str, password: str):
+    if not re.fullmatch(r"[A-Za-z0-9_.@-]{3,50}", username or ""):
+        raise HTTPException(status_code=400,
+            detail="Username must be 3-50 characters: letters, digits, _ . @ -")
+    _check_password(password)
+
 @app.post("/auth/login")
 @limiter.limit("10/minute")
 async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), conn=Depends(get_db)):
@@ -2464,6 +2525,7 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), c
 @app.post("/auth/signup")
 @limiter.limit("5/hour")
 async def signup(request: Request, body: SignupRequest, conn=Depends(get_db)):
+    _check_new_credentials(body.username, body.password)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT id FROM users WHERE username = %s", (body.username,))
     if cur.fetchone(): raise HTTPException(status_code=400, detail="Username already taken")
@@ -2597,6 +2659,7 @@ def cleanup_advisory_iocs(dry_run: bool = False, admin=Depends(require_cap("admi
 def change_password(body: PasswordChange, user=Depends(get_current_user), conn=Depends(get_db)):
     if not pwd_ctx.verify(body.current_password, user["password"]):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
+    _check_password(body.new_password)
     cur = conn.cursor()
     cur.execute("UPDATE users SET password = %s WHERE id = %s", (pwd_ctx.hash(body.new_password), user["id"]))
     conn.commit(); return {"status":"password updated"}
@@ -2817,6 +2880,9 @@ def list_users(admin=Depends(require_admin), conn=Depends(get_db)):
 
 @app.post("/users", status_code=201)
 def create_user(body: UserCreate, admin=Depends(require_cap("admin.users")), conn=Depends(get_db)):
+    _check_new_credentials(body.username, body.password)
+    if body.role not in ROLES:
+        raise HTTPException(status_code=400, detail=f"role must be one of {', '.join(ROLES)}")
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT id FROM users WHERE username = %s", (body.username,))
     if cur.fetchone(): raise HTTPException(status_code=400, detail="Username already exists")
@@ -2910,6 +2976,16 @@ def check_duplicate(body: dict, user=Depends(require_full_access), conn=Depends(
     existing = cur.fetchone()
     return {"exists":bool(existing),"existing":existing}
 
+def _note_ingest(conn, value, source, source_type, user=None, enrichment=None, summary=None):
+    """Provenance for an indicator TFII just stored: who/what added it, and what each
+    enrichment source answered at the time. Best effort — never blocks the write."""
+    key = entities.normalize_indicator(value)[0]
+    actor = user["username"] if user else None
+    entities.record_observation(conn, "indicator", key, "ingested", source, source_type, actor=actor,
+                                summary=summary or f"Added from {source}" + (f" by {actor}" if actor else ""))
+    if enrichment:
+        entities.record_enrichment(conn, key, enrichment, actor)
+
 @app.post("/iocs", status_code=201)
 async def add_ioc(ioc: IOCIn, user=Depends(require_full_access), conn=Depends(get_db)):
     canonical = refang(ioc.value.strip()); defanged = defang(canonical, ioc.type)
@@ -2924,6 +3000,7 @@ async def add_ioc(ioc: IOCIn, user=Depends(require_full_access), conn=Depends(ge
         (ioc_id,ioc.type,canonical,defanged,ioc.industry,ioc.tlp,final_confidence,ioc.description,
          ioc.tags,user["id"],psycopg2.extras.Json(enrichment),valid_until,ioc.mitre_techniques,ioc.campaign_id))
     record_score(conn, ioc_id, ioc.confidence, final_confidence, reasons, user["username"])
+    _note_ingest(conn, canonical, f"analyst:{user['username']}", "analyst", user, enrichment, "Added manually")
     audit(conn,"ADD",ioc_id,canonical,ioc.type,user)
     conn.commit()
     return {"id":ioc_id,"status":"created","confidence":final_confidence,
@@ -2973,6 +3050,7 @@ async def bulk_create_iocs(body: BulkIOCCreate, user=Depends(require_full_access
                 description,tags,created_by,enrichment,valid_until) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (ioc_id,item.type,canonical,defanged,item.industry,item.tlp,final_confidence,
                  item.description,item.tags,user["id"],psycopg2.extras.Json(enrichment),valid_until))
+            _note_ingest(conn, canonical, "Bulk lookup", "analyst", user, enrichment, "Added from a bulk lookup")
             audit(conn,"ADD",ioc_id,canonical,item.type,user)
             created.append({"id": ioc_id, "value": canonical})
         except Exception as e:
@@ -2990,8 +3068,14 @@ def toggle_fp(ioc_id: str, body: FPUpdate, user=Depends(require_full_access), co
     if user["role"] != "admin" and ioc["created_by"] != user["id"]:
         raise HTTPException(status_code=403, detail="You can only mark your own IOCs as FP")
     cur2 = conn.cursor()
-    cur2.execute("UPDATE iocs SET false_positive = %s, fp_reason = %s WHERE id = %s",
+    cur2.execute("UPDATE iocs SET false_positive = %s, fp_reason = %s WHERE id = %s RETURNING value",
         (body.false_positive, body.reason, ioc_id))
+    row = cur2.fetchone()
+    if row:   # keep the entity timeline honest about v1 status changes too
+        entities.record_observation(conn, "indicator", entities.normalize_indicator(row[0])[0], "status_change",
+                                    f"analyst:{user['username']}", "analyst", actor=user["username"],
+                                    summary=("Marked false positive" + (f" — {body.reason}" if body.reason else "")) if body.false_positive
+                                    else "False-positive flag removed")
     conn.commit(); return {"status":"updated","false_positive":body.false_positive}
 
 @app.patch("/iocs/{ioc_id}/campaign")
@@ -3014,6 +3098,7 @@ async def re_enrich(ioc_id: str, user=Depends(require_full_access), conn=Depends
     cur2.execute("UPDATE iocs SET enrichment = %s, confidence = %s WHERE id = %s",
         (psycopg2.extras.Json(enrichment), new_score, ioc_id))
     record_score(conn, ioc_id, old_score, new_score, reasons, user["username"])
+    entities.record_enrichment(conn, entities.normalize_indicator(ioc["value"])[0], enrichment, user["username"])
     conn.commit(); return {"confidence":new_score,"enrichment":enrichment}
 
 # ── BULK IOC LOOKUP / VALIDATOR ──────────────────────────────────────────────
@@ -4115,7 +4200,8 @@ def get_audit(limit: int=100, admin=Depends(require_admin), conn=Depends(get_db)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/public/search")
-async def public_search(q: str, conn=Depends(get_db)):
+@limiter.limit("10/minute;100/day")
+async def public_search(request: Request, q: str, conn=Depends(get_db)):
     """
     Public IOC lookup — no auth required. Enriches and returns results.
     Does NOT auto-add to the IOC feed. That must be an explicit user action.
@@ -4132,7 +4218,6 @@ async def public_search(q: str, conn=Depends(get_db)):
                 "confidence":existing["confidence"],"tlp":existing["tlp"],"industry":existing["industry"],
                 "description":existing["description"],"tags":existing["tags"],
                 "last_updated":existing.get("enrichment",{}).get("enriched_at") if existing.get("enrichment") else None,
-                "added_by":existing.get("author","unknown"),
                 "created_at":existing["created_at"].isoformat() if existing.get("created_at") else None,
                 "enrichment":existing.get("enrichment")}
     if ioc_type == "Unknown":
@@ -4155,6 +4240,19 @@ async def public_search(q: str, conn=Depends(get_db)):
 @app.post("/osint/lookup")
 @limiter.limit("30/minute")
 async def osint_lookup(request: Request, body: OSINTRequest, user=Depends(get_current_user)):
+    body.target = refang((body.target or "").strip())
+    # The target is interpolated into upstream URLs (one of which carries the
+    # Shodan key), so it must be exactly what its type claims to be.
+    if body.target_type == "ip":
+        ok = security.is_valid_ip(body.target)
+    elif body.target_type == "domain":
+        ok = security.is_valid_domain(body.target)
+    elif body.target_type == "email":
+        ok = bool(re.fullmatch(r"[^@\s]{1,64}@[^@\s]{1,255}", body.target)) and security.is_valid_domain(body.target.split("@")[1])
+    else:
+        ok = False
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"'{body.target[:80]}' is not a valid {body.target_type}")
     results = {"target":body.target,"type":body.target_type,"data":{}}
     try:
         if body.target_type in ("domain","ip"):
@@ -4162,7 +4260,8 @@ async def osint_lookup(request: Request, body: OSINTRequest, user=Depends(get_cu
             for record_type in ["A","MX","TXT","NS","CNAME"]:
                 try:
                     async with httpx.AsyncClient(timeout=8) as c:
-                        r = await c.get(f"https://dns.google/resolve?name={body.target}&type={record_type}",
+                        r = await c.get("https://dns.google/resolve",
+                                        params={"name":body.target,"type":record_type},
                                         headers={"Accept":"application/json"})
                     if r.status_code == 200:
                         answers = r.json().get("Answer",[])
@@ -4209,13 +4308,14 @@ async def osint_lookup(request: Request, body: OSINTRequest, user=Depends(get_cu
                 domain = body.target.split("@")[1] if "@" in body.target else None
                 if domain:
                     async with httpx.AsyncClient(timeout=8) as c:
-                        r = await c.get(f"https://dns.google/resolve?name={domain}&type=MX",
+                        r = await c.get("https://dns.google/resolve", params={"name":domain,"type":"MX"},
                                         headers={"Accept":"application/json"})
                     if r.status_code == 200:
                         results["data"]["email_domain_mx"] = [a.get("data","") for a in r.json().get("Answer",[])]
             except Exception: pass
     except Exception as e:
-        results["error"] = str(e)
+        print(f"[osint] lookup failed: {type(e).__name__}: {e}")
+        results["error"] = "Lookup failed — see server log."
     results["queried_at"] = datetime.now(timezone.utc).isoformat()
     return results
 
@@ -4287,8 +4387,7 @@ async def _trace_guard(url: str):
         except ValueError:
             raise ValueError(f"unparseable address {ip}")
         # is_link_local covers 169.254.0.0/16, i.e. the cloud metadata endpoint
-        if (a.is_private or a.is_loopback or a.is_link_local or a.is_reserved
-                or a.is_multicast or a.is_unspecified):
+        if not security.is_public_ip(ip):
             raise ValueError(f"host resolves to non-public address {ip} — blocked (SSRF guard)")
     return host, port, ips
 
@@ -4337,8 +4436,11 @@ async def trace_redirects(request: Request, body: RedirectTraceRequest,
     # Two clients: hostile hosts routinely have broken certificates, and refusing
     # to look at them would make the tool useless exactly when it matters. We try
     # strict first purely so we can *report* whether the cert was valid.
-    async with httpx.AsyncClient(follow_redirects=False, timeout=12.0) as strict, \
-               httpx.AsyncClient(follow_redirects=False, timeout=12.0, verify=False) as loose:
+    # _trace_guard above gives a friendly error, but it resolves separately from
+    # the connection. These clients re-check at connect time and connect to the
+    # vetted IP, so DNS rebinding cannot swap in an internal address.
+    async with security.safe_client(timeout=12.0) as strict, \
+               security.safe_client(timeout=12.0, verify=False) as loose:
 
         for n in range(1, max_hops + 1):
             if current in seen:
@@ -5396,7 +5498,8 @@ Be factual. Use the provided data only. Do not invent version numbers or links."
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM error: {type(e).__name__}: {e}")
+        print(f"[llm] {type(e).__name__}: {str(e)[:200]}")
+        raise HTTPException(status_code=502, detail=f"The AI service failed ({type(e).__name__}). Try again shortly.")
 
     # Extract subject line for emails
     subject = ""
@@ -5422,10 +5525,15 @@ Be factual. Use the provided data only. Do not invent version numbers or links."
         "score":      score,
     }
 
-@app.get("/mitre/actor")
-async def mitre_actor_lookup(name: str, user=Depends(get_current_user)):
+# The ATT&CK dataset is tens of MB and this host has <1GB of RAM, so parsing it
+# per request could take the API down. Results are cached per group in Postgres
+# for MITRE_TTL_DAYS and only one parse runs at a time.
+MITRE_TTL_DAYS = 7
+_MITRE_LOCK = asyncio.Lock()
+
+async def _mitre_fetch(name: str) -> dict:
     try:
-        async with httpx.AsyncClient(timeout=20, headers={"User-Agent":"ThreatFeed-CTI/1.0"}) as c:
+        async with httpx.AsyncClient(timeout=30, headers={"User-Agent":"ThreatFeed-CTI/1.0"}) as c:
             r = await c.get("https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json")
         if r.status_code != 200: return {"found":False,"error":f"MITRE CTI HTTP {r.status_code}"}
         objects = r.json().get("objects",[]); name_lc = name.lower(); actor = None
@@ -5454,20 +5562,62 @@ async def mitre_actor_lookup(name: str, user=Depends(get_current_user)):
         mitre_url = next((e.get("url","") for e in ext_refs if "mitre" in e.get("url","")),"")
         return {"found":True,"name":actor.get("name"),"also_known_as":actor.get("aliases",[]),
                 "description":actor.get("description",""),"ttps":techniques[:20],
-                "malware_used":malware_used[:10],"tools_used":tools_used[:10],
-                "references":refs[:5],"mitre_url":mitre_url,"active_status":"Unknown","source":"MITRE ATT&CK"}
+                "malware_used":malware_used[:40],"tools_used":tools_used[:20],
+                "references":refs[:5],"mitre_url":mitre_url,"active_status":"Unknown","source":"MITRE ATT&CK",
+                "fetched_at":datetime.now(timezone.utc).isoformat()}
     except Exception as e:
-        return {"found":False,"error":str(e)}
+        print(f"[mitre] lookup failed: {type(e).__name__}: {e}")
+        return {"found":False,"error":"Could not read the MITRE ATT&CK dataset right now."}
+
+async def mitre_lookup(name: str, conn) -> dict:
+    key = (name or "").strip().lower()[:200]
+    if not key:
+        return {"found": False, "name": name}
+    def cached():
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cur.execute("""SELECT payload FROM mitre_cache WHERE name_key = %s
+                AND fetched_at > NOW() - (%s || ' days')::interval""", (key, str(MITRE_TTL_DAYS)))
+            row = cur.fetchone()
+            return row["payload"] if row else None
+        except Exception:
+            conn.rollback(); return None
+    hit = cached()
+    if hit is not None:
+        return hit
+    async with _MITRE_LOCK:
+        hit = cached()          # another request may have filled it while we waited
+        if hit is not None:
+            return hit
+        data = await _mitre_fetch(name.strip())
+        if not data.get("error"):
+            try:
+                conn.cursor().execute("""INSERT INTO mitre_cache (name_key, payload) VALUES (%s,%s)
+                    ON CONFLICT (name_key) DO UPDATE SET payload = EXCLUDED.payload, fetched_at = NOW()""",
+                    (key, psycopg2.extras.Json(data)))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+        return data
+
+@app.get("/mitre/actor")
+async def mitre_actor_lookup(name: str, user=Depends(get_current_user), conn=Depends(get_db)):
+    return await mitre_lookup(name, conn)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STIX + TAXII EXPORT
 # ═══════════════════════════════════════════════════════════════════════════════
+
+MAX_IMPORT_ITEMS = 1000      # each item is enriched against paid upstream APIs
 
 STIX_TYPE_MAP = {"ipv4-addr":"IPv4","ipv6-addr":"IPv6","domain-name":"Domain","url":"URL","email-addr":"Email"}
 
 @app.post("/iocs/import/stix")
 async def import_stix(body: STIXImport, user=Depends(require_cap("ioc.import")), conn=Depends(get_db)):
     objects = body.bundle.get("objects",[]); results = {"imported":0,"skipped":0,"errors":[]}
+    if len(objects) > MAX_IMPORT_ITEMS:
+        raise HTTPException(status_code=413,
+            detail=f"Bundle has {len(objects)} objects; the limit is {MAX_IMPORT_ITEMS} per import.")
     cur = conn.cursor()
     for obj in objects:
         if obj.get("type") != "indicator": continue
@@ -5494,6 +5644,8 @@ async def import_stix(body: STIXImport, user=Depends(require_cap("ioc.import")),
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING""",
                 (ioc_id,ioc_type,canonical,defanged,"General",tlp,final_confidence,
                  obj.get("description",""),obj.get("labels",[]),user["id"],psycopg2.extras.Json(enrichment)))
+            if cur.rowcount > 0:
+                _note_ingest(conn, canonical, "STIX import", "import", user, enrichment)
             audit(conn,"ADD",ioc_id,canonical,ioc_type,user); results["imported"] += 1
         except Exception as e:
             results["errors"].append({"id":obj.get("id","?"),"error":str(e)}); results["skipped"] += 1
@@ -5509,7 +5661,7 @@ async def poll_taxii(body: TAXIIPoll, user=Depends(require_cap("ioc.import")), c
     # Server Error", which tells the analyst nothing about a server address they
     # typed themselves.
     try:
-        async with httpx.AsyncClient(timeout=30) as c:
+        async with security.safe_client(timeout=30) as c:
             r = await c.get(url, headers=headers)
     except Exception as e:
         raise HTTPException(status_code=502,
@@ -5532,11 +5684,13 @@ async def poll_taxii(body: TAXIIPoll, user=Depends(require_cap("ioc.import")), c
 async def misp_pull(body: MISPPull, user=Depends(require_cap("ioc.import")), conn=Depends(get_db)):
     headers = {"Authorization":body.misp_key,"Accept":"application/json","Content-Type":"application/json"}
     url = f"{body.misp_url.rstrip('/')}/attributes/restSearch"
-    payload = {"returnFormat":"json","limit":body.limit,"type":["ip-dst","ip-src","domain","url","md5","sha1","sha256"]}
+    payload = {"returnFormat":"json","limit":max(1, min(body.limit or 100, MAX_IMPORT_ITEMS)),"type":["ip-dst","ip-src","domain","url","md5","sha1","sha256"]}
     # Same failure as the TAXII importer had: an unreachable or mistyped MISP
     # host escaped as a bare 500 with no explanation.
     try:
-        async with httpx.AsyncClient(timeout=30, verify=False) as c:
+        # verify=False stays: self-hosted MISP instances commonly use private CAs.
+        # The address guard is what stops this becoming an internal-network probe.
+        async with security.safe_client(timeout=30, verify=False) as c:
             r = await c.post(url, headers=headers, json=payload)
     except Exception as e:
         raise HTTPException(status_code=502,
@@ -5568,6 +5722,9 @@ async def misp_pull(body: MISPPull, user=Depends(require_cap("ioc.import")), con
                 (ioc_id,ioc_type,value,defanged,"General","AMBER",final_confidence,
                  f"MISP: {attr.get('comment','')}",
                  [attr.get("category","misp")],user["id"],psycopg2.extras.Json(enrichment)))
+            if cur.rowcount > 0:
+                _note_ingest(conn, value, "MISP", "import", user, enrichment,
+                             f"Pulled from MISP ({attr.get('category') or 'attribute'})")
             results["imported"] += 1
         except Exception as e:
             results["errors"].append({"error":str(e)}); results["skipped"] += 1
@@ -5576,9 +5733,13 @@ async def misp_pull(body: MISPPull, user=Depends(require_cap("ioc.import")), con
 @app.post("/iocs/import/csv")
 async def import_csv(file: UploadFile = File(...), user=Depends(require_cap("ioc.import")), conn=Depends(get_db)):
     content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="CSV too large (max 5MB).")
     reader  = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
     results = {"imported":0,"skipped":0,"errors":[]}; cur = conn.cursor()
     for i, row in enumerate(reader):
+        if i >= MAX_IMPORT_ITEMS:
+            results["errors"].append({"row":i+2,"error":f"stopped at {MAX_IMPORT_ITEMS} rows"}); break
         try:
             ioc_type = row.get("type","").strip(); value = refang(row.get("value","").strip())
             if not ioc_type or not value: results["skipped"] += 1; continue
@@ -5593,6 +5754,8 @@ async def import_csv(file: UploadFile = File(...), user=Depends(require_cap("ioc
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING""",
                 (ioc_id,ioc_type,value,defanged,row.get("industry","General"),row.get("tlp","AMBER"),
                  final_confidence,row.get("description",""),tags,user["id"],psycopg2.extras.Json(enrichment),valid_until))
+            if cur.rowcount > 0:
+                _note_ingest(conn, value, "CSV import", "import", user, enrichment)
             audit(conn,"ADD",ioc_id,value,ioc_type,user); results["imported"] += 1
         except Exception as e:
             results["errors"].append({"row":i+2,"error":str(e)}); results["skipped"] += 1
@@ -5610,14 +5773,14 @@ def stix_bundle(industry: Optional[str]=None, include_expired: bool=False,
             "created":datetime.now(timezone.utc).isoformat(),"objects":[row_to_stix(r) for r in rows]}
 
 @app.get("/taxii/")
-def taxii_discovery(user=Depends(require_full_access)):
+def taxii_discovery(user=Depends(require_cap("ioc.export"))):
     return JSONResponse(content={"title":"ThreatFeed Intelligence Platform",
         "description":"Industry-vertical IOC intelligence","contact":"ti@your-domain.com",
         "default":f"{SERVER_URL}/","api_roots":[f"{SERVER_URL}/"]},
         media_type="application/taxii+json;version=2.1")
 
 @app.get("/collections/")
-def taxii_collections(user=Depends(get_current_user)):
+def taxii_collections(user=Depends(require_cap("ioc.export"))):
     industries = ["Fintech","Medical","Gaming","Retail","Energy","Government","Telecom"]
     return JSONResponse(content={"collections":[{"id":f"{COLLECTION_ID[:-1]}{i}",
         "title":f"{ind} Threat Intelligence","description":f"IOC feed for the {ind} sector",
@@ -5625,7 +5788,7 @@ def taxii_collections(user=Depends(get_current_user)):
         for i,ind in enumerate(industries)]},media_type="application/taxii+json;version=2.1")
 
 @app.get("/collections/{collection_id}/objects/")
-def taxii_objects(collection_id: str, user=Depends(get_current_user), conn=Depends(get_db)):
+def taxii_objects(collection_id: str, user=Depends(require_cap("ioc.export")), conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM iocs WHERE (valid_until IS NULL OR valid_until > NOW()) AND (false_positive IS NULL OR false_positive = FALSE) ORDER BY created_at DESC")
     rows = cur.fetchall()
@@ -5962,11 +6125,16 @@ async def suggested_cves(limit: int = 15, days: int = 30, user=Depends(get_curre
     Returns the top {limit} most actionable CVEs.
     """
     results = []
+    limit, days = max(1, min(limit, 50)), max(1, min(days, 365))
 
-    async with httpx.AsyncClient(timeout=15) as c:
-        # Pull full CISA KEV catalog
-        kev_r = await c.get(
-            "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json")
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            # Pull full CISA KEV catalog
+            kev_r = await c.get(
+                "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json")
+    except httpx.HTTPError as e:
+        # An unreachable upstream is a 502 the UI can explain, not a bare 500.
+        raise HTTPException(status_code=502, detail=f"Could not reach the CISA KEV catalog ({type(e).__name__})")
 
     if kev_r.status_code != 200:
         raise HTTPException(status_code=502, detail="Could not fetch CISA KEV catalog")
@@ -6302,7 +6470,8 @@ Return as JSON: {{"subject": "TLP:{body.tlp} // Threat Advisory — {body.client
             "cves":       cves,
         }
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Advisory generation failed: {e}")
+        print(f"[advisory] {type(e).__name__}: {str(e)[:200]}")
+        raise HTTPException(status_code=502, detail="Advisory generation failed. Check the server log for details.")
 
 
     async with httpx.AsyncClient(timeout=45) as c:
@@ -6464,7 +6633,8 @@ async def upload_file(request: Request, file: UploadFile = File(...),
     except Exception as e:
         if os.path.exists(dest):
             os.remove(dest)
-        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+        print(f"[files] upload failed: {type(e).__name__}: {str(e)[:200]}")
+        raise HTTPException(status_code=500, detail="Upload failed")
 
     if size == 0:
         os.remove(dest)
@@ -6681,12 +6851,14 @@ from types import SimpleNamespace as _NS
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import intel_api as _intel_api
 
-_intel_api.register(app, _NS(
+INTEL_DEPS = _NS(   # module-level so tests can substitute the network fetchers
     get_db=get_db, get_db_direct=get_db_direct,
     get_current_user=get_current_user, require_full_access=require_full_access,
     require_admin=require_admin, require_cap=require_cap, effective_caps=effective_caps,
     refang=refang, defang=defang, detect_type=detect_type,
     audit=audit, create_notification=create_notification,
     fetch_rss=fetch_rss, fetch_cve_rss=fetch_cve_rss, RSS_FEEDS=RSS_FEEDS, CVE_FEEDS=CVE_FEEDS,
-))
+    mitre_lookup=mitre_lookup,
+)
+_intel_api.register(app, INTEL_DEPS)
 

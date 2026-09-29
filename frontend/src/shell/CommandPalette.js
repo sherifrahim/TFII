@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Icon from "../components/Icon";
-import { TypeBadge, SevBadge, useDebounced } from "../components/ui";
+import { useDebounced } from "../components/ui";
+import { HitBadges, hitIcon, hitRoute } from "../components/SearchHit";
 import { apiJSON } from "../lib/api";
 import { navigate, entityRoute, enc } from "../lib/router";
 import { detectType, refang } from "../lib/format";
@@ -47,22 +48,19 @@ export default function CommandPalette({ onClose }) {
 
     if (q.trim()) {
       if (t === "CVE") add("Jump to", { key: "cve-jump", icon: "shieldAlert", label: <span>Open <span className="mono">{val.toUpperCase()}</span></span>, meta: "CVE intelligence", run: () => navigate(`/cve/${enc(val.toUpperCase())}`) });
-      else if (t && hasData) add("Jump to", { key: "ent-jump", icon: "crosshair", label: <span>Open entity <span className="mono">{val}</span></span>, meta: t, run: () => navigate(`/observable/${enc(val)}`) });
+      else if (t && hasData) add("Jump to", { key: "ent-jump", icon: "crosshair", label: <span>Open indicator <span className="mono">{val}</span></span>, meta: t, run: () => navigate(`/observable/${enc(val)}`) });
       add("Jump to", { key: "search-all", icon: "search", label: <span>Search everything for “{q.trim()}”</span>, meta: "Enter", run: () => { pushRecentSearch(q.trim()); navigate("/search", { q: q.trim() }); } });
     }
 
-    const g = res?.groups || {};
-    (g.iocs || []).forEach(r => add("Indicators", { key: `ioc-${r.id}`, icon: "crosshair", label: <span className="mono trunc">{r.value}</span>, badge: <TypeBadge type={r.type} />, meta: `conf ${r.confidence}`, run: () => navigate(entityRoute("ioc", r.id)) }));
-    (g.cves || []).forEach(r => add("CVEs", { key: `cve-${r.cve_id}`, icon: "shieldAlert", label: <span className="mono">{r.cve_id}</span>, badge: <SevBadge severity={r.severity} score={r.cvss_score} />, meta: r.asset_name || "", run: () => navigate(entityRoute("cve", r.cve_id)) }));
-    (g.software || []).forEach(r => add("Software", { key: `sw-${r.id}`, icon: "package", label: r.name, meta: `${r.cve_count} CVEs`, run: () => navigate(entityRoute("software", r.id)) }));
-    (g.actors || []).forEach(r => add("Threat actors", { key: `ac-${r.name}`, icon: "skull", label: r.name, meta: `${r.campaigns} campaign(s)`, run: () => navigate(entityRoute("actor", r.name)) }));
-    (g.malware || []).forEach(r => add("Malware", { key: `mw-${r.name}`, icon: "bug", label: r.name, meta: `${r.iocs} IOCs`, run: () => navigate(entityRoute("malware", r.name)) }));
-    (g.campaigns || []).forEach(r => add("Campaigns", { key: `cp-${r.id}`, icon: "flag", label: r.name, meta: `${r.ioc_count} IOCs`, run: () => navigate(entityRoute("campaign", r.id)) }));
-    (g.investigations || []).forEach(r => add("Investigations", { key: `inv-${r.id}`, icon: "briefcase", label: r.name, meta: r.key, run: () => navigate(entityRoute("investigation", r.id)) }));
-    (g.notes || []).forEach(r => add("Notes", { key: `note-${r.id}`, icon: "note", label: r.title || (r.snippet || "").slice(0, 60), meta: "note", run: () => navigate(r.investigation_id ? `/investigations/${enc(r.investigation_id)}` : "/workspace", r.investigation_id ? { tab: "notes" } : { tab: "notes" }) }));
+    // One row per hit, grouped by whatever kinds the server returned (best hit first).
+    Object.values(res?.groups || {}).forEach(grp => grp.hits.forEach(h => {
+      const [to, query] = hitRoute(h);
+      add(grp.label, { key: `${h.kind}-${h.ref}`, icon: hitIcon(h), badge: <HitBadges h={h} />, meta: h.subtitle || "",
+        label: <span className={h.kind === "indicator" || h.kind === "cve" ? "mono trunc" : "trunc"}>{h.title}</span>, run: () => navigate(to, query) });
+    }));
 
     if (!q.trim()) {
-      recentEntities().forEach(r => add("Recent", { key: `re-${r.kind}-${r.ref}`, icon: r.kind === "cve" ? "shieldAlert" : r.kind === "investigation" ? "briefcase" : "clock", label: <span className={r.kind === "ioc" ? "mono" : ""}>{r.label}</span>, meta: r.kind, run: () => navigate(entityRoute(r.kind, r.ref)) }));
+      recentEntities().forEach(r => add("Recent", { key: `re-${r.kind}-${r.ref}`, icon: r.kind === "cve" ? "shieldAlert" : r.kind === "investigation" ? "briefcase" : "clock", label: <span className={["ioc", "indicator", "cve"].includes(r.kind) ? "mono" : ""}>{r.label}</span>, meta: r.kind === "ioc" ? "indicator" : r.kind, run: () => navigate(entityRoute(r.kind, r.ref)) }));
       recentSearches().forEach(s => add("Recent searches", { key: `rs-${s}`, icon: "search", label: s, run: () => setQ(s) }));
     }
 
@@ -97,11 +95,12 @@ export default function CommandPalette({ onClose }) {
         <div className="cmdk-in">
           <Icon name="search" size={16} />
           <input autoFocus value={q} onChange={e => setQ(e.target.value)} onKeyDown={onKey} spellCheck={false}
+            role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-activedescendant={items[idx] ? `cmdk-${idx}` : undefined} aria-label="Search TFII"
             placeholder="Search IOCs, CVEs, domains, hashes, actors, campaigns — or type a command" />
           {loading && <span className="spinner" />}
           <kbd>Esc</kbd>
         </div>
-        <div className="cmdk-list" ref={listRef}>
+        <div className="cmdk-list" ref={listRef} id="cmdk-list" role="listbox">
           {items.length === 0 && <div className="state"><div className="d">{dq.length >= 2 && !loading ? "No matches." : "Type to search across the platform."}</div></div>}
           {items.map((it, i) => {
             const header = it.group !== lastGroup ? <div className="cmdk-group">{it.group}</div> : null;
@@ -109,7 +108,7 @@ export default function CommandPalette({ onClose }) {
             return (
               <React.Fragment key={it.key}>
                 {header}
-                <div data-i={i} className={`cmdk-item ${i === idx ? "on" : ""}`} onMouseMove={() => setIdx(i)}
+                <div data-i={i} id={`cmdk-${i}`} role="option" aria-selected={i === idx} className={`cmdk-item ${i === idx ? "on" : ""}`} onMouseMove={() => setIdx(i)}
                   onClick={() => { if (q.trim()) pushRecentSearch(q.trim()); it.run(); if (!it.key.startsWith("rs-")) onClose(); }}>
                   <span className="ci-ico"><Icon name={it.icon} size={13} /></span>
                   <span className="ci-main"><span className="trunc">{it.label}</span>{it.badge}</span>

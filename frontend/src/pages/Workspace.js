@@ -5,12 +5,13 @@ import { useSession, pushRecentEntity } from "../lib/session";
 import { fmtDate, fmtDateTime, timeAgo, detectType, refang, typeGroup } from "../lib/format";
 import {
   PageHeader, Panel, Button, IconButton, Badge, TypeBadge, Conf, StatusBadge, SevBadge, Tabs, Modal, Field, Select, SearchInput,
-  EmptyState, ErrorState, Loading, Skeleton, CopyButton, Menu, useToast,
+  EmptyState, ErrorState, Loading, Skeleton, CopyButton, Menu, useToast, actionable, rowAction,
 } from "../components/ui";
+import { ReasonModal } from "./entity/parts";
 import Graph from "../components/Graph";
 import Icon from "../components/Icon";
 import { SEV_COLOR, LEGACY_C } from "../design/tokens";
-import { WorkspacePage as LegacyNotes } from "../legacy/LegacyComponents";
+import { LegacyNotes } from "../legacy/lazy";
 
 const STATUSES = [["open", "Open"], ["active", "Active"], ["monitoring", "Monitoring"], ["closed", "Closed"]];
 const SEVS = [["critical", "Critical"], ["high", "High"], ["medium", "Medium"], ["low", "Low"]];
@@ -95,6 +96,7 @@ export function InvestigationPage({ id, tab = "overview" }) {
   const { can } = useSession();
   const toast = useToast();
   const [editing, setEditing] = useState(false);
+  const [reasonFor, setReasonFor] = useState(null);
   useEffect(() => { if (data?.investigation) pushRecentEntity({ kind: "investigation", ref: id, label: data.investigation.name }); }, [data, id]);
   if (error) return <div className="page"><ErrorState error={error} onRetry={reload} /></div>;
   if (loading && !data) return <div className="page"><Loading /></div>;
@@ -158,10 +160,15 @@ export function InvestigationPage({ id, tab = "overview" }) {
             <Panel title="Linked intelligence" tight actions={<AddLinked invId={id} onDone={() => reload(true)} />}>
               {linked.length === 0 ? <div className="faint small" style={{ padding: 16 }}>Link CVEs, campaigns, threat actors or malware families this investigation covers.</div> :
                 linked.map(it => (
-                  <div key={it.id} className="list-row clickable" onClick={() => navigate(entityRoute(it.item_type, it.ref_id || it.value))}>
-                    <Badge outline>{it.item_type}</Badge>
-                    <span className={it.item_type === "cve" ? "mono" : ""} style={{ flex: 1 }}>{it.item_type === "cve" ? it.ref_id : (it.label || it.value)}</span>
+                  <div key={it.id} className="list-row clickable" style={{ alignItems: "flex-start", padding: "8px 16px" }}
+                    {...actionable(() => navigate(entityRoute(it.item_type, it.ref_id || it.value, id)))}>
+                    <Badge outline>{it.item_type === "asset" ? "software" : it.item_type}</Badge>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className={it.item_type === "cve" ? "mono" : ""} style={{ overflowWrap: "anywhere" }}>{it.item_type === "cve" ? it.ref_id : (it.label || it.value)}</div>
+                      <div className="xs" style={{ color: it.reason ? "var(--text-3)" : "var(--text-4)", overflowWrap: "anywhere" }}>{it.reason ? `Relevant because: ${it.reason}` : "No reason recorded"}</div>
+                    </div>
                     {it.cve && <>{it.cve.kev_listed && <Badge tone="critical">KEV</Badge>}<SevBadge severity={it.cve.severity} score={it.cve.cvss_score} /><span className="faint xs">{it.cve.asset_name}</span></>}
+                    <IconButton icon="edit" size="sm" title="Edit reason" onClick={e => { e.stopPropagation(); setReasonFor(it); }} />
                     <IconButton icon="x" size="sm" title="Remove" onClick={e => { e.stopPropagation(); removeItem(it); }} />
                   </div>
                 ))}
@@ -172,12 +179,14 @@ export function InvestigationPage({ id, tab = "overview" }) {
           </Panel>
         </div>
       )}
-      {tab === "iocs" && <IocsTab id={id} items={indicators} reload={reload} remove={removeItem} />}
+      {tab === "iocs" && <IocsTab id={id} items={indicators} reload={reload} remove={removeItem} editReason={setReasonFor} />}
       {tab === "infra" && <InfraTab id={id} items={indicators} />}
       {tab === "detection" && <DetectionTab id={id} items={detections} reload={reload} remove={removeItem} />}
       {tab === "timeline" && <TimelineTab id={id} events={data.events} reload={reload} />}
       {tab === "notes" && <NotesTab id={id} notes={data.notes} reload={reload} />}
       {tab === "artifacts" && <ArtifactsTab id={id} items={artifacts} reload={reload} remove={removeItem} />}
+      {reasonFor && <ReasonModal title="Why is this relevant?" initial={reasonFor.reason} onClose={() => setReasonFor(null)}
+        onSave={async r => { try { await apiJSON(`/v2/investigations/${enc(id)}/items/${reasonFor.id}`, { method: "PATCH", body: { reason: r } }); setReasonFor(null); reload(true); } catch (e) { toast(e.message, "error"); } }} />}
       {editing && <EditInvestigation inv={inv} onClose={() => setEditing(false)} onSave={async b => { await patch(b); setEditing(false); }} />}
     </div>
   );
@@ -199,32 +208,35 @@ function AddLinked({ invId, onDone }) {
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState("cve");
   const [val, setVal] = useState("");
-  const campaigns = useApi(open ? "/campaigns" : null);
+  const [reason, setReason] = useState("");
+  const campaigns = useApi(open && kind === "campaign" ? "/campaigns" : null);
+  const assets = useApi(open && kind === "software" ? "/assets" : null);
   const toast = useToast();
   async function add() {
     try {
-      const body = kind === "cve" ? { item_type: "cve", ref_id: val.trim() } : kind === "campaign" ? { item_type: "campaign", ref_id: val } : { item_type: kind, ref_id: val.trim(), value: val.trim(), label: val.trim() };
-      await apiJSON(`/v2/investigations/${enc(invId)}/items`, { method: "POST", body });
-      setOpen(false); setVal(""); onDone();
+      await apiJSON(`/v2/investigations/${enc(invId)}/entities`, { method: "POST", body: { kind, ref: val.trim(), reason: reason.trim() || null } });
+      setOpen(false); setVal(""); setReason(""); onDone();
     } catch (e) { toast(e.message, "error"); }
   }
+  const pick = kind === "campaign" ? campaigns.data : kind === "software" ? assets.data : null;
   return (<>
     <Button size="xs" icon="plus" onClick={() => setOpen(true)}>Link</Button>
     {open && (
       <Modal title="Link intelligence" onClose={() => setOpen(false)}
         footer={<><Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" disabled={!val.trim()} onClick={add}>Link</Button></>}>
-        <Field label="Type"><Select value={kind} onChange={v => { setKind(v); setVal(""); }} options={[["cve", "CVE"], ["campaign", "Campaign"], ["actor", "Threat actor"], ["malware", "Malware family"]]} /></Field>
-        <Field label={kind === "cve" ? "CVE ID" : kind === "campaign" ? "Campaign" : "Name"}>
-          {kind === "campaign"
-            ? <Select value={val} onChange={setVal} options={[["", "Select a campaign…"], ...((campaigns.data || []).map(c => [c.id, c.name]))]} />
+        <Field label="Type"><Select value={kind} onChange={v => { setKind(v); setVal(""); }} options={[["cve", "CVE"], ["campaign", "Campaign"], ["actor", "Threat actor"], ["malware", "Malware family"], ["software", "Software"]]} /></Field>
+        <Field label={kind === "cve" ? "CVE ID" : kind === "campaign" ? "Campaign" : kind === "software" ? "Software" : "Name"}>
+          {pick !== null && ["campaign", "software"].includes(kind)
+            ? <Select value={val} onChange={setVal} options={[["", `Select ${kind === "campaign" ? "a campaign" : "software"}…`], ...(pick || []).map(c => [c.id, c.name])]} />
             : <input className={`input ${kind === "cve" ? "mono" : ""}`} autoFocus value={val} onChange={e => setVal(e.target.value)} placeholder={kind === "cve" ? "CVE-2025-12345" : ""} />}
         </Field>
+        <Field label="Why is it relevant? (optional)"><input className="input" value={reason} maxLength={500} onChange={e => setReason(e.target.value)} /></Field>
       </Modal>
     )}
   </>);
 }
 
-function IocsTab({ id, items, reload, remove }) {
+function IocsTab({ id, items, reload, remove, editReason }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState("");
@@ -246,25 +258,27 @@ function IocsTab({ id, items, reload, remove }) {
     <div className="grid g-main-side">
       <Panel tight bodyStyle={{ padding: 0 }} title="Indicators" actions={<SearchInput value={filter} onChange={setFilter} placeholder="Filter" style={{ width: 200 }} />}>
         {rows.length === 0 ? <EmptyState icon="crosshair" title="No indicators yet" desc="Paste values on the right, or use “Add to investigation” from the IOC table and entity pages." /> : (
-          <table className="tbl"><thead><tr><th>Indicator</th><th>Type</th><th>Confidence</th><th>Status</th><th>Added</th><th /></tr></thead>
+          <div className="tbl-wrap"><table className="tbl"><thead><tr><th>Indicator</th><th>Type</th><th>Confidence</th><th>Status</th><th>Relevant because</th><th>Added</th><th /></tr></thead>
             <tbody>{rows.map(it => {
               const tracked = it.item_type === "ioc";
               const type = it.ioc_type || it.data?.type || it.label;
               return (
-                <tr key={it.id} className="clickable" onClick={() => navigate(tracked ? entityRoute("ioc", it.ref_id) : `/observable/${enc(it.value)}`)}>
+                <tr key={it.id} className="clickable" {...rowAction(() => navigate(tracked ? entityRoute("ioc", it.ref_id, id) : entityRoute("indicator", it.value, id)))}>
                   <td className="cellmono trunc" style={{ maxWidth: 420 }}>{it.ioc_value || it.value}{it.malware_family && it.malware_family !== "unknown" && <Badge tone="violet" style={{ marginLeft: 6 }}>{it.malware_family}</Badge>}</td>
                   <td><TypeBadge type={type} /></td>
                   <td>{tracked ? <Conf value={it.ioc_confidence} /> : <span className="faint xs">untracked</span>}</td>
                   <td>{tracked ? <StatusBadge status={it.ioc_status} /> : <Badge outline>Observable</Badge>}</td>
+                  <td className="wrapcell" style={{ maxWidth: 260, overflowWrap: "anywhere", color: it.reason ? "var(--text-2)" : "var(--text-4)" }}>{it.reason || "—"}</td>
                   <td className="muted">{timeAgo(it.created_at)} <span className="faint">· {it.created_by}</span></td>
                   <td onClick={e => e.stopPropagation()}><Menu trigger={t => <IconButton icon="more" size="sm" title="Actions" onClick={t} />} items={[
                     !tracked && { label: "Track as IOC", icon: "plus", onClick: () => navigate("/iocs/new", { value: it.value }) },
+                    { label: "Edit reason", icon: "edit", onClick: () => editReason(it) },
                     { label: "Copy value", icon: "copy", onClick: () => navigator.clipboard?.writeText(it.ioc_value || it.value) },
                     { label: "Remove from investigation", icon: "x", danger: true, onClick: () => remove(it) },
                   ]} /></td>
                 </tr>
               );
-            })}</tbody></table>
+            })}</tbody></table></div>
         )}
       </Panel>
       <Panel title="Add indicators">
@@ -278,7 +292,7 @@ function IocsTab({ id, items, reload, remove }) {
 }
 
 function InfraTab({ id, items }) {
-  const graph = useApi(`/v2/graph?kind=investigation&id=${enc(id)}`);
+  const graph = useApi(`/v2/entity/graph?kind=investigation&ref=${enc(id)}&depth=1`);
   const groups = useMemo(() => {
     const g = { domain: [], ip: [], url: [], hash: [], email: [] };
     items.forEach(it => { const t = typeGroup(it.ioc_type || it.data?.type || detectType(it.value || "")); if (g[t]) g[t].push(it); });
@@ -286,12 +300,12 @@ function InfraTab({ id, items }) {
   }, [items]);
   return (
     <div className="stack">
-      <Panel title="Infrastructure graph">{!graph.data ? <Skeleton h={400} /> : <Graph data={graph.data} centerId={`investigation:${id}`} height={500} emptyText="Add indicators to map infrastructure." />}</Panel>
+      <Panel title="Infrastructure graph">{!graph.data ? <Skeleton h={400} /> : <Graph data={graph.data} centerId={graph.data.center} height={500} emptyText="Add indicators to map infrastructure." />}</Panel>
       <div className="grid g4">
         {[["domain", "Domains"], ["ip", "IP addresses"], ["url", "URLs"], ["hash", "File hashes"]].map(([k, l]) => (
           <Panel key={k} title={l} sub={String(groups[k].length)} tight>
             {groups[k].length === 0 ? <div className="faint small" style={{ padding: "4px 16px 12px" }}>None</div> :
-              groups[k].map(it => <div key={it.id} className="list-row clickable" onClick={() => navigate(it.item_type === "ioc" ? entityRoute("ioc", it.ref_id) : `/observable/${enc(it.value)}`)}><span className="mono trunc">{it.ioc_value || it.value}</span></div>)}
+              groups[k].map(it => <div key={it.id} className="list-row clickable" {...actionable(() => navigate(it.item_type === "ioc" ? entityRoute("ioc", it.ref_id, id) : entityRoute("indicator", it.value, id)))}><span className="mono trunc">{it.ioc_value || it.value}</span></div>)}
           </Panel>
         ))}
       </div>
