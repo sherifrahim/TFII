@@ -239,6 +239,7 @@ This will be changed to a public facing IOC and CVE feed very soon enough.
 - Rate limiting: login 10/min, signup 5/hr
 - Per-user API keys encrypted
 - Port 8000 (backend) not exposed externally — Nginx/Caddy proxies everything
+- OTX (optional): set `OTX_API_KEY` or save a key under Settings → Manage API Keys to enable the AlienVault OTX feed
 - Scrub your deployment of any secrets before sharing: `git-filter-repo --replace-text replacements.txt`
 
 ---

@@ -275,8 +275,10 @@ def test_feed_ingestion_writes_an_observation_and_deduplicates(client, db, data)
     kw = dict(type_="Domain", value="feed-new.example", defanged="feed-new[.]example", tlp="AMBER", confidence=70,
               description="ThreatFox: X", tags=["threatfox"], enrichment={"source": "ThreatFox", "malware_family": "LummaTest"},
               valid_days=30, source="ThreatFox", source_ref="https://threatfox.abuse.ch/ioc/1/")
-    assert main._ingest_feed_ioc(cur, conn, **kw) is True
-    assert main._ingest_feed_ioc(cur, conn, **kw) is False          # a sighting, not a duplicate row
+    first = main._ingest_feed_ioc(cur, conn, **kw)
+    again = main._ingest_feed_ioc(cur, conn, **kw)
+    assert first[0] is True and first[1]
+    assert again[0] is False and again[1] == first[1]                # a sighting of the same row, not a duplicate
     conn.commit()
     c2 = db.cursor()
     c2.execute("SELECT COUNT(*) FROM iocs WHERE value='feed-new.example'")

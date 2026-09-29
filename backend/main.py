@@ -3,7 +3,7 @@ import html as _html   # aliased: one function uses a local named `html`
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 from urllib.parse import urlparse, urljoin
 
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Request
@@ -16,6 +16,7 @@ from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel
 
 import security
+import feeds
 import entities
 import psycopg2, psycopg2.extras
 from dotenv import load_dotenv
@@ -65,6 +66,7 @@ PLATFORM_KEYS = {
     "nvd":         NVD_API_KEY,
     "groq":        GROQ_API_KEY,
     "urlhaus":     URLHAUS_AUTH_KEY,
+    "otx":         os.getenv("OTX_API_KEY", ""),
 }
 
 # ── ENCRYPTION ────────────────────────────────────────────────────────────────
@@ -547,6 +549,7 @@ async def startup():
         scheduler.add_job(send_weekly_summary_job, CronTrigger(day_of_week="sun", hour=8, minute=0),
                           id="weekly_summary", replace_existing=True, misfire_grace_time=600)
         # Threat feed connectors — daily sync of ThreatFox/MalwareBazaar/URLhaus
+        scheduler.add_job(scheduled_feed_sync, IntervalTrigger(hours=1), id="feed_sync", replace_existing=True)
         scheduler.add_job(scheduled_connector_sync, IntervalTrigger(hours=24),
                           id="connector_sync", replace_existing=True, misfire_grace_time=3600)
         scheduler.start()
@@ -1353,32 +1356,38 @@ def _ingest_feed_ioc(cur, conn, *, type_, value, defanged, tlp, confidence, desc
                      valid_days, source, source_ref=None, observed_at=None):
     """Insert a feed indicator, or record a fresh sighting of one TFII already holds.
     Either way an observation is written, so provenance shows every feed that vouched
-    for the value. Returns True only for a brand-new indicator."""
+    for the value; a sighting also refreshes `last_seen` and pushes the expiry out
+    (an indicator a feed still lists is not stale). False positives are never renewed.
+    Returns (created, ioc_id)."""
     cur.execute("SAVEPOINT feed_ioc")
     try:
-        cur.execute("SELECT id FROM iocs WHERE value = %s AND type = %s LIMIT 1", (value, type_))
+        cur.execute("SELECT id, COALESCE(false_positive, FALSE) FROM iocs WHERE value = %s AND type = %s LIMIT 1", (value, type_))
         row = cur.fetchone()
         key = entities.normalize_indicator(value)[0]
         if row:
-            cur.execute("UPDATE iocs SET last_seen = NOW() WHERE id = %s", (row[0],))
+            cur.execute("""UPDATE iocs SET last_seen = NOW(),
+                    valid_until = CASE WHEN valid_until IS NULL OR %s THEN valid_until
+                                       ELSE GREATEST(valid_until, NOW() + %s * INTERVAL '1 day') END
+                WHERE id = %s""", (bool(row[1]), valid_days, row[0]))
             entities.record_observation(conn, "indicator", key, "sighting", source, "feed", source_ref=source_ref,
                                         observed_at=observed_at, confidence=confidence,
                                         summary=f"Seen again in {source} feed")
             cur.execute("RELEASE SAVEPOINT feed_ioc")
-            return False
+            return False, row[0]
+        ioc_id = f"indicator--{uuid.uuid4()}"
         cur.execute("""
             INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,
                 description,tags,enrichment,valid_until,last_seen)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
             ON CONFLICT DO NOTHING
-        """, (f"indicator--{uuid.uuid4()}", type_, value, defanged, "General", tlp, confidence, description,
+        """, (ioc_id, type_, value, defanged, "General", tlp, confidence, description,
               tags, psycopg2.extras.Json(enrichment), datetime.now(timezone.utc) + timedelta(days=valid_days)))
         created = cur.rowcount > 0
         if created:
             entities.record_observation(conn, "indicator", key, "ingested", source, "feed", source_ref=source_ref,
                                         observed_at=observed_at, confidence=confidence, summary=description[:300])
         cur.execute("RELEASE SAVEPOINT feed_ioc")
-        return created
+        return created, (ioc_id if created else None)
     except Exception:
         cur.execute("ROLLBACK TO SAVEPOINT feed_ioc")
         raise
@@ -1446,12 +1455,13 @@ async def run_threatfox_connector(conn, auth_key: str, days_back: int = 1) -> di
                 if malware: ioc_tags.append(malware.lower().replace(" ","_")[:30])
                 if tags: ioc_tags.extend(tags[:3])
 
-                ok = _ingest_feed_ioc(cur, conn, type_=tfii_type, value=canonical, defanged=defanged, tlp=tlp,
+                ok, _iid = _ingest_feed_ioc(cur, conn, type_=tfii_type, value=canonical, defanged=defanged, tlp=tlp,
                     confidence=confidence, description=desc, tags=ioc_tags, valid_days=90, source="ThreatFox",
                     source_ref=f"https://threatfox.abuse.ch/ioc/{item['id']}/" if item.get("id") else None,
                     observed_at=_feed_time(item.get("first_seen")),
                     enrichment={"source": "ThreatFox", "malware_family": malware, "threat_type": threat_type,
                                 "threatfox_id": item.get("id"), "enriched_at": datetime.now(timezone.utc).isoformat()})
+                if _iid: feeds.corroborate(conn, _iid, canonical, record_score)
                 if ok: added += 1
                 else: skipped += 1
             except Exception as e:
@@ -1500,7 +1510,7 @@ async def run_malwarebazaar_connector(conn, auth_key: str, limit: int = 100) -> 
                         ioc_tags.append(malware.lower().replace(" ","_")[:30])
                     if file_type: ioc_tags.append(file_type.lower()[:20])
 
-                    ok = _ingest_feed_ioc(cur, conn, type_=hash_type, value=hash_val, defanged=hash_val, tlp="RED",
+                    ok, _iid = _ingest_feed_ioc(cur, conn, type_=hash_type, value=hash_val, defanged=hash_val, tlp="RED",
                         confidence=85, valid_days=180, source="MalwareBazaar",
                         observed_at=_feed_time(sample.get("first_seen")),
                         source_ref=f"https://bazaar.abuse.ch/sample/{sha256}/" if sha256 else None,
@@ -1508,6 +1518,7 @@ async def run_malwarebazaar_connector(conn, auth_key: str, limit: int = 100) -> 
                         tags=ioc_tags,
                         enrichment={"source": "MalwareBazaar", "malware_family": malware, "file_type": file_type,
                                     "sha256": sha256, "md5": md5, "enriched_at": datetime.now(timezone.utc).isoformat()})
+                    if _iid: feeds.corroborate(conn, _iid, hash_val, record_score)
                     if ok: added += 1
                     else: skipped += 1
             except Exception as e:
@@ -1546,7 +1557,8 @@ async def run_urlhaus_connector(conn, auth_key: str, limit: int = 100) -> dict:
                 url_val = (item.get("url") or "").strip()
                 status  = item.get("url_status", "")
                 threat  = item.get("threat", "")
-                tags    = [t.get("tag","") for t in (item.get("tags") or [])]
+                # abuse.ch has served tags both as ["a","b"] and [{"tag":"a"}]; accept either.
+                tags    = [(t.get("tag","") if isinstance(t, dict) else str(t)) for t in (item.get("tags") or [])]
 
                 # Only ingest active or recently active malware URLs
                 if not url_val or status == "offline":
@@ -1557,7 +1569,7 @@ async def run_urlhaus_connector(conn, auth_key: str, limit: int = 100) -> dict:
                 if threat: ioc_tags.append(threat.lower().replace(" ","_")[:30])
                 if tags:   ioc_tags.extend([t.lower() for t in tags[:3] if t])
 
-                ok = _ingest_feed_ioc(cur, conn, type_="URL", value=canonical, defanged=defang(canonical, "URL"),
+                ok, _iid = _ingest_feed_ioc(cur, conn, type_="URL", value=canonical, defanged=defang(canonical, "URL"),
                     tlp="RED", confidence=85, valid_days=30,  # shorter TTL — URLs go offline fast
                     source="URLhaus", observed_at=_feed_time(item.get("date_added")),
                     source_ref=security.safe_http_url(item.get("urlhaus_reference") or ""),
@@ -1565,6 +1577,7 @@ async def run_urlhaus_connector(conn, auth_key: str, limit: int = 100) -> dict:
                     enrichment={"source": "URLhaus", "url_status": status, "threat": threat,
                                 "urlhaus_id": item.get("id"), "urlhaus_reference": item.get("urlhaus_reference", ""),
                                 "enriched_at": datetime.now(timezone.utc).isoformat()})
+                if _iid: feeds.corroborate(conn, _iid, canonical, record_score)
                 if ok: added += 1
                 else: skipped += 1
             except Exception as e:
@@ -1625,10 +1638,13 @@ def get_connector_settings_ep(admin=Depends(require_admin), conn=Depends(get_db)
 
 @app.post("/admin/connectors/settings")
 def save_connector_settings_ep(body: ConnectorSettingsBody, admin=Depends(require_admin), conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT value FROM system_settings WHERE key = %s", (CONNECTOR_SETTINGS_KEY,))
+    row = cur.fetchone()
+    cfg = json.loads(row["value"]) if row else {}
+    cfg.update(body.dict())            # keeps the feeds{} / min_confidence written by the catalog endpoints
     cur.execute("""INSERT INTO system_settings (key,value) VALUES (%s,%s)
-        ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value""",
-        (CONNECTOR_SETTINGS_KEY, json.dumps(body.dict())))
+        ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value""", (CONNECTOR_SETTINGS_KEY, json.dumps(cfg)))
     conn.commit()
     return {"status": "saved"}
 
@@ -1667,6 +1683,208 @@ async def sync_connectors(connectors: str = "all", admin=Depends(require_admin),
 
     total_added = sum(v.get("added",0) for v in results.values())
     return {"status": "complete", "results": results, "total_added": total_added}
+
+# ── Feed catalog: every indicator source in one list ─────────────────────────
+ABUSECH = {   # the three original connectors, exposed through the same catalog
+    "threatfox":     ("ThreatFox", "IPv4 · domain · URL · hash · malware family", "https://threatfox.abuse.ch/",
+                      "Community-reported IOCs tagged to malware families (confidence ≥ 50 only).", "threatfox_enabled", 24),
+    "malwarebazaar": ("MalwareBazaar", "SHA256 · MD5 · malware family", "https://bazaar.abuse.ch/",
+                      "Recently submitted malware samples with family and file type.", "malwarebazaar_enabled", 24),
+    "urlhaus":       ("URLhaus", "URL · malware distribution", "https://urlhaus.abuse.ch/",
+                      "Live malware-distribution URLs (offline ones are skipped).", "urlhaus_enabled", 24),
+}
+FEED_JOBS: dict = {}
+
+def _connector_cfg(conn) -> dict:
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT value FROM system_settings WHERE key = %s", (CONNECTOR_SETTINGS_KEY,))
+    row = cur.fetchone()
+    return json.loads(row["value"]) if row else {}
+
+def _feed_key(conn, feed_id: str, user=None) -> str:
+    f = feeds.FEEDS[feed_id]
+    if not f.key_env:
+        return ""
+    if user is not None:
+        return resolve_api_key(conn, "otx" if f.key_env == "OTX_API_KEY" else feed_id, user)[0] or ""
+    return os.getenv(f.key_env, "")
+
+async def _auto_enrich(conn, created: list, limit: int) -> dict:
+    """Enrich the highest-confidence indicators a feed run just created (VirusTotal / AbuseIPDB / URLhaus
+    with the platform keys), spaced for the free-tier limits. Enrichment may only RAISE confidence here:
+    a brand-new C2 that VirusTotal has not seen yet is not evidence that it is clean."""
+    done = 0
+    for row in created[:max(0, limit)]:
+        if row["type"] not in ("IPv4", "IPv6", "SHA256", "MD5", "SHA1"):
+            continue
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("SELECT * FROM iocs WHERE id = %s", (row["id"],))
+            ioc = cur.fetchone()
+            if not ioc:
+                continue
+            base = ioc["confidence"]
+            enr = await enrich(ioc["type"], ioc["value"], base, conn, force=True, existing=ioc.get("enrichment"), user=None)
+            answered = [k for k in ("virustotal", "abuseipdb", "urlhaus") if isinstance(enr.get(k), dict) and not enr[k].get("skipped") and not enr[k].get("error")]
+            new_conf = max(base, enr.get("calculated_confidence", base))
+            merged = {**(ioc.get("enrichment") or {}), **enr, "calculated_confidence": new_conf}
+            # keep the corroboration reasons alongside the enrichment reasons
+            merged["confidence_reasons"] = list(dict.fromkeys((ioc.get("enrichment") or {}).get("confidence_reasons", []) + enr.get("confidence_reasons", [])))
+            c2 = conn.cursor()
+            c2.execute("UPDATE iocs SET enrichment = %s, confidence = %s WHERE id = %s", (psycopg2.extras.Json(merged), new_conf, row["id"]))
+            if new_conf != base:
+                record_score(conn, row["id"], base, new_conf, enr.get("confidence_reasons", []), "auto-enrichment")
+            entities.record_enrichment(conn, entities.normalize_indicator(ioc["value"])[0], merged, "auto-enrichment")
+            conn.commit()
+            done += 1
+            if answered:
+                await asyncio.sleep(15)          # VirusTotal free tier: 4 requests / minute
+        except Exception as e:
+            conn.rollback()
+            print(f"[enrich] auto-enrichment skipped {row.get('value','?')[:40]}: {type(e).__name__}")
+    return {"enriched": done}
+
+async def _run_feed_job(feed_id: str, user=None):
+    FEED_JOBS[feed_id] = {"running": True, "started_at": datetime.now(timezone.utc).isoformat()}
+    conn = get_db_direct()
+    try:
+        cfg = _connector_cfg(conn)
+        if feed_id in ABUSECH:
+            key = URLHAUS_AUTH_KEY or (resolve_api_key(conn, "urlhaus", user)[0] if user else "")
+            if not key:
+                res = {"ok": False, "error": "No abuse.ch Auth-Key configured (URLHAUS_AUTH_KEY)."}
+            else:
+                fn = {"threatfox": run_threatfox_connector, "malwarebazaar": run_malwarebazaar_connector, "urlhaus": run_urlhaus_connector}[feed_id]
+                arg = {"threatfox": cfg.get("threatfox_days", 1), "malwarebazaar": cfg.get("malwarebazaar_limit", 100),
+                       "urlhaus": cfg.get("urlhaus_limit", 100)}[feed_id]
+                res = await fn(conn, key, arg)
+        else:
+            f = feeds.FEEDS[feed_id]
+            key = _feed_key(conn, feed_id, user)
+            if f.key_env and not key:
+                res = {"ok": False, "error": f"{f.name} needs an API key ({f.key_env} in .env, or Settings → API keys)."}
+            else:
+                res = await feeds.run_feed(conn, feed_id, cfg, ingest=_ingest_feed_ioc, record_score=record_score, defang=defang,
+                                           key=key, trusted_domains=tuple(TRUSTED_DOMAINS))
+                created = res.pop("created", [])
+                per_run = cfg.get("enrich_per_run", 8)
+                if res.get("ok") and created and per_run:
+                    res.update(await _auto_enrich(conn, created, int(per_run)))
+        log_connector_run(conn, feed_id, res)
+        print(f"[connector] {feed_id}: +{res.get('added', 0)} new, {res.get('skipped', 0)} sightings"
+              + (f", error: {res.get('error')}" if not res.get("ok") else ""))
+    except Exception as e:
+        try: conn.rollback()
+        except Exception: pass
+        print(f"[connector] {feed_id} failed: {type(e).__name__}: {e}")
+        log_connector_run(conn, feed_id, {"ok": False, "error": f"{type(e).__name__}: {str(e)[:160]}"})
+    finally:
+        FEED_JOBS[feed_id] = {"running": False, "finished_at": datetime.now(timezone.utc).isoformat()}
+        conn.close()
+
+@app.get("/admin/connectors/catalog")
+def connector_catalog(admin=Depends(require_admin), conn=Depends(get_db)):
+    cfg = _connector_cfg(conn)
+    fcfg = cfg.get("feeds") or {}
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT key, value FROM system_settings WHERE key LIKE 'connector_last_run_%'")
+    last = {r["key"].replace("connector_last_run_", ""): json.loads(r["value"]) for r in cur.fetchall()}
+    cur.execute("""SELECT COALESCE(NULLIF(enrichment->>'source',''), '') AS s, COUNT(*) AS n, MAX(created_at) AS newest,
+            COUNT(*) FILTER (WHERE confidence >= 80) AS high FROM iocs GROUP BY 1""")
+    stats = {r["s"]: r for r in cur.fetchall()}
+    out = []
+    for fid, (name, kinds, home, about, flag, _iv) in ABUSECH.items():
+        st = stats.get(name, {})
+        out.append({"id": fid, "name": name, "kinds": kinds, "homepage": home, "about": about, "group": "abuse.ch",
+                    "enabled": bool(cfg.get(flag)), "needs_key": True, "key_configured": bool(URLHAUS_AUTH_KEY),
+                    "reliability": int(100 * feeds.SOURCE_RELIABILITY.get(name, .5)), "limit": None,
+                    "last_run": last.get(fid), "running": bool(FEED_JOBS.get(fid, {}).get("running")),
+                    "iocs": st.get("n", 0), "high_confidence": st.get("high", 0),
+                    "newest": st.get("newest").isoformat() if st.get("newest") else None})
+    for f in feeds.FEEDS.values():
+        c = fcfg.get(f.id, {}); name = feeds.SOURCE_NAME[f.id]; st = stats.get(name, {})
+        out.append({"id": f.id, "name": f.name, "kinds": f.kinds, "homepage": f.homepage, "about": f.about, "group": f.group,
+                    "enabled": bool(c.get("enabled")), "needs_key": bool(f.key_env), "key_configured": (not f.key_env) or bool(os.getenv(f.key_env, "") or PLATFORM_KEYS.get("otx")),
+                    "reliability": int(100 * feeds.SOURCE_RELIABILITY.get(name, .5)), "limit": int(c.get("limit") or f.default_limit),
+                    "ttl_days": f.ttl_days, "interval_hours": f.interval_hours,
+                    "last_run": last.get(f.id), "running": bool(FEED_JOBS.get(f.id, {}).get("running")),
+                    "iocs": st.get("n", 0), "high_confidence": st.get("high", 0),
+                    "newest": st.get("newest").isoformat() if st.get("newest") else None})
+    return {"feeds": out, "min_confidence": int(cfg.get("min_confidence") or 70), "enrich_per_run": int(cfg.get("enrich_per_run", 8))}
+
+class FeedConfig(BaseModel):
+    enabled: Optional[bool] = None
+    limit: Optional[int] = None
+
+class CatalogConfig(BaseModel):
+    min_confidence: Optional[int] = None
+    enrich_per_run: Optional[int] = None
+    feeds: Optional[Dict[str, FeedConfig]] = None
+
+@app.post("/admin/connectors/config")
+def connector_config(body: CatalogConfig, admin=Depends(require_admin), conn=Depends(get_db)):
+    cfg = _connector_cfg(conn)
+    if body.min_confidence is not None:
+        cfg["min_confidence"] = max(40, min(95, body.min_confidence))
+    if body.enrich_per_run is not None:
+        cfg["enrich_per_run"] = max(0, min(30, body.enrich_per_run))
+    for fid, fc in (body.feeds or {}).items():
+        if fid in ABUSECH:
+            if fc.enabled is not None:
+                cfg[ABUSECH[fid][4]] = fc.enabled
+        elif fid in feeds.FEEDS:
+            cur_f = cfg.setdefault("feeds", {}).setdefault(fid, {})
+            if fc.enabled is not None: cur_f["enabled"] = fc.enabled
+            if fc.limit is not None: cur_f["limit"] = max(50, min(20000, fc.limit))
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown feed '{fid}'")
+    cur = conn.cursor()
+    cur.execute("""INSERT INTO system_settings (key,value) VALUES (%s,%s)
+        ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value""", (CONNECTOR_SETTINGS_KEY, json.dumps(cfg)))
+    conn.commit()
+    return {"status": "saved"}
+
+@app.post("/admin/connectors/feeds/{feed_id}/run")
+async def run_feed_now(feed_id: str, admin=Depends(require_admin)):
+    """Start one feed in the background (a consensus feed also pulls its enabled siblings)."""
+    if feed_id not in ABUSECH and feed_id not in feeds.FEEDS:
+        raise HTTPException(status_code=404, detail="Unknown feed")
+    if FEED_JOBS.get(feed_id, {}).get("running"):
+        return {"status": "running"}
+    FEED_JOBS[feed_id] = {"running": True}
+    asyncio.get_event_loop().create_task(_run_feed_job(feed_id, admin))
+    return {"status": "started"}
+
+async def scheduled_feed_sync():
+    """Hourly tick: run every enabled feed whose interval has elapsed."""
+    conn = None
+    try:
+        conn = get_db_direct()
+        cfg = _connector_cfg(conn)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT key, value FROM system_settings WHERE key LIKE 'connector_last_run_%'")
+        last = {r["key"].replace("connector_last_run_", ""): json.loads(r["value"]) for r in cur.fetchall()}
+        now = datetime.now(timezone.utc)
+        due = []
+        for fid in feeds.FEEDS:
+            if not (cfg.get("feeds") or {}).get(fid, {}).get("enabled"):
+                continue
+            ran = last.get(fid, {}).get("ran_at")
+            age_h = (now - datetime.fromisoformat(ran)).total_seconds() / 3600 if ran else 1e9
+            if age_h >= feeds.FEEDS[fid].interval_hours - 0.1:
+                due.append(fid)
+        # A consensus run already pulls its enabled siblings; run the group once.
+        seen_group = False
+        for fid in due:
+            if feeds.FEEDS[fid].group == "consensus":
+                if seen_group: continue
+                seen_group = True
+            if not FEED_JOBS.get(fid, {}).get("running"):
+                await _run_feed_job(fid, None)
+    except Exception as e:
+        print(f"[connector] feed tick failed: {type(e).__name__}: {e}")
+    finally:
+        if conn: conn.close()
 
 async def scheduled_connector_sync():
     """APScheduler job — runs all enabled connectors on schedule."""
@@ -2246,7 +2464,36 @@ def parse_nvd_entry(vuln: dict) -> dict:
             "references":refs,"patch_available":patch_available,"patch_url":patch_url,
             "title":f"{cve_id}: {desc[:80]}..." if len(desc)>80 else f"{cve_id}: {desc}"}
 
-async def fetch_nvd_cves(cpe: str, days_back: int = 730) -> list:
+# NVD allows 5 requests / 30 s without a key and 50 / 30 s with one. Requests are
+# spaced accordingly (and retried on 429/503) — previously a burst of assets just
+# got 429s that were logged and swallowed, which looked like "no new CVEs".
+_nvd_gate = {"lock": None, "last": 0.0}
+
+async def _nvd_request(params, headers, errors, attempts=4):
+    import time as _t
+    if _nvd_gate["lock"] is None:
+        _nvd_gate["lock"] = asyncio.Lock()
+    gap = 0.7 if NVD_API_KEY else 6.5
+    r = None
+    for attempt in range(attempts):
+        async with _nvd_gate["lock"]:
+            wait = gap - (_t.monotonic() - _nvd_gate["last"])
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                async with httpx.AsyncClient(timeout=25) as c:
+                    r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0", params=params, headers=headers)
+            finally:
+                _nvd_gate["last"] = _t.monotonic()
+        if r.status_code not in (429, 503, 502, 504, 403):
+            return r
+        delay = min(60, int(r.headers.get("Retry-After", 0) or 0) or 8 * (attempt + 1))
+        print(f"[nvd] HTTP {r.status_code}, retry in {delay}s")
+        await asyncio.sleep(delay)
+    return r
+
+async def fetch_nvd_cves(cpe: str, days_back: int = 730, errors: Optional[list] = None) -> list:
+    errors = errors if errors is not None else []
     """
     Fetch CVEs from NVD API 2.0.
     NVD returns results sorted OLDEST FIRST by default.
@@ -2277,10 +2524,7 @@ async def fetch_nvd_cves(cpe: str, days_back: int = 730) -> list:
                 if v.get("cve",{}).get("published","")[:10] >= cutoff_str]
 
     async def nvd_get(params):
-        async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.get("https://services.nvd.nist.gov/rest/json/cves/2.0",
-                            params=params, headers=headers)
-        return r
+        return await _nvd_request(params, headers, errors)
 
     # ── Strategy 1: virtualMatchString — fetch most recent results ──────────
     # NVD returns oldest-first, so we need the last page(s) for recent CVEs.
@@ -2303,8 +2547,8 @@ async def fetch_nvd_cves(cpe: str, days_back: int = 730) -> list:
                     })
                     if r2.status_code == 200:
                         all_vulns.extend(r2.json().get("vulnerabilities", []))
-                    elif r2.status_code == 429:
-                        print("[nvd] Rate limited"); return []
+                    else:
+                        errors.append(f"NVD HTTP {r2.status_code}"); print(f"[nvd] page HTTP {r2.status_code}")
                 # Deduplicate and filter
                 seen = set(); deduped = []
                 for v in all_vulns:
@@ -2315,12 +2559,10 @@ async def fetch_nvd_cves(cpe: str, days_back: int = 730) -> list:
                 print(f"[nvd] virtualMatchString got {len(deduped)} recent, {len(results)} within {days_back}d")
                 if results:
                     return results
-        elif r.status_code == 429:
-            print("[nvd] Rate limited"); return []
         else:
-            print(f"[nvd] virtualMatchString HTTP {r.status_code}")
+            errors.append(f"NVD HTTP {r.status_code}"); print(f"[nvd] virtualMatchString HTTP {r.status_code}")
     except Exception as e:
-        print(f"[nvd] virtualMatchString error: {e}")
+        errors.append(f"NVD {type(e).__name__}"); print(f"[nvd] virtualMatchString error: {type(e).__name__}: {e}")
 
     # ── Strategy 2: keywordSearch — same approach, last 200 results ─────────
     if keyword:
@@ -2348,7 +2590,7 @@ async def fetch_nvd_cves(cpe: str, days_back: int = 730) -> list:
                     print(f"[nvd] keywordSearch got {len(deduped)} recent, {len(results)} within {days_back}d")
                     return results
         except Exception as e:
-            print(f"[nvd] keywordSearch error: {e}")
+            errors.append(f"NVD {type(e).__name__}"); print(f"[nvd] keywordSearch error: {type(e).__name__}: {e}")
 
     return []
 async def fetch_kev_catalog() -> dict:
@@ -2379,7 +2621,7 @@ async def poll_cves_for_asset(asset: dict, kev_catalog: dict, conn) -> dict:
     asset_id   = asset["id"]
     asset_name = asset["name"]
     vendor     = (asset.get("vendor") or "").strip().lower().replace(" ","_")
-    asset_type = asset.get("asset_type","application")
+    asset_type = asset.get("asset_type") or "application"
     version    = (asset.get("version") or "").strip().lstrip("vV")
 
     # Always rebuild CPE from KB when possible — stored CPE may be stale
@@ -2396,7 +2638,7 @@ async def poll_cves_for_asset(asset: dict, kev_catalog: dict, conn) -> dict:
         _, _, cpe_vendor, cpe_product, _ = kb_hit
         cpe = f"cpe:2.3:{part}:{cpe_vendor}:{cpe_product}:{ver}:*:*:*:*:*:*:*"
     else:
-        stored = asset.get("cpe","").strip()
+        stored = (asset.get("cpe") or "").strip()
         if stored:
             # Strip edition/language fields — only keep part:vendor:product:version
             sp = stored.split(":")
@@ -2409,10 +2651,11 @@ async def poll_cves_for_asset(asset: dict, kev_catalog: dict, conn) -> dict:
     print(f"[cve-poll] '{asset_name}' → {cpe}")
     new_cves = []; new_iocs = []; patched_cves = []
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    vulns = await fetch_nvd_cves(cpe)
+    errors = []
+    vulns = await fetch_nvd_cves(cpe, errors=errors)
     if not vulns:
-        print(f"[cve-poll] No CVEs found for '{asset_name}' ({cpe})")
-        return {"new_cves":[],"new_iocs":[],"patched":[]}
+        print(f"[cve-poll] No CVEs found for '{asset_name}' ({cpe})" + (f" — {errors[0]}" if errors else ""))
+        return {"new_cves":[],"new_iocs":[],"patched":[],"errors":[f"{asset_name}: {e}" for e in dict.fromkeys(errors)]}
     cve_ids = [v.get("cve",{}).get("id","") for v in vulns]
     epss_data = await fetch_epss([c for c in cve_ids if c])
     for vuln in vulns:
@@ -2421,14 +2664,15 @@ async def poll_cves_for_asset(asset: dict, kev_catalog: dict, conn) -> dict:
         if not cve_id: continue
         epss = epss_data.get(cve_id,{})
         kev_info = kev_catalog.get(cve_id)
-        cur.execute("SELECT id, patch_available FROM cve_findings WHERE cve_id = %s", (cve_id,))
+        # A CVE can affect several monitored products; findings are per (CVE, asset).
+        cur.execute("SELECT id, patch_available FROM cve_findings WHERE cve_id = %s AND asset_id = %s", (cve_id, asset_id))
         existing = cur.fetchone()
         if existing:
             if parsed["patch_available"] and not existing["patch_available"]:
                 cur2 = conn.cursor()
                 cur2.execute("""UPDATE cve_findings SET patch_available=TRUE,patch_url=%s,
-                    patch_detected_at=NOW(),updated_at=NOW() WHERE cve_id=%s""",
-                    (parsed["patch_url"], cve_id))
+                    patch_detected_at=NOW(),updated_at=NOW() WHERE cve_id=%s AND asset_id=%s""",
+                    (parsed["patch_url"], cve_id, asset_id))
                 patched_cves.append({"cve_id":cve_id,"patch_url":parsed["patch_url"],"asset":asset_name})
         else:
             finding_id = f"cve--{uuid.uuid4()}"
@@ -2451,48 +2695,72 @@ async def poll_cves_for_asset(asset: dict, kev_catalog: dict, conn) -> dict:
                              "asset":asset_name,"patch":parsed["patch_available"],
                              "patch_url":parsed["patch_url"]})
     conn.commit()
-    return {"new_cves":new_cves,"new_iocs":new_iocs,"patched":patched_cves}
+    return {"new_cves":new_cves,"new_iocs":new_iocs,"patched":patched_cves,"errors":[f"{asset_name}: {e}" for e in dict.fromkeys(errors)]}
+
+POLL_STATE = {"running": False, "started_at": None, "finished_at": None, "progress": "", "result": None}
+
+async def run_cve_poll(trigger: str = "scheduled") -> dict:
+    """One NVD poll over every active asset. Shared by the schedule and the button, always logged."""
+    conn = get_db_direct()
+    try:
+        cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM assets WHERE active = TRUE ORDER BY name")
+        assets = cur.fetchall()
+        if not assets:
+            return {"message": "No software is being monitored yet.", "assets_polled": 0, "new_cves": 0,
+                    "new_iocs": 0, "patches_detected": 0, "errors": []}
+        kev_catalog = await fetch_kev_catalog()
+        all_new_cves=[]; all_new_iocs=[]; all_patched=[]; errors=[]
+        if not kev_catalog:
+            errors.append("CISA KEV catalog could not be fetched — KEV flags were not refreshed")
+        for n, asset in enumerate(assets, 1):
+            POLL_STATE["progress"] = f"{asset['name']} ({n}/{len(assets)})"
+            try:
+                result = await poll_cves_for_asset(dict(asset), kev_catalog, conn)
+                if result:
+                    all_new_cves.extend(result.get("new_cves",[]))
+                    all_new_iocs.extend(result.get("new_iocs",[]))
+                    all_patched.extend(result.get("patched",[]))
+                    errors.extend(result.get("errors", []))
+            except Exception as e:
+                conn.rollback()
+                errors.append(f"{asset['name']}: {type(e).__name__}")
+                print(f"[cve-poll] Error {asset['name']}: {type(e).__name__}: {e}")
+        if all_new_cves:
+            critical = [c for c in all_new_cves if (c.get("score") or 0) >= 9 or c.get("kev")]
+            body = f"{len(all_new_cves)} new CVE(s) detected across your assets."
+            if critical:
+                body += f" {len(critical)} are CRITICAL or KEV-listed."
+            create_notification(conn, "cve_new", f"CVE Alert: {len(all_new_cves)} new CVE(s) found",
+                body, "critical" if critical else "warning", {"new_cves": all_new_cves[:10]})
+        if all_patched:
+            create_notification(conn, "patch_available", f"Patch available for {len(all_patched)} CVE(s)",
+                f"Vendor patches detected for: {', '.join(p['cve_id'] for p in all_patched)}",
+                "success", {"patched": all_patched})
+        if errors and len(errors) >= len(assets):
+            create_notification(conn, "connector_error", "NVD polling is failing",
+                "; ".join(errors[:3])[:300], "warning", {"route": "/cve"})
+        cur2 = conn.cursor()
+        cur2.execute("""INSERT INTO cve_poll_log (assets_polled,new_cves,new_iocs,patches_detected)
+            VALUES (%s,%s,%s,%s)""", (len(assets), len(all_new_cves), len(all_new_iocs), len(all_patched)))
+        conn.commit()
+        print(f"[cve-poll] ({trigger}) Done — {len(all_new_cves)} new CVEs, {len(all_patched)} patches, {len(errors)} problems")
+        return {"new_cves": len(all_new_cves), "new_iocs": len(all_new_iocs), "patches_detected": len(all_patched),
+                "assets_polled": len(assets), "errors": errors[:10]}
+    finally:
+        conn.close()
 
 async def scheduled_cve_poll():
     print(f"[cve-poll] Starting at {datetime.now()}")
-    conn = get_db_direct()
-    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM assets WHERE active = TRUE")
-    assets = cur.fetchall()
-    if not assets:
-        conn.close(); return
-    kev_catalog = await fetch_kev_catalog()
-    all_new_cves=[]; all_new_iocs=[]; all_patched=[]
-    for asset in assets:
-        try:
-            result = await poll_cves_for_asset(dict(asset), kev_catalog, conn)
-            if result:
-                all_new_cves.extend(result.get("new_cves",[]))
-                all_new_iocs.extend(result.get("new_iocs",[]))
-                all_patched.extend(result.get("patched",[]))
-        except Exception as e:
-            print(f"[cve-poll] Error {asset['name']}: {e}")
-    # create portal notifications
-    if all_new_cves:
-        critical = [c for c in all_new_cves if (c.get("score") or 0) >= 9 or c.get("kev")]
-        body = f"{len(all_new_cves)} new CVE(s) detected across your assets."
-        if critical:
-            body += f" {len(critical)} are CRITICAL or KEV-listed."
-        create_notification(conn, "cve_new",
-            f"CVE Alert: {len(all_new_cves)} new CVE(s) found",
-            body, "critical" if critical else "warning",
-            {"new_cves": all_new_cves[:10]})
-    if all_patched:
-        create_notification(conn, "patch_available",
-            f"Patch available for {len(all_patched)} CVE(s)",
-            f"Vendor patches detected for: {', '.join(p['cve_id'] for p in all_patched)}",
-            "success", {"patched": all_patched})
-    # log the poll
-    cur2 = conn.cursor()
-    cur2.execute("""INSERT INTO cve_poll_log (assets_polled,new_cves,new_iocs,patches_detected)
-        VALUES (%s,%s,%s,%s)""", (len(assets), len(all_new_cves), len(all_new_iocs), len(all_patched)))
-    conn.commit(); conn.close()
-    print(f"[cve-poll] Done — {len(all_new_cves)} new CVEs, {len(all_new_iocs)} IOCs, {len(all_patched)} patches")
+    if POLL_STATE["running"]:
+        return
+    POLL_STATE.update(running=True, started_at=datetime.now(timezone.utc).isoformat(), finished_at=None, result=None)
+    try:
+        POLL_STATE["result"] = await run_cve_poll("scheduled")
+    except Exception as e:
+        print(f"[cve-poll] scheduled poll failed: {type(e).__name__}: {e}")
+    finally:
+        POLL_STATE.update(running=False, finished_at=datetime.now(timezone.utc).isoformat(), progress="")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AUTH ENDPOINTS
@@ -2666,14 +2934,23 @@ def change_password(body: PasswordChange, user=Depends(get_current_user), conn=D
 
 # ── USER API KEYS ─────────────────────────────────────────────────────────────
 
-ALLOWED_SERVICES = {"virustotal","abuseipdb","shodan","groq","nvd"}
+ALLOWED_SERVICES = {"virustotal","abuseipdb","shodan","groq","nvd","urlhaus","otx"}
 SERVICE_LABELS = {
     "virustotal": {"name":"VirusTotal",   "url":"https://www.virustotal.com/gui/my-apikey",    "placeholder":"Enter your VirusTotal API key"},
     "abuseipdb":  {"name":"AbuseIPDB",    "url":"https://www.abuseipdb.com/account/api",        "placeholder":"Enter your AbuseIPDB API key"},
     "shodan":     {"name":"Shodan",       "url":"https://account.shodan.io/",                   "placeholder":"Enter your Shodan API key"},
     "groq":       {"name":"Groq",         "url":"https://console.groq.com/keys",                "placeholder":"gsk_xxxxxxxxxxxx"},
     "nvd":        {"name":"NVD",          "url":"https://nvd.nist.gov/developers/request-an-api-key","placeholder":"Enter your NVD API key"},
+    "urlhaus":    {"name":"abuse.ch (URLhaus · ThreatFox · MalwareBazaar)","url":"https://auth.abuse.ch/","placeholder":"Enter your abuse.ch Auth-Key"},
+    "otx":        {"name":"AlienVault OTX","url":"https://otx.alienvault.com/settings",         "placeholder":"Enter your OTX API key"},
 }
+
+def _safe_mask(encrypted) -> Optional[str]:
+    """Masked form of a stored key; a key that can no longer be decrypted (rotated ENCRYPTION_KEY) must not 500 the page."""
+    try:
+        return mask_key(decrypt_key(encrypted))
+    except Exception:
+        return "saved (unreadable)"
 
 @app.get("/users/me/api-keys")
 def get_my_api_keys(user=Depends(get_current_user), conn=Depends(get_db)):
@@ -2687,13 +2964,23 @@ def get_my_api_keys(user=Depends(get_current_user), conn=Depends(get_db)):
     for svc, label in SERVICE_LABELS.items():
         row = rows.get(svc)
         has_key = bool(row and row["api_key_encrypted"])
+        platform = bool(PLATFORM_KEYS.get(svc))
+        q = quota.get(svc, {})
+        # Where a request for this service would get its key from — never the key itself.
+        if has_key:
+            source = "personal"
+        elif platform and (user["role"] == "admin" or q.get("unlimited") or (q.get("quota_remaining") or 0) > 0 or "quota_remaining" not in q):
+            source = "platform"
+        else:
+            source = "none"
         result.append({
+            "platform_key": platform, "source": source,
             "service":      svc,
             "name":         label["name"],
             "url":          label["url"],
             "placeholder":  label["placeholder"],
             "has_key":      has_key,
-            "masked":       mask_key(decrypt_key(row["api_key_encrypted"])) if has_key else None,
+            "masked":       _safe_mask(row["api_key_encrypted"]) if has_key else None,
             "updated_at":   row["updated_at"].isoformat() if has_key and row.get("updated_at") else None,
             **quota.get(svc, {}),
         })
@@ -3765,36 +4052,27 @@ async def nvd_test(q: str = "chrome", admin=Depends(require_admin)):
     return results
 
 @app.post("/cves/poll-now")
-async def poll_now(admin=Depends(require_admin), conn=Depends(get_db)):
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM assets WHERE active = TRUE")
-    assets = cur.fetchall()
-    if not assets: return {"message":"No assets configured"}
-    kev_catalog = await fetch_kev_catalog()
-    all_new_cves=[]; all_new_iocs=[]; all_patched=[]
-    for asset in assets:
+async def poll_now(admin=Depends(require_admin)):
+    """Start an NVD poll in the background (a full poll paces itself against NVD's rate
+    limit and can outlast a proxy timeout). Progress and result: GET /cves/poll-status."""
+    if POLL_STATE["running"]:
+        return {"status": "running", "progress": POLL_STATE["progress"], "started_at": POLL_STATE["started_at"]}
+    async def _job():
+        POLL_STATE.update(running=True, started_at=datetime.now(timezone.utc).isoformat(), finished_at=None, result=None)
         try:
-            result = await poll_cves_for_asset(dict(asset), kev_catalog, conn)
-            if result:
-                all_new_cves.extend(result.get("new_cves",[]))
-                all_new_iocs.extend(result.get("new_iocs",[]))
-                all_patched.extend(result.get("patched",[]))
+            POLL_STATE["result"] = await run_cve_poll("manual")
         except Exception as e:
-            print(f"[poll-now] Error: {e}")
-    if all_new_cves:
-        critical = [c for c in all_new_cves if (c.get("score") or 0) >= 9 or c.get("kev")]
-        create_notification(conn, "cve_new",
-            f"CVE Poll: {len(all_new_cves)} new CVE(s) found",
-            f"{len(all_new_cves)} new CVE(s) detected.{' ' + str(len(critical)) + ' are CRITICAL/KEV.' if critical else ''}",
-            "critical" if critical else "warning", {"new_cves":all_new_cves[:10]})
-    if all_patched:
-        create_notification(conn, "patch_available",
-            f"Patches available for {len(all_patched)} CVE(s)",
-            f"Patches detected for: {', '.join(p['cve_id'] for p in all_patched)}",
-            "success", {"patched":all_patched})
-    conn.commit()
-    return {"new_cves":len(all_new_cves),"new_iocs":len(all_new_iocs),
-            "patches_detected":len(all_patched),"assets_polled":len(assets)}
+            print(f"[poll-now] failed: {type(e).__name__}: {e}")
+            POLL_STATE["result"] = {"errors": [f"Poll failed: {type(e).__name__}"], "new_cves": 0, "patches_detected": 0, "assets_polled": 0}
+        finally:
+            POLL_STATE.update(running=False, finished_at=datetime.now(timezone.utc).isoformat(), progress="")
+    POLL_STATE["running"] = True          # visible immediately, before the task is scheduled
+    asyncio.get_event_loop().create_task(_job())
+    return {"status": "started", "started_at": datetime.now(timezone.utc).isoformat()}
+
+@app.get("/cves/poll-status")
+def poll_status(admin=Depends(require_admin)):
+    return dict(POLL_STATE)
 
 @app.get("/cves/stats/summary")
 def cve_summary(user=Depends(require_full_access), conn=Depends(get_db)):

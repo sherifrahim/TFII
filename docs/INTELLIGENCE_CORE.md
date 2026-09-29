@@ -113,6 +113,28 @@ unknown, never guessed), `ingested_at`, `confidence`, `actor`, `summary`.
 
 Everything else (v1: `/iocs`, `/cves/*`, TAXII/STIX, OSINT, admin) is unchanged.
 
+## Indicator feeds and confidence (`feeds.py`)
+
+Sources are declared in `feeds.FEEDS` (URL + pure parser + reliability + expiry + interval); the three abuse.ch connectors
+(ThreatFox, MalwareBazaar, URLhaus) keep their own runners but share the catalog, provenance and corroboration.
+Keyless today: **Feodo Tracker** (botnet C2), **OpenPhish**, **IPsum**, **CINS Army**, **Emerging Threats**, **blocklist.de**,
+**Phishing.Database**; **AlienVault OTX** needs `OTX_API_KEY` (or a key saved in Settings).
+
+* **Reliability + corroboration.** Each source has a reliability; some entries carry their own evidence (IPsum's blocklist count).
+  Confidence = noisy-OR over the *distinct* sources that reported the indicator (`1 − Π(1 − rᵢ)`, capped at 97). It only ever
+  rises; false positives are never touched or renewed.
+* **Two modes.** *Direct* feeds create an indicator when their own reliability clears the floor (`min_confidence`, default 70).
+  *Consensus* lists (weak, unordered) are pooled in one run and only create indicators that several lists agree on; anything TFII
+  already holds gets a recorded sighting, corroboration, and a refreshed expiry.
+* **Fresh by construction.** Short TTLs (7–45 days) that every sighting extends; feed `first_seen` is kept as `observed_at`.
+* **Hostile input.** Every entry is validated server-side (public IPs only, valid domains/hashes, http(s) URLs, trusted domains
+  dropped); feed bodies are size-capped and fetched through the SSRF-safe client.
+* **Enrichment.** After a run the newest, highest-confidence indicators are enriched (VirusTotal/AbuseIPDB/URLhaus, platform keys,
+  spaced for free-tier limits, `enrich_per_run` default 8). Auto-enrichment may raise confidence but never lower it — a fresh C2 that
+  VirusTotal has not seen yet is not evidence of innocence.
+* **Operation.** `/admin/connectors/catalog|config` and `POST /admin/connectors/feeds/{id}/run` (background job); an hourly tick runs
+  whatever is enabled and due. Results and failures show on **Platform → Connectors** and raise a System notification.
+
 ## Migrations
 
 `migrations.MIGRATIONS` is an ordered list of `(version, name, [statements])` applied at startup under an advisory lock and

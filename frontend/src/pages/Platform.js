@@ -8,7 +8,7 @@ import { StackedBars, BarList } from "../components/charts";
 import Icon from "../components/Icon";
 import { LEGACY_C } from "../design/tokens";
 import {
-  HealthPage as LegacyHealth, ConnectorsPage as LegacyConnectors, SettingsPage as LegacySettings, FilesPage as LegacyFiles,
+  HealthPage as LegacyHealth, SettingsPage as LegacySettings, FilesPage as LegacyFiles,
   QueryGenerator, GeoMap, AdvisoryBuilder, PermissionsPanel, CVEReportModal,
 } from "../legacy/LegacyComponents";
 
@@ -24,9 +24,7 @@ function Legacy({ title, sub, actions, children, narrow }) {
 export function HealthPage() {
   return <Legacy title="Health" sub="Database, schedulers, feeds, backups, notification delivery and upstream API reachability."><LegacyHealth token={getToken()} C={LEGACY_C} /></Legacy>;
 }
-export function ConnectorsPage() {
-  return <Legacy title="Connectors" sub="abuse.ch ThreatFox, MalwareBazaar and URLhaus ingestion. Failures raise a System notification."><LegacyConnectors token={getToken()} C={LEGACY_C} /></Legacy>;
-}
+export { ConnectorsPage } from "./Connectors";
 export function SettingsPage({ onOpenApiKeys }) {
   const { me, logout } = useSession();
   return <Legacy title="Settings" sub="Account, personal API keys, notifications and access requests." narrow><LegacySettings token={getToken()} onLogout={logout} C={LEGACY_C} me={me} onOpenApiKeys={onOpenApiKeys} /></Legacy>;

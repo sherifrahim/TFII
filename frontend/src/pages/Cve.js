@@ -39,20 +39,38 @@ export function CveIntel({ query }) {
   const c = summary.data;
   const ex = useMemo(() => (c ? { critical: c.critical, high: c.high, medium: c.medium } : {}), [c]);
   const [polling, setPolling] = useState(false);
+  const [pollMsg, setPollMsg] = useState("");
   const toast = useToast();
 
+  // Polling NVD paces itself against its rate limit, so it runs in the background:
+  // start it, then watch its status until it reports a result.
   async function poll() {
-    setPolling(true);
-    try { const d = await apiJSON("/cves/poll-now", { method: "POST" }); toast(d.message || `Poll complete — ${d.new_cves} new CVEs, ${d.patches_detected} patches detected across ${d.assets_polled} software`, "ok"); summary.reload(true); }
-    catch (e) { toast(e.message, "error"); }
-    setPolling(false);
+    setPolling(true); setPollMsg("Starting…");
+    try {
+      await apiJSON("/cves/poll-now", { method: "POST" });
+      const t0 = Date.now();
+      let st;
+      do {
+        await new Promise(r => setTimeout(r, 2500));
+        st = await apiJSON("/cves/poll-status");
+        setPollMsg(st.progress ? `Polling ${st.progress}` : "Finishing…");
+      } while (st.running && Date.now() - t0 < 15 * 60 * 1000);
+      const r = st.result;
+      if (!r) toast("The poll is still running — check back shortly.", "info");
+      else {
+        toast(r.message || `Poll complete — ${r.new_cves} new CVEs, ${r.patches_detected} patches detected across ${r.assets_polled} software`, (r.errors || []).length ? "warn" : "ok");
+        (r.errors || []).slice(0, 3).forEach(e => toast(e, "error"));
+      }
+      summary.reload(true);
+    } catch (e) { toast(e.message, "error"); }
+    setPolling(false); setPollMsg("");
   }
 
   return (
     <div className="page">
       <PageHeader title="CVE Intelligence" sub="Vulnerability exposure across the software you monitor — NVD, CISA KEV and EPSS, polled every 6 hours."
         actions={hasData && <>
-          {can("admin.panel") && <Button size="sm" icon="refresh" onClick={poll} loading={polling}>Poll NVD now</Button>}
+          {can("admin.panel") && <Button size="sm" icon="refresh" onClick={poll} loading={polling}>{polling ? (pollMsg || "Polling…") : "Poll NVD now"}</Button>}
           <Button size="sm" variant="primary" icon="plus" onClick={() => setQuery({ tab: "manage" })}>Add software</Button>
         </>} />
       {hasData && (
