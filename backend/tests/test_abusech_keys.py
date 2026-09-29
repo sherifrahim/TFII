@@ -45,12 +45,38 @@ def test_a_rejected_server_key_falls_through_to_the_starters_own_key(client, adm
     assert calls == ["stale-env-key-0123456789", "good-admin-key-0123456789"]
 
 
-def test_a_scheduled_run_uses_the_server_key_only(client, admin, setup, monkeypatch):
+def test_a_scheduled_run_falls_back_to_a_key_saved_on_an_admin_account(client, admin, setup, monkeypatch):
     main, calls = setup
     monkeypatch.setattr(main, "URLHAUS_AUTH_KEY", "stale-env-key-0123456789")
     client.post("/users/me/api-keys/urlhaus", json={"api_key": "good-admin-key-0123456789"}, headers=admin)
-    res = _run(main)                                              # no user: nobody's saved key is borrowed
-    assert res["ok"] is False and calls == ["stale-env-key-0123456789"]
+    assert _run(main) == {"ok": True, "added": 3}                  # no user: server key first, then the admin's
+    assert calls == ["stale-env-key-0123456789", "good-admin-key-0123456789"]
+
+
+def test_a_scheduled_run_never_uses_a_non_admin_users_key(client, analyst, setup, monkeypatch):
+    main, calls = setup
+    monkeypatch.setattr(main, "URLHAUS_AUTH_KEY", "")
+    client.post("/users/me/api-keys/urlhaus", json={"api_key": "good-analyst-key-0123456789"}, headers=analyst)
+    res = _run(main)
+    assert res["ok"] is False and "No abuse.ch Auth-Key" in res["error"] and calls == []
+
+
+def test_the_otx_feed_key_falls_back_the_same_way(client, admin, analyst, monkeypatch):
+    import main
+    monkeypatch.delenv("OTX_API_KEY", raising=False)
+    conn = main.get_db_direct()
+    try:
+        assert main._feed_key(conn, "otx") == ""
+        client.post("/users/me/api-keys/otx", json={"api_key": "analyst-otx-key-0123456789"}, headers=analyst)
+        assert main._feed_key(conn, "otx") == ""                    # a non-admin's key is never used
+        client.post("/users/me/api-keys/otx", json={"api_key": "admin-otx-key-0123456789"}, headers=admin)
+        assert main._feed_key(conn, "otx") == "admin-otx-key-0123456789"
+        monkeypatch.setenv("OTX_API_KEY", "server-otx-key-0123456789")
+        assert main._feed_key(conn, "otx") == "server-otx-key-0123456789"     # the server key still wins
+    finally:
+        conn.close()
+        client.delete("/users/me/api-keys/otx", headers=admin)
+        client.delete("/users/me/api-keys/otx", headers=analyst)
 
 
 def test_an_admin_started_run_may_fall_back_to_users_keys_but_nobody_else_can(client, analyst, analyst2, db, setup, monkeypatch):

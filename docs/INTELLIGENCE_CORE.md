@@ -120,6 +120,7 @@ Sources are declared in `feeds.FEEDS` (URL + pure parser + reliability + expiry 
 (ThreatFox, MalwareBazaar, URLhaus) keep their own runners but share the catalog, provenance and corroboration.
 Keyless today: **Feodo Tracker** (botnet C2), **OpenPhish**, **IPsum**, **CINS Army**, **Emerging Threats**, **blocklist.de**,
 **Phishing.Database**; **AlienVault OTX** needs `OTX_API_KEY` (or a key saved in Settings).
+Feed keys: scheduled runs use the server key (`URLHAUS_AUTH_KEY`, `OTX_API_KEY`) first and, if it is missing or rejected, a key saved on an **admin** account (used server-side, never returned). A run started by an admin uses the server key, then their own, then other users' saved keys; a non-admin's key is never used for platform feeds.
 
 * **Reliability + corroboration.** Each source has a reliability; some entries carry their own evidence (IPsum's blocklist count).
   Confidence = noisy-OR over the *distinct* sources that reported the indicator (`1 − Π(1 − rᵢ)`, capped at 97). It only ever

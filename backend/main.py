@@ -1692,17 +1692,29 @@ def _connector_cfg(conn) -> dict:
 
 ABUSECH_REJECTED = ("Invalid Auth-Key", "HTTP 401", "HTTP 403")
 
+def _admin_saved_keys(conn, service: str) -> list:
+    """Keys saved on admin accounts for a service, most recently updated first. Used server-side only, as the
+    fallback for scheduled feed runs when the server's own key is missing or rejected; never returned by any API."""
+    cur = conn.cursor()
+    cur.execute("""SELECT k.api_key_encrypted FROM user_api_keys k JOIN users u ON u.id = k.user_id
+                   WHERE k.service = %s AND u.role = 'admin' AND u.active = TRUE AND k.api_key_encrypted <> ''
+                   ORDER BY k.updated_at DESC""", (service,))
+    return [k for (enc,) in cur.fetchall() if (k := decrypt_key(enc))]
+
 def _abusech_keys(conn, user=None) -> list:
     """Candidate abuse.ch Auth-Keys, best first: the server's own, then the key of the person who started
     the run, and, for an admin only (same rule as resolve_api_key), keys other users have saved. Scheduled
-    runs have no user and use the server key alone. A rotated or revoked .env key must not stop a run
-    started by someone who has a working key available to them."""
+    runs (no user) fall back to keys saved on admin accounts. A rotated or revoked .env key must not stop
+    the feeds while a working key is available."""
     keys: list = []
     def add(k):
         if k and k not in keys:
             keys.append(k)
     add(URLHAUS_AUTH_KEY)
-    if user is not None:
+    if user is None:
+        for k in _admin_saved_keys(conn, "urlhaus"):
+            add(k)
+    else:
         cur = conn.cursor()
         cur.execute("SELECT api_key_encrypted FROM user_api_keys WHERE user_id = %s AND service = 'urlhaus'", (user["id"],))
         row = cur.fetchone()
@@ -1737,7 +1749,8 @@ def _feed_key(conn, feed_id: str, user=None) -> str:
         return ""
     if user is not None:
         return resolve_api_key(conn, "otx" if f.key_env == "OTX_API_KEY" else feed_id, user)[0] or ""
-    return os.getenv(f.key_env, "")
+    service = "otx" if f.key_env == "OTX_API_KEY" else feed_id
+    return os.getenv(f.key_env, "") or next(iter(_admin_saved_keys(conn, service)), "")
 
 async def _auto_enrich(conn, created: list, limit: int) -> dict:
     """Enrich the highest-confidence indicators a feed run just created (VirusTotal / AbuseIPDB / URLhaus
@@ -1828,7 +1841,7 @@ def connector_catalog(admin=Depends(require_admin), conn=Depends(get_db)):
     for f in feeds.FEEDS.values():
         c = fcfg.get(f.id, {}); name = feeds.SOURCE_NAME[f.id]; st = stats.get(name, {})
         out.append({"id": f.id, "name": f.name, "kinds": f.kinds, "homepage": f.homepage, "about": f.about, "group": f.group,
-                    "enabled": bool(c.get("enabled")), "needs_key": bool(f.key_env), "key_configured": (not f.key_env) or bool(os.getenv(f.key_env, "") or PLATFORM_KEYS.get("otx")),
+                    "enabled": bool(c.get("enabled")), "needs_key": bool(f.key_env), "key_configured": (not f.key_env) or bool(_feed_key(conn, f.id)),
                     "reliability": int(100 * feeds.SOURCE_RELIABILITY.get(name, .5)), "limit": int(c.get("limit") or f.default_limit),
                     "ttl_days": f.ttl_days, "interval_hours": f.interval_hours,
                     "last_run": last.get(f.id), "running": bool(FEED_JOBS.get(f.id, {}).get("running")),
