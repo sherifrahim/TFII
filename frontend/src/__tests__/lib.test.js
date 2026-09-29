@@ -3,6 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { safeUrl, installLinkGuard } from "../lib/safe";
 import { geoFacts, regionName } from "../lib/geo";
+import { runningBundle, servedBundle, isStale } from "../lib/update";
 import { entityPath, canonicalKind, KINDS } from "../lib/entity";
 import { entityRoute } from "../lib/router";
 import { detectType, refang, defang, confBand } from "../lib/format";
@@ -76,6 +77,23 @@ describe("location facts are labelled for what they are", () => {
     expect(geoFacts(null)).toEqual([]);
     expect(geoFacts({ kind: "hosting", country: "Italy", cctld_country_code: "GB" }).find(x => x.label === "TLD registry").value).toBe("United Kingdom (.uk)");
     expect(regionName("")).toBe("");
+  });
+});
+
+describe("stale tab detection", () => {
+  const html = '<script defer="defer" src="/ui/static/js/main.7678bbfb.js"></script>';
+  test("finds the bundle a page is running and the one the server serves", () => {
+    expect(runningBundle(["/ui/static/js/main.aaaa1111.js"])).toBe("main.aaaa1111.js");
+    expect(runningBundle([{ getAttribute: () => "/ui/static/js/main.aaaa1111.js" }, { getAttribute: () => null }])).toBe("main.aaaa1111.js");
+    expect(runningBundle(["/other.js", null, undefined])).toBeNull();
+    expect(servedBundle(html)).toBe("main.7678bbfb.js");
+    expect(servedBundle("<html></html>")).toBeNull();
+  });
+  test("only a different bundle counts as stale; unknowns never do", () => {
+    expect(isStale("main.aaaa1111.js", "main.7678bbfb.js")).toBe(true);
+    expect(isStale("main.7678bbfb.js", "main.7678bbfb.js")).toBe(false);
+    expect(isStale(null, "main.7678bbfb.js")).toBe(false);
+    expect(isStale("main.aaaa1111.js", null)).toBe(false);
   });
 });
 

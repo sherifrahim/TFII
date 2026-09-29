@@ -4,6 +4,7 @@ import { API_BASE } from "./config";
 import { api, apiJSON, TOKEN_KEY, getToken } from "./lib/api";
 import { useRoute } from "./lib/router";
 import { installLinkGuard } from "./lib/safe";
+import { useNewVersion } from "./lib/update";
 import { SessionContext } from "./lib/session";
 import { ToastProvider, Button, Callout, Loading } from "./components/ui";
 import { LEGACY_C } from "./design/tokens";
@@ -143,6 +144,7 @@ export default function Root() {
   const [meErr, setMeErr] = useState(null);
   const [showKeys, setShowKeys] = useState(false);
   const route = useRoute();
+  const newVersion = useNewVersion();
   useEffect(() => installLinkGuard(), []);
 
   const logout = useCallback(() => {
@@ -191,6 +193,14 @@ export default function Root() {
             ? <div className="page narrow legacy-host"><DemoLockedPage token={token} C={LEGACY_C} featureLabel={nav.label} /></div>
             : <ErrorBoundary key={route.path}><Suspense fallback={<div className="page"><Loading label="Loading" /></div>}>{el}</Suspense></ErrorBoundary>}
         </Shell>
+        {newVersion && (
+          <div role="status" style={{ position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", zIndex: 900, maxWidth: "calc(100vw - 32px)" }}>
+            <Callout tone="ok"><div className="row" style={{ gap: 12 }}>
+              <span>A new version of TFII is available. Reload to use the latest fixes.</span>
+              <Button size="sm" onClick={() => window.location.reload()}>Reload</Button>
+            </div></Callout>
+          </div>
+        )}
         {showKeys && (
           <ApiKeyModal token={token} C={LEGACY_C} onClose={() => {
             setShowKeys(false);

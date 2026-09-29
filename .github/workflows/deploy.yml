@@ -51,6 +51,14 @@ jobs:
 
   deploy:
     needs: test
+    # One deploy at a time. Every run uploads to, extracts in and finally deletes the same folder on the server,
+    # so two overlapping runs (a second push within ~3 minutes) destroyed each other's files and failed with
+    # "exit status 1" right after "Repo updated" - which left the newest commits undeployed. Queued runs wait;
+    # a run still waiting when a newer push arrives is dropped, and the newer one ships everything (the server
+    # checkout is reset to origin/master and the artifact is built from that commit).
+    concurrency:
+      group: tfii-deploy
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
