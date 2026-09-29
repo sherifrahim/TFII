@@ -28,27 +28,41 @@ jobs:
             DOMAIN="$DOMAIN" venv/bin/python - <<'PY'
             import json, os, time, httpx
             d = os.environ["DOMAIN"]
-            def show(title, method, path, **kw):
-                t = time.time()
-                try:
-                    r = httpx.request(method, "https://www.nslookup.io" + path, timeout=25, headers={"User-Agent": "TFII/1.0"}, **kw)
-                    print(f"=== {title}: HTTP {r.status_code} in {time.time()-t:.1f}s, content-type={r.headers.get('content-type')}, "
-                          f"ratelimit={ {k: v for k, v in r.headers.items() if 'rate' in k.lower() or 'retry' in k.lower()} }")
-                    try:
-                        print(json.dumps(r.json(), indent=1)[:4200])
-                    except Exception:
-                        print(r.text[:600])
-                except Exception as e:
-                    print(f"=== {title}: FAILED {type(e).__name__}")
-            show("records (cloudflare)", "GET", "/api/v1/records", params={"domain": d, "server": "cloudflare"})
+            def get(path, **kw):
+                r = httpx.get("https://www.nslookup.io" + path, timeout=25, headers={"User-Agent": "TFII/1.0"}, **kw)
+                return r
+            def shape(x, depth=0):
+                if isinstance(x, dict): return {k: shape(v, depth + 1) for k, v in list(x.items())[:14]}
+                if isinstance(x, list): return [shape(x[0], depth + 1), f"...{len(x)} items"] if x else []
+                return x if not isinstance(x, str) else (x[:60] + ("..." if len(x) > 60 else ""))
+            r = get("/api/v1/records", params={"domain": d, "server": "cloudflare"})
+            j = r.json()
+            print("=== records: HTTP", r.status_code, "top-level keys:", list(j))
+            recs = j.get("records", {})
+            print("record type keys:", list(recs))
+            for t, v in recs.items():
+                q = v.get("query") if isinstance(v, dict) else None
+                resp = (v.get("response") or {}) if isinstance(v, dict) else {}
+                ans = resp.get("answer") or []
+                print(f"--- {t}: keys={list(v) if isinstance(v, dict) else type(v).__name__} rCode={resp.get('rCode')} n_answers={len(ans)}")
+                if ans:
+                    print("   first answer:", json.dumps(shape(ans[0]))[:700])
+            for typ in ("CAA", "SPF", "MX"):
+                time.sleep(2)
+                r = get("/api/v1/records/other", params={"domain": d, "type": typ, "server": "cloudflare"})
+                j = r.json()
+                ans = ((j.get("queryResult") or {}).get("response") or {}).get("answer") or []
+                print(f"=== other {typ}: HTTP {r.status_code} top-level keys={list(j)} n_answers={len(ans)}")
+                for a in ans[:2]:
+                    print("   answer:", json.dumps(shape(a))[:900])
+                if typ == "SPF":
+                    print("   extra top-level:", json.dumps({k: shape(v) for k, v in j.items() if k not in ("queryResult",)})[:1500])
             time.sleep(2)
-            show("records/other CAA", "GET", "/api/v1/records/other", params={"domain": d, "type": "CAA", "server": "cloudflare"})
+            r = get("/api/v1/records/other", params={"domain": "8.8.8.8", "type": "PTR", "server": "cloudflare"})
+            j = r.json()
+            print("=== other PTR (ip):", r.status_code, json.dumps(shape(((j.get("queryResult") or {}).get("response") or {}).get("answer") or []))[:600])
             time.sleep(2)
-            show("records/other SPF", "GET", "/api/v1/records/other", params={"domain": d, "type": "SPF", "server": "cloudflare"})
-            time.sleep(2)
-            show("records/other NS authoritative", "GET", "/api/v1/records/other", params={"domain": d, "type": "NS", "server": "authoritative"})
-            time.sleep(2)
-            show("dns-health", "GET", f"/api/v1/dns-health/{d}")
-            time.sleep(2)
-            show("invalid domain", "GET", "/api/v1/records", params={"domain": "not a domain!", "server": "cloudflare"})
+            r = get("/api/v1/records/other", params={"domain": "doesnotexist-tfii-zz.com", "type": "A", "server": "cloudflare"})
+            j = r.json()
+            print("=== other A nxdomain:", r.status_code, "rCode:", (((j.get("queryResult") or {}).get("response") or {}).get("rCode")), "keys:", list(j))
             PY
