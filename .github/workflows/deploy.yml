@@ -112,6 +112,9 @@ jobs:
           script_stop: true
           script: |
             set -e
+            # Trace every command (no secrets are used in this script): a step that exits silently otherwise leaves
+            # only "Process exited with status 1" and no hint which one it was.
+            set -x
             echo "=== TFII Deploy at $(date) ==="
 
             # Keep the server-side checkout current (scripts, docs, configs).
