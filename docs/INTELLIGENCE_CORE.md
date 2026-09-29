@@ -110,6 +110,7 @@ unknown, never guessed), `ingested_at`, `confidence`, `actor`, `summary`.
 | `POST /v2/iocs/bulk-action` | assign_campaign, add_tag, mark_fp/unmark_fp, **set_status**, add_to_investigation |
 | `GET /v2/intel-wall` | items carry `entities` (only ones TFII actually holds), `tags`, `affects`; `?entity_kind=&entity_ref=` filters |
 | `GET /v2/cve/summary`, `/v2/software[/{id}]` | lightweight CVE/software views |
+| `POST /users/me/api-keys/{service}/test` | asks the provider whether a key works (`keycheck.py`): tests the pasted key (not saved) or, with no body, the caller's saved key; returns `valid`/`invalid`/`rate_limited`/`unreachable`, never the key |
 
 Everything else (v1: `/iocs`, `/cves/*`, TAXII/STIX, OSINT, admin) is unchanged.
 

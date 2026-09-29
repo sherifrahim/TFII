@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 import security
 import feeds
+import keycheck
 import entities
 import psycopg2, psycopg2.extras
 from dotenv import load_dotenv
@@ -3003,6 +3004,30 @@ def save_api_key(service: str, body: dict, user=Depends(get_current_user), conn=
         (user["id"], service, encrypted))
     conn.commit()
     return {"status":"saved","service":service,"masked":mask_key(key)}
+
+@app.post("/users/me/api-keys/{service}/test")
+@limiter.limit("20/minute")
+async def test_api_key(request: Request, service: str, body: Optional[dict] = None,
+                       user=Depends(get_current_user), conn=Depends(get_db)):
+    """Ask the provider whether a key works.  Tests the key in the request body (pasted, not yet saved) or,
+    when none is sent, the caller's own saved key.  Never returns or logs the key."""
+    if service not in ALLOWED_SERVICES:
+        raise HTTPException(status_code=400, detail=f"Unknown service: {service}")
+    pasted = ((body or {}).get("api_key") or "")
+    if not isinstance(pasted, str):
+        raise HTTPException(status_code=400, detail="api_key must be a string")
+    pasted = pasted.strip()
+    if pasted:
+        key, tested = pasted, "pasted"
+    else:
+        cur = conn.cursor()
+        cur.execute("SELECT api_key_encrypted FROM user_api_keys WHERE user_id = %s AND service = %s", (user["id"], service))
+        row = cur.fetchone()
+        key, tested = (decrypt_key(row[0]) if row and row[0] else ""), "saved"
+        if not key:
+            raise HTTPException(status_code=400, detail="No saved key to test. Paste a key first.")
+    res = await keycheck.check_key(service, key)
+    return {"service": service, "tested": tested, "checked_at": datetime.now(timezone.utc).isoformat(), **res}
 
 @app.delete("/users/me/api-keys/{service}")
 def delete_api_key(service: str, user=Depends(get_current_user), conn=Depends(get_db)):

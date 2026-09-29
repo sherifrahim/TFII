@@ -4366,6 +4366,7 @@ function ApiKeyModal({token, C, onClose}){
   const [status,setStatus]=useState({});      // service -> row from /users/me/api-keys
   const [replacing,setReplacing]=useState({});
   const [quota,setQuota]=useState(null);
+  const [checks,setChecks]=useState({});      // service -> {busy} | {status, message, tested, at}
 
   const SERVICES=[
     {id:"virustotal", name:"VirusTotal",    url:"https://www.virustotal.com/gui/my-apikey",       desc:"Malware & IP reputation",     placeholder:"Enter your VT API key"},
@@ -4399,6 +4400,19 @@ function ApiKeyModal({token, C, onClose}){
     const r=await api(`/users/me/api-keys/${svc}`,{method:"POST",body:JSON.stringify({api_key:k})},token);
     if(r.ok){setSaved(p=>({...p,[svc]:true}));setKeys(p=>({...p,[svc]:""}));setReplacing(p=>({...p,[svc]:false}));loadStatus();}
     setSaving(p=>({...p,[svc]:false}));
+  }
+  // Ask the provider whether the key works: the pasted one if there is one, otherwise the saved one.
+  async function testKey(svc){
+    const pasted=(keys[svc]||"").trim();
+    setChecks(p=>({...p,[svc]:{busy:true}}));
+    let res;
+    try{
+      const r=await api(`/users/me/api-keys/${svc}/test`,{method:"POST",body:JSON.stringify(pasted?{api_key:pasted}:{})},token);
+      const d=await r.json().catch(()=>({}));
+      res=r.ok?{status:d.status,message:d.message,tested:d.tested,at:d.checked_at}
+             :{status:"unexpected",message:typeof d.detail==="string"?d.detail:"The check could not be run.",tested:pasted?"pasted":"saved"};
+    }catch(e){ res={status:"unreachable",message:"Could not reach the server.",tested:pasted?"pasted":"saved"}; }
+    setChecks(p=>({...p,[svc]:res}));
   }
   async function removeKey(svc){
     if(!window.confirm("Remove your saved key for this service?"))return;
@@ -4460,6 +4474,7 @@ function ApiKeyModal({token, C, onClose}){
                 </div>
                 <div style={{display:"flex",gap:10,alignItems:"center",marginLeft:8,whiteSpace:"nowrap"}}>
                   {alreadySaved&&!replacing[svc.id]&&<>
+                    <button onClick={()=>testKey(svc.id)} disabled={checks[svc.id]?.busy} data-testid={`key-test-${svc.id}`} style={{background:"none",border:"none",color:C.accentText,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit",opacity:checks[svc.id]?.busy?0.5:1}}>{checks[svc.id]?.busy?"Testing…":"Test key"}</button>
                     <button onClick={()=>setReplacing(p=>({...p,[svc.id]:true}))} style={{background:"none",border:"none",color:C.accentText,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>Replace</button>
                     <button onClick={()=>removeKey(svc.id)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>Remove</button>
                   </>}
@@ -4470,7 +4485,7 @@ function ApiKeyModal({token, C, onClose}){
               </div>
               {showInput&&(
                 <div style={{display:"flex",gap:8,marginTop:8}}>
-                  <input type="password" autoComplete="off" value={keys[svc.id]||""} onChange={e=>setKeys(p=>({...p,[svc.id]:e.target.value}))}
+                  <input type="password" autoComplete="off" value={keys[svc.id]||""} onChange={e=>{const v=e.target.value;setKeys(p=>({...p,[svc.id]:v}));setChecks(p=>(p[svc.id]?{...p,[svc.id]:null}:p));}}
                     onKeyDown={e=>{if(e.key==="Enter")saveKey(svc.id);}}
                     placeholder={alreadySaved?"Paste the new key to replace it":svc.placeholder}
                     style={{flex:1,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
@@ -4483,9 +4498,26 @@ function ApiKeyModal({token, C, onClose}){
                       fontWeight:600,opacity:saving[svc.id]||!keys[svc.id]?.trim()?0.4:1}}>
                     {saving[svc.id]?"Saving...":"Save"}
                   </button>
+                  <button onClick={()=>testKey(svc.id)} data-testid={`key-test-${svc.id}`}
+                    disabled={checks[svc.id]?.busy||!keys[svc.id]?.trim()}
+                    title="Check with the provider that this key works, without saving it"
+                    style={{padding:"8px 12px",background:"none",border:`1px solid ${C.border}`,color:C.accentText,
+                      borderRadius:7,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600,
+                      opacity:checks[svc.id]?.busy||!keys[svc.id]?.trim()?0.4:1}}>
+                    {checks[svc.id]?.busy?"Testing…":"Test"}
+                  </button>
                   {replacing[svc.id]&&<button onClick={()=>setReplacing(p=>({...p,[svc.id]:false}))} style={{padding:"8px 10px",background:"none",border:`1px solid ${C.border}`,color:C.muted,borderRadius:7,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>Cancel</button>}
                 </div>
               )}
+              {checks[svc.id]&&!checks[svc.id].busy&&(()=>{
+                const ck=checks[svc.id];
+                const col=ck.status==="valid"?C.green:ck.status==="invalid"?C.red:C.amber;
+                const icon=ck.status==="valid"?"✓":ck.status==="invalid"?"✕":"!";
+                return <div role="status" data-testid={`key-check-${svc.id}`} style={{marginTop:8,fontSize:11.5,color:col,fontWeight:600,lineHeight:1.5}}>
+                  {icon} {ck.status==="valid"?"Key works":ck.status==="invalid"?"Key rejected":"Could not confirm"}
+                  <span style={{fontWeight:400,color:C.muted}}> — {ck.message}{ck.tested==="pasted"?" (not saved yet)":""}</span>
+                </div>;
+              })()}
             </div>
             );
           })}
