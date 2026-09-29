@@ -1,8 +1,8 @@
 name: Server diagnostics (read-only)
 
-# Manual only. Prints migration state and recent backend errors so a production
-# 500 can be diagnosed without shell access. Reads nothing but log lines that
-# mention migrations/tracebacks and the schema_migrations table; prints no secrets.
+# Manual only. Reports migration state, recent backend errors, whether each
+# upstream API is reachable from the server, and what the pollers/connectors
+# last did. Prints HTTP status codes and set/unset flags only — never key values.
 on:
   workflow_dispatch:
 
@@ -18,14 +18,44 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: 22
           script: |
-            echo "=== python ==="; /home/ubuntu/threatfeed/venv/bin/python --version
-            echo "=== migration log lines ==="
-            sudo journalctl -u threatfeed --no-pager -o cat | grep -E "\[migrations\]|\[entities\]|\[search\]|\[upstream\]" | tail -30 || true
-            echo "=== recent tracebacks (last 3, bearer/authorization lines dropped) ==="
-            sudo journalctl -u threatfeed --no-pager -o cat | grep -v -i "bearer\|authorization" | grep -B3 -A22 "Traceback" | tail -110 || true
-            echo "=== schema_migrations + key columns ==="
             cd /home/ubuntu/threatfeed && set -a && . ./.env && set +a
             export PGPASSWORD="$DB_PASS"
-            psql -h "${DB_HOST:-localhost}" -U "$DB_USER" "$DB_NAME" -c "SELECT version, name FROM schema_migrations ORDER BY 1" || true
-            psql -h "${DB_HOST:-localhost}" -U "$DB_USER" "$DB_NAME" -At -c "SELECT table_name||'.'||column_name||' '||data_type FROM information_schema.columns WHERE (table_name='iocs' AND column_name IN ('analyst_status','last_seen','enrichment')) OR (table_name='investigation_items' AND column_name='reason') ORDER BY 1" || true
-            psql -h "${DB_HOST:-localhost}" -U "$DB_USER" "$DB_NAME" -At -c "SELECT tablename FROM pg_tables WHERE tablename IN ('entity_relationships','entity_observations','mitre_cache')" || true
+            Q() { psql -h "${DB_HOST:-localhost}" -U "$DB_USER" "$DB_NAME" -At -F ' | ' -c "$1" 2>&1 | head -${2:-15}; }
+            flag() { if [ -n "$(printenv "$1")" ]; then echo "$1: set"; else echo "$1: NOT SET"; fi; }
+            code() { # name, then curl args -> "name  HTTP code  time"
+              n="$1"; shift
+              out=$(curl -s -o /dev/null -m 25 -w "%{http_code} %{time_total}s" "$@" 2>&1) || out="curl-failed($?) $out"
+              printf '%-26s %s\n' "$n" "$out"
+            }
+            echo "=== 1. recent 5xx in the access log (last 20 min) ==="
+            sudo journalctl -u threatfeed --since "20 min ago" --no-pager -o cat | grep -E '" (500|502|504) ' | sed -E 's/^INFO: +[0-9.:]+ - //' | tail -15 || true
+            echo "=== 2. platform API keys configured (values never printed) ==="
+            for k in NVD_API_KEY VT_API_KEY ABUSEIPDB_API_KEY SHODAN_API_KEY GROQ_API_KEY URLHAUS_AUTH_KEY ENCRYPTION_KEY; do flag $k; done
+            echo "=== 3. upstream reachability from THIS server ==="
+            NVDH=(); [ -n "$NVD_API_KEY" ] && NVDH=(-H "apiKey: $NVD_API_KEY")
+            code "NVD CVE API"       "${NVDH[@]}" "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1"
+            code "NVD CPE API"       "${NVDH[@]}" "https://services.nvd.nist.gov/rest/json/cpes/2.0?resultsPerPage=1"
+            code "CISA KEV"          "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+            code "EPSS (FIRST)"      "https://api.first.org/data/v1/epss?cve=CVE-2021-44228"
+            code "CVE.org (cveawg)"  "https://cveawg.mitre.org/api/cve/CVE-2021-44228"
+            code "OSV"               -X POST -d '{"package":{"name":"jinja2","ecosystem":"PyPI"},"version":"2.4.1"}' "https://api.osv.dev/v1/query"
+            code "MITRE ATT&CK data" "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json" -r 0-100
+            code "dns.google"        "https://dns.google/resolve?name=example.com&type=A"
+            code "URLhaus (auth)"    -H "Auth-Key: $URLHAUS_AUTH_KEY" "https://urlhaus-api.abuse.ch/v1/urls/recent/"
+            code "ThreatFox (auth)"  -X POST -H "Auth-Key: $URLHAUS_AUTH_KEY" -d '{"query":"get_iocs","days":1}' "https://threatfox-api.abuse.ch/api/v1/"
+            code "MalwareBazaar"     -X POST -H "Auth-Key: $URLHAUS_AUTH_KEY" -d 'query=get_recent&selector=time' "https://mb-api.abuse.ch/api/v1/"
+            code "VirusTotal"        -H "x-apikey: $VT_API_KEY" "https://www.virustotal.com/api/v3/ip_addresses/8.8.8.8"
+            code "AbuseIPDB"         -H "Key: $ABUSEIPDB_API_KEY" -H "Accept: application/json" "https://api.abuseipdb.com/api/v2/check?ipAddress=8.8.8.8"
+            code "Shodan"            "https://api.shodan.io/api-info?key=$SHODAN_API_KEY"
+            code "Groq"              -H "Authorization: Bearer $GROQ_API_KEY" "https://api.groq.com/openai/v1/models"
+            for u in "https://feeds.feedburner.com/TheHackersNews" "https://www.bleepingcomputer.com/feed/" "https://www.cisa.gov/cybersecurity-advisories/all.xml" "https://isc.sans.edu/rssfeed_full.xml" "https://krebsonsecurity.com/feed/"; do code "RSS ${u#https://}" -A "Mozilla/5.0" "$u"; done
+            echo "=== 4. CVE poller: last runs ==="
+            Q "SELECT polled_at, assets_polled, new_cves, patches_detected FROM cve_poll_log ORDER BY polled_at DESC LIMIT 5"
+            Q "SELECT COUNT(*) AS active_assets FROM assets WHERE active"
+            Q "SELECT COUNT(*) AS findings, COUNT(DISTINCT cve_id) AS distinct_cves, MAX(created_at) AS newest FROM cve_findings"
+            echo "--- poller log lines (last 24h) ---"
+            sudo journalctl -u threatfeed --since "24 hours ago" --no-pager -o cat | grep -E "\[nvd\]|\[cve-poll\]|\[poll-now\]|\[kev\]" | tail -25 || true
+            echo "=== 5. IOC connectors ==="
+            Q "SELECT key, left(value, 220) FROM system_settings WHERE key LIKE 'connector%' ORDER BY key" 12
+            Q "SELECT enrichment->>'source' AS source, COUNT(*) AS iocs, MAX(created_at) AS newest FROM iocs GROUP BY 1 ORDER BY 2 DESC LIMIT 8"
+            sudo journalctl -u threatfeed --since "48 hours ago" --no-pager -o cat | grep -E "\[connector\]" | tail -8 || true
