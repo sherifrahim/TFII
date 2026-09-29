@@ -1,0 +1,37 @@
+name: Probe IOC counts and deletions (manual, read-only)
+
+# Manual only. Explains changes in indicator counts: delete requests seen by the API in the last 4 hours
+# (method, route shape, status; IDs are collapsed) and counts per source and ingest hour. Read-only.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          script: |
+            cd /home/ubuntu/threatfeed && set -a && . ./.env && set +a
+            export PGPASSWORD="$DB_PASS"
+            Q() { psql -h "${DB_HOST:-localhost}" -U "$DB_USER" "$DB_NAME" -At -F ' | ' -c "$1" 2>&1 | head -${2:-25}; }
+            echo "=== DELETE / purge requests in the API log (last 4h), collapsed by route ==="
+            sudo journalctl -u threatfeed --since "4 hours ago" --no-pager -o cat \
+              | grep -E '"(DELETE|POST) /(iocs|admin)[^"]*(DELETE|purge|cleanup|delete|expire)[^"]*"|"DELETE ' \
+              | sed -E 's/^INFO: +[0-9.:]+ - //; s/[0-9a-f]{8}-[0-9a-f-]{27}/ID/g; s/ioc--[0-9a-f-]+/ID/g' | sort | uniq -c | sort -rn | head -20
+            echo "=== IOC counts now ==="
+            Q "SELECT COUNT(*) AS total FROM iocs"
+            Q "SELECT COALESCE(NULLIF(enrichment->>'source',''),'(none)') AS source, COUNT(*) FROM iocs GROUP BY 1 ORDER BY 2 DESC"
+            echo "=== ThreatFox rows by day created ==="
+            Q "SELECT date_trunc('day', created_at)::date AS day, COUNT(*) FROM iocs WHERE enrichment->>'source'='ThreatFox' GROUP BY 1 ORDER BY 1 DESC LIMIT 8"
+            echo "=== state of ThreatFox rows ==="
+            Q "SELECT COALESCE(analyst_status,'(none)') AS analyst_status, (valid_until IS NOT NULL AND valid_until < NOW()) AS expired, COUNT(*) FROM iocs WHERE enrichment->>'source'='ThreatFox' GROUP BY 1,2 ORDER BY 3 DESC"
+            echo "=== new indicators last 3h by source ==="
+            Q "SELECT COALESCE(NULLIF(enrichment->>'source',''),'(none)'), COUNT(*), MIN(created_at)::timestamp(0), MAX(created_at)::timestamp(0) FROM iocs WHERE created_at > NOW() - INTERVAL '3 hours' GROUP BY 1 ORDER BY 2 DESC"
+            echo "=== connector runs (last 30h) ==="
+            sudo journalctl -u threatfeed --since "30 hours ago" --no-pager -o cat | grep -E "\[connector\]" | tail -14
