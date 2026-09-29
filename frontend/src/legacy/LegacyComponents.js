@@ -1119,14 +1119,18 @@ invoice.pdf.exe`;
     if(!results||results.length===0)return;
     const headers=["input","refanged","type","verdict","score","reason","country","org","cloud_provider","already_tracked"];
     const rows=results.map(r=>[
-      r.input, r.refanged, r.type, r.verdict, r.score||"", (r.reason||"").replace(/"/g,'""'),
-      r.geo?.country||"", (r.geo?.org||"").replace(/"/g,'""'), r.geo?.cloud_provider||"",
+      r.input, r.refanged, r.type, r.verdict, r.score||"", r.reason||"",
+      r.geo?.country||"", r.geo?.org||"", r.geo?.cloud_provider||"",
       r.already_tracked?"yes":"no"
     ]);
-    const csv=[headers,...rows].map(row=>row.map(cell=>{
-      const s=String(cell);
-      return /[",\n]/.test(s) ? `"${s}"` : s;
-    }).join(",")).join("\n");
+    // Quote every cell that needs it, and defuse spreadsheet formulas: the indicators are pasted by users and
+    // may start with = + - @ , which Excel/Sheets would run as a formula when the file is opened.
+    const cellText=cell=>{
+      let s=String(cell);
+      if(/^[=+\-@\t\r]/.test(s)) s="'"+s;
+      return /[",\r\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+    };
+    const csv=[headers,...rows].map(row=>row.map(cellText).join(",")).join("\r\n");
     const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
     const url=URL.createObjectURL(blob);
     const a=document.createElement("a");

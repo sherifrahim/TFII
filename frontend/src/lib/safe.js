@@ -14,15 +14,23 @@ export function safeUrl(u) {
   }
 }
 
+// A file the page itself just built (CSV export, report, attachment): a `blob:` URL from this origin on a
+// link that saves rather than navigates. Third-party data cannot produce one, so this is safe to allow.
+export function isOwnDownload(href, hasDownloadAttr, origin) {
+  return !!hasDownloadAttr && typeof href === "string" && typeof origin === "string" && origin !== "null" &&
+    href.trim().startsWith("blob:" + origin + "/");
+}
+
 // Defence in depth for the legacy components, which render data-driven hrefs
-// in many places: refuse to follow any anchor that is not http(s), mailto or an
-// in-app hash link.
+// in many places: refuse to follow any anchor that is not http(s), mailto, an
+// in-app hash link, or a download the page built itself.
 export function installLinkGuard() {
   const h = e => {
     const a = e.target && e.target.closest && e.target.closest("a[href]");
     if (!a) return;
     const href = a.getAttribute("href") || "";
     if (href.startsWith("#") || href.startsWith("/")) return;
+    if (isOwnDownload(href, a.hasAttribute("download"), window.location.origin)) return;
     if (!/^(https?:|mailto:)/i.test(href.trim())) {
       e.preventDefault();
       e.stopPropagation();

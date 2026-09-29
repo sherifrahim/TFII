@@ -1,7 +1,7 @@
 /* eslint-disable no-script-url -- the tests feed hostile javascript: URLs on purpose */
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { safeUrl } from "../lib/safe";
+import { safeUrl, installLinkGuard } from "../lib/safe";
 import { entityPath, canonicalKind, KINDS } from "../lib/entity";
 import { entityRoute } from "../lib/router";
 import { detectType, refang, defang, confBand } from "../lib/format";
@@ -15,6 +15,41 @@ describe("safeUrl — only plain http(s) may become a link", () => {
     ["//evil.example", false], ["", false], [null, false], [undefined, false], ["https://a b.com", false],
     ["https://x.com/\u0001", false], ["ftp://x.com", false],
   ])("%s → %s", (u, ok) => expect(!!safeUrl(u)).toBe(ok));
+});
+
+describe("link guard — blocks hostile links but not the page's own downloads", () => {
+  let off;
+  beforeEach(() => { off = installLinkGuard(); });
+  afterEach(() => { off(); document.body.innerHTML = ""; });
+
+  // Was the click stopped by the guard?  A blocked click never reaches the later bubbling listener (the guard
+  // stops propagation); an allowed one does, and that listener cancels it so jsdom does not try to navigate.
+  function blocked(href, download) {
+    const a = document.createElement("a");
+    a.setAttribute("href", href);
+    if (download) a.setAttribute("download", "x.csv");
+    document.body.appendChild(a);
+    let reached = false, prevented = false;
+    const spy = e => { reached = true; prevented = e.defaultPrevented; e.preventDefault(); };
+    document.addEventListener("click", spy);
+    a.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    document.removeEventListener("click", spy);
+    return !reached || prevented;
+  }
+  const own = () => `blob:${window.location.origin}/0f8fad5b-d9cb-469f-a165-70867728950e`;
+
+  test("the CSV/report/attachment downloads still work", () => {
+    expect(blocked(own(), true)).toBe(false);
+  });
+  test("hostile or unrelated links are still refused", () => {
+    expect(blocked("javascript:alert(1)", false)).toBe(true);
+    expect(blocked("javascript:alert(1)", true)).toBe(true);
+    expect(blocked("data:text/html,<script>alert(1)</script>", true)).toBe(true);
+    expect(blocked(own(), false)).toBe(true);                                   // a blob link that navigates, not downloads
+    expect(blocked("blob:https://evil.example/abc", true)).toBe(true);          // someone else's blob
+    expect(blocked("https://example.com/", false)).toBe(false);                 // ordinary links unchanged
+    expect(blocked("#/iocs", false)).toBe(false);
+  });
 });
 
 describe("entity routing", () => {
