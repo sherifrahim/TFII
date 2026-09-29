@@ -1191,7 +1191,7 @@ invoice.pdf.exe`;
             lineHeight:1.6,boxSizing:"border-box"}}/>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10,flexWrap:"wrap",gap:8}}>
           <span style={{fontSize:11,color:C.muted}}>
-            Max 60 indicators per lookup. Defanged formats (evil[.]com, hxxp://, user[at]domain) auto-detected.
+            Max 150 indicators per lookup. Defanged formats (evil[.]com, hxxp://, user[at]domain) auto-detected.
             Files: .txt, .csv, .log (max 2MB).
           </span>
           <Btn onClick={runLookup} disabled={loading||uploading||!input.trim()} C={C}>

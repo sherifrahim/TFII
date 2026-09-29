@@ -1,6 +1,7 @@
 import os, uuid, httpx, asyncio, base64, csv, io, re, json, socket, ipaddress, hashlib, secrets, shutil
 import html as _html   # aliased: one function uses a local named `html`
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional
@@ -92,9 +93,9 @@ def decrypt_key(ciphertext: str) -> str:
         return ""
 
 def mask_key(key: str) -> str:
-    """Show only first 4 and last 4 characters."""
-    if not key or len(key) < 10: return "••••••••"
-    return key[:4] + "••••••••" + key[-4:]
+    """Just enough to recognise which key is saved: the last 4 characters of a long key, nothing of a short one."""
+    if not key or len(key) < 16: return "••••••••"
+    return "••••••••" + key[-4:]
 
 # ── KEY RESOLUTION + QUOTA ────────────────────────────────────────────────────
 def get_user_daily_usage(conn, user_id: str, service: str) -> int:
@@ -109,11 +110,14 @@ def resolve_api_key(conn, service: str, user: dict) -> tuple:
     """
     Returns (key, using_personal_key, quota_remaining).
     
+    A saved key is never shown or returned to anyone but its owner. The one deliberate exception to
+    "used only by its owner" is the admin fallback below, which uses a key server-side without exposing it.
+
     Admin priority:
       1. Admin's own personal key
       2. Platform .env key
-      3. Any other user's key (pooled fallback — admin only)
-    
+      3. Any other user's key (pooled fallback — admin only, used server-side, never returned)
+
     Regular user priority:
       1. User's own personal key (unlimited)
       2. Platform key within daily quota (10/day)
@@ -1654,7 +1658,7 @@ async def sync_connectors(connectors: str = "all", admin=Depends(require_admin),
     """
     Manually trigger connector sync. connectors= all | threatfox | malwarebazaar | urlhaus
     """
-    if not _abusech_keys(conn):
+    if not _abusech_keys(conn, admin):
         raise HTTPException(status_code=400,
             detail="No abuse.ch Auth-Key configured. Add URLHAUS_AUTH_KEY to .env or save it in Settings → API Keys.")
 
@@ -1662,7 +1666,7 @@ async def sync_connectors(connectors: str = "all", admin=Depends(require_admin),
     results = {}
     for fid in ("threatfox", "malwarebazaar", "urlhaus"):
         if connectors == "all" or connectors == fid:
-            r = await _run_abusech(fid, conn, cfg)
+            r = await _run_abusech(fid, conn, cfg, admin)
             results[fid] = r
             log_connector_run(conn, fid, r)
 
@@ -1688,25 +1692,32 @@ def _connector_cfg(conn) -> dict:
 
 ABUSECH_REJECTED = ("Invalid Auth-Key", "HTTP 401", "HTTP 403")
 
-def _abusech_keys(conn) -> list:
-    """Candidate abuse.ch Auth-Keys, best first: the server's own, then keys saved by admin accounts.
-    A rotated or revoked .env key must not silently stop the feeds while a working key is on file."""
+def _abusech_keys(conn, user=None) -> list:
+    """Candidate abuse.ch Auth-Keys, best first: the server's own, then the key of the person who started
+    the run, and, for an admin only (same rule as resolve_api_key), keys other users have saved. Scheduled
+    runs have no user and use the server key alone. A rotated or revoked .env key must not stop a run
+    started by someone who has a working key available to them."""
     keys: list = []
     def add(k):
         if k and k not in keys:
             keys.append(k)
     add(URLHAUS_AUTH_KEY)
-    cur = conn.cursor()
-    cur.execute("""SELECT k.api_key_encrypted FROM user_api_keys k JOIN users u ON u.id = k.user_id
-                   WHERE k.service = 'urlhaus' AND u.role = 'admin' AND u.active = TRUE
-                     AND k.api_key_encrypted <> '' ORDER BY k.updated_at DESC""")
-    for (enc,) in cur.fetchall():
-        add(decrypt_key(enc))
+    if user is not None:
+        cur = conn.cursor()
+        cur.execute("SELECT api_key_encrypted FROM user_api_keys WHERE user_id = %s AND service = 'urlhaus'", (user["id"],))
+        row = cur.fetchone()
+        if row and row[0]:
+            add(decrypt_key(row[0]))
+        if user.get("role") == "admin":
+            cur.execute("""SELECT api_key_encrypted FROM user_api_keys WHERE service = 'urlhaus'
+                           AND user_id != %s AND api_key_encrypted <> '' ORDER BY updated_at DESC""", (user["id"],))
+            for (enc,) in cur.fetchall():
+                add(decrypt_key(enc))
     return keys
 
-async def _run_abusech(feed_id: str, conn, cfg: dict) -> dict:
+async def _run_abusech(feed_id: str, conn, cfg: dict, user=None) -> dict:
     """Run ThreatFox / MalwareBazaar / URLhaus, moving on to the next key only when a key is rejected."""
-    keys = _abusech_keys(conn)
+    keys = _abusech_keys(conn, user)
     if not keys:
         return {"ok": False, "error": "No abuse.ch Auth-Key configured (URLHAUS_AUTH_KEY, or save one in Settings → API keys)."}
     fn = {"threatfox": run_threatfox_connector, "malwarebazaar": run_malwarebazaar_connector, "urlhaus": run_urlhaus_connector}[feed_id]
@@ -1717,7 +1728,7 @@ async def _run_abusech(feed_id: str, conn, cfg: dict) -> dict:
         res = await fn(conn, key, arg)
         if res.get("ok") or not any(m in str(res.get("error", "")) for m in ABUSECH_REJECTED):
             return res
-    return {"ok": False, "error": f"abuse.ch rejected every Auth-Key on file ({res.get('error')}). Create a new key at auth.abuse.ch "
+    return {"ok": False, "error": f"abuse.ch rejected every Auth-Key available to this run ({res.get('error')}). Create a new key at auth.abuse.ch "
                                    f"and save it in Settings → API keys, or update URLHAUS_AUTH_KEY."}
 
 def _feed_key(conn, feed_id: str, user=None) -> str:
@@ -1769,7 +1780,7 @@ async def _run_feed_job(feed_id: str, user=None):
     try:
         cfg = _connector_cfg(conn)
         if feed_id in ABUSECH:
-            res = await _run_abusech(feed_id, conn, cfg)
+            res = await _run_abusech(feed_id, conn, cfg, user)
         else:
             f = feeds.FEEDS[feed_id]
             key = _feed_key(conn, feed_id, user)
@@ -1804,7 +1815,7 @@ def connector_catalog(admin=Depends(require_admin), conn=Depends(get_db)):
     cur.execute("""SELECT COALESCE(NULLIF(enrichment->>'source',''), '') AS s, COUNT(*) AS n, MAX(created_at) AS newest,
             COUNT(*) FILTER (WHERE confidence >= 80) AS high FROM iocs GROUP BY 1""")
     stats = {r["s"]: r for r in cur.fetchall()}
-    abusech_keys = _abusech_keys(conn)
+    abusech_keys = _abusech_keys(conn, admin)
     out = []
     for fid, (name, kinds, home, about, flag, _iv) in ABUSECH.items():
         st = stats.get(name, {})
@@ -2136,18 +2147,24 @@ def detect_cloud_provider(org: str) -> Optional[str]:
 async def geo_org_lookup_batch(ips: list) -> dict:
     """
     Batch IP geolocation + ASN/org lookup via ip-api.com (free, no API key).
-    Up to 100 IPs in a single request. Returns {ip: {country, org, isp, as, ...}}.
+    ip-api takes 100 IPs per request, so larger lists are sent in chunks.
+    Returns {ip: {country, org, isp, as, ...}}; a chunk that fails just has no data.
     """
     if not ips: return {}
-    try:
-        async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.post("http://ip-api.com/batch",
-                json=[{"query": ip, "fields": "query,status,country,countryCode,org,isp,as"}
-                      for ip in ips[:100]])
-        if r.status_code != 200: return {}
-        return {item["query"]: item for item in r.json() if item.get("query")}
-    except Exception:
-        return {}
+    out: dict = {}
+    for i in range(0, len(ips), 100):
+        chunk = ips[i:i + 100]
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.post("http://ip-api.com/batch",
+                    json=[{"query": ip, "fields": "query,status,country,countryCode,org,isp,as"} for ip in chunk])
+            if r.status_code == 200:
+                out.update({item["query"]: item for item in r.json() if item.get("query")})
+        except Exception:
+            continue
+    return out
+
+_DNS_POOL = ThreadPoolExecutor(max_workers=24, thread_name_prefix="tf-dns")
 
 async def resolve_to_ip(value: str, ioc_type: str) -> Optional[str]:
     """Resolve a Domain or URL's hostname to an IP for geo lookup. Returns None on failure."""
@@ -2161,7 +2178,8 @@ async def resolve_to_ip(value: str, ioc_type: str) -> Optional[str]:
     if ioc_type not in ("Domain","URL"):
         return None
     try:
-        return await asyncio.wait_for(asyncio.to_thread(socket.gethostbyname, host), timeout=4)
+        # A dedicated pool: a batch of a couple of hundred names would otherwise queue behind the default executor.
+        return await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(_DNS_POOL, socket.gethostbyname, host), timeout=4)
     except Exception:
         return None
 
@@ -3418,7 +3436,11 @@ async def re_enrich(ioc_id: str, user=Depends(require_full_access), conn=Depends
 class BulkLookupRequest(BaseModel):
     input: str
 
-MAX_BULK_INDICATORS = 60
+MAX_BULK_INDICATORS = 150
+BULK_CONCURRENCY = 10
+# Stay under the reverse proxy's read timeout: rows not reached by then are reported as "not checked"
+# (so the analyst can re-run just those) instead of the whole request dying with a gateway error.
+BULK_DEADLINE_SECONDS = 100
 
 async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
     """
@@ -3452,7 +3474,8 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
     geo_data   = await geo_org_lookup_batch(unique_ips) if unique_ips else {}
 
     # ── Phase 4: threat-intel enrichment (concurrency-limited) ───────────────
-    sem = asyncio.Semaphore(5)
+    sem = asyncio.Semaphore(BULK_CONCURRENCY)
+    deadline = asyncio.get_running_loop().time() + BULK_DEADLINE_SECONDS
 
     def build_geo(item):
         raw_geo = geo_data.get(item["geo_ip"]) if item["geo_ip"] else None
@@ -3473,6 +3496,11 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
         async with sem:
             raw, refanged, ioc_type = item["input"], item["refanged"], item["type"]
             geo = build_geo(item)
+
+            if asyncio.get_running_loop().time() > deadline:
+                return {"input": raw, "refanged": refanged, "defanged": refanged, "type": ioc_type,
+                        "verdict": "unknown", "reason": "Not checked: the batch ran out of time. Run these again.",
+                        "enrichment": {}, "geo": geo, "not_checked": True}
 
             if ioc_type == "Unknown":
                 return {"input": raw, "refanged": refanged, "defanged": refanged,
@@ -3537,7 +3565,8 @@ async def bulk_ioc_lookup(request: Request, body: BulkLookupRequest, user=Depend
     return await run_bulk_lookup(body.input, user, conn)
 
 @app.post("/iocs/bulk-lookup/file")
-async def bulk_ioc_lookup_file(file: UploadFile = File(...), user=Depends(get_current_user), conn=Depends(get_db)):
+@limiter.limit("10/minute")
+async def bulk_ioc_lookup_file(request: Request, file: UploadFile = File(...), user=Depends(get_current_user), conn=Depends(get_db)):
     """
     Same as /iocs/bulk-lookup but the indicators come from an uploaded
     file (.txt, .csv, or any plain-text list) instead of a pasted blob.
