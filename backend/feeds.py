@@ -38,6 +38,21 @@ DEFAULT_RELIABILITY = 0.5
 CONF_CAP = 97          # nothing automated is ever 100% certain
 
 
+# Meta-sources: IPsum is itself built from other blocklists. Counting IPsum AND a list it already
+# contains as two independent confirmations double-counts the same evidence, so when the aggregate is
+# present its members add nothing (its own per-entry list count already reflects them).
+AGGREGATES = {"IPsum": {"CINS Army", "Emerging Threats", "blocklist.de"}}
+
+
+def independent_scores(scores: Dict[str, float]) -> Dict[str, float]:
+    out = dict(scores)
+    for meta, members in AGGREGATES.items():
+        if meta in out:
+            for m in members:
+                out.pop(m, None)
+    return out
+
+
 def noisy_or(reliabilities) -> float:
     p = 1.0
     for r in reliabilities:
@@ -282,6 +297,7 @@ async def fetch_text(feed: Feed, key: Optional[str] = None) -> str:
 # ── Confidence ────────────────────────────────────────────────────────────────
 def corroborated_confidence(source_scores: Dict[str, float]) -> int:
     """source_scores: source -> best reliability (0-1) reported by that source."""
+    source_scores = independent_scores(source_scores)
     return int(round(100 * min(CONF_CAP / 100.0, noisy_or(source_scores.values()))))
 
 
@@ -295,6 +311,7 @@ def corroborate(conn, ioc_id: str, key: str, record_score: Callable, actor: str 
     scores = {}
     for src, conf in cur.fetchall():
         scores[src] = (conf / 100.0) if conf else SOURCE_RELIABILITY.get(src, DEFAULT_RELIABILITY)
+    scores = independent_scores(scores)
     if len(scores) < 2:
         return None
     new = corroborated_confidence(scores)
@@ -401,3 +418,41 @@ async def run_feed(conn, feed_id: str, cfg: dict, *, ingest: Callable, record_sc
         res["error"] = "; ".join(errors)[:300]
     return res
 
+
+
+def repair_overcounted(conn, record_score: Callable, floor: int = 70) -> dict:
+    """One-off correction for indicators scored while IPsum and the lists it aggregates were counted as
+    independent. Recomputes confidence from the distinct-source evidence; feed-corroborated confidence only.
+    Indicators that fall below the floor, were created by a consensus run and were never touched by an
+    analyst are expired (they were only ever admitted by the double count)."""
+    import psycopg2.extras
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""SELECT id, value, confidence, enrichment, analyst_status, created_by FROM iocs
+        WHERE enrichment ? 'corroborated_by' AND enrichment->'corroborated_by' ? 'IPsum' AND NOT COALESCE(false_positive, FALSE)""")
+    fixed = expired = 0
+    for r in cur.fetchall():
+        c2 = conn.cursor()
+        c2.execute("""SELECT source, MAX(COALESCE(confidence, 0)) FROM entity_observations
+            WHERE entity_kind = 'indicator' AND LOWER(entity_ref) = LOWER(%s) AND obs_type IN ('ingested','sighting')
+                  AND source_type = 'feed' GROUP BY source""", (r["value"],))
+        scores = {src: ((conf / 100.0) if conf else SOURCE_RELIABILITY.get(src, DEFAULT_RELIABILITY)) for src, conf in c2.fetchall()}
+        ind = independent_scores(scores)
+        new = corroborated_confidence(scores) if len(ind) >= 1 else r["confidence"]
+        if new >= r["confidence"]:
+            continue
+        enr = dict(r["enrichment"] or {})
+        reason = f"Corrected: IPsum already aggregates the other lists, so they are not independent confirmation ({r['confidence']} → {new})"
+        enr["confidence_reasons"] = [x for x in (enr.get("confidence_reasons") or []) if not str(x).startswith("Corroborated by")] + [reason]
+        enr["corroborated_by"] = sorted(ind)
+        c2.execute("UPDATE iocs SET confidence = %s, enrichment = %s WHERE id = %s", (new, psycopg2.extras.Json(enr), r["id"]))
+        try:
+            record_score(conn, r["id"], r["confidence"], new, [reason], "feed correction")
+        except Exception:
+            pass
+        fixed += 1
+        only_consensus_feeds = set(ind) <= {"IPsum", "CINS Army", "Emerging Threats", "blocklist.de", "Phishing Database"}
+        if new < floor and only_consensus_feeds and not r["analyst_status"] and not r["created_by"]:
+            c2.execute("UPDATE iocs SET valid_until = NOW() WHERE id = %s", (r["id"],))
+            expired += 1
+    conn.commit()
+    return {"corrected": fixed, "expired": expired}

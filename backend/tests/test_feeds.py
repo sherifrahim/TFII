@@ -96,26 +96,61 @@ def test_direct_feed_creates_indicators_with_provenance(client, db):
     assert cur.fetchall() == [("ingested", "feed", "https://feodotracker.abuse.ch/browse/host/45.9.148.10/", 92)]
 
 
-def test_consensus_only_creates_what_sources_agree_on_and_corroborates_existing(client, db):
+def test_consensus_only_creates_what_independent_sources_agree_on(client, db):
+    cfg = {"min_confidence": 70, "feeds": {"cins": {"enabled": True}, "et_compromised": {"enabled": True}, "blocklist_de": {"enabled": True}}}
+    texts = {"cins": "91.92.109.7\n91.92.109.8\n91.92.109.99\n", "et_compromised": "91.92.109.7\n91.92.109.8\n", "blocklist_de": "91.92.109.7\n"}
+    r = _run(client, "cins", cfg, texts)
+    assert r["ok"] and r["below_floor"] >= 1
+    assert _ioc(db, "91.92.109.7")[0] > 90                        # three independent lists agree
+    assert 80 <= _ioc(db, "91.92.109.8")[0] <= 90                 # two agree
+    assert _ioc(db, "91.92.109.99") is None                       # a single weak list: not created
+
+
+def test_ipsum_is_not_double_counted_with_the_lists_it_aggregates(client, db):
+    assert feeds.corroborated_confidence({"IPsum": 0.62, "CINS Army": 0.62, "Emerging Threats": 0.66}) == 62
+    assert feeds.corroborated_confidence({"IPsum": 0.62, "Feodo Tracker": 0.92}) > 95          # a genuinely different source still counts
     cfg = {"min_confidence": 70, "feeds": {"ipsum": {"enabled": True}, "cins": {"enabled": True}, "et_compromised": {"enabled": True}}}
-    texts = {"ipsum": "93.184.215.9\t7\n91.92.109.7\t3\n91.92.109.8\t3\n45.9.148.10\t4\n",
-             "cins": "91.92.109.7\n91.92.109.99\n",
-             "et_compromised": "91.92.109.7\n91.92.109.8\n"}
+    texts = {"ipsum": "93.184.215.9\t7\n91.92.110.7\t3\n91.92.110.8\t4\n", "cins": "91.92.110.7\n", "et_compromised": "91.92.110.7\n"}
     r = _run(client, "ipsum", cfg, texts)
     assert r["ok"]
-    assert _ioc(db, "93.184.215.9")[0] == 90                       # strong on its own (7 lists)
-    assert _ioc(db, "91.92.109.7")[0] > 90                        # ipsum(3)+cins+et agree -> corroborated
-    assert _ioc(db, "91.92.109.8")[0] >= 80                       # ipsum(3)+et
-    assert _ioc(db, "91.92.109.99") is None                       # a single weak list: not created
-    assert r["below_floor"] >= 1
-    # 45.9.148.10 already came from Feodo (92): an IPsum sighting corroborates it upward, never down
-    conf = _ioc(db, "45.9.148.10")[0]
-    assert conf >= 92
+    assert _ioc(db, "93.184.215.9")[0] == 90                      # 7 lists: strong on its own
+    assert _ioc(db, "91.92.110.8")[0] == 72                       # level 4
+    assert _ioc(db, "91.92.110.7") is None                        # level 3 + the lists IPsum already contains: still only 62
+    # an indicator already held (Feodo, 92) is corroborated by IPsum upward, never down
+    _run(client, "feodo", {"min_confidence": 70}, {"feodo": FEODO})
+    r = _run(client, "ipsum", cfg, {"ipsum": "45.9.148.10\t4\n", "cins": "", "et_compromised": ""})
+    assert _ioc(db, "45.9.148.10")[0] >= 92
     cur = db.cursor()
     cur.execute("SELECT DISTINCT source FROM entity_observations WHERE entity_ref='45.9.148.10' ORDER BY 1")
     assert [x[0] for x in cur.fetchall()] == ["Feodo Tracker", "IPsum"]
-    cur.execute("SELECT enrichment->'confidence_reasons' FROM iocs WHERE value='91.92.109.7'")
-    assert any("Corroborated by 3 independent feeds" in x for x in cur.fetchone()[0])
+
+
+def test_repair_corrects_double_counted_indicators_and_expires_the_ones_only_the_double_count_admitted(client, db):
+    import main
+    cur = db.cursor()
+    import psycopg2.extras as ex
+    for val, conf in (("91.92.111.1", 95), ("91.92.111.2", 95)):
+        cur.execute("""INSERT INTO iocs (id,type,value,value_defanged,industry,tlp,confidence,description,tags,enrichment,valid_until,created_at)
+            VALUES (%s,'IPv4',%s,%s,'General','AMBER',%s,'d',ARRAY['feed'],%s,NOW()+INTERVAL '10 days',NOW())""",
+                    (f"indicator--fix-{val}", val, val, conf, ex.Json({"source": "IPsum", "corroborated_by": ["CINS Army", "Emerging Threats", "IPsum"]})))
+    conn = main.get_db_direct()
+    try:
+        for val in ("91.92.111.1", "91.92.111.2"):
+            for src, c in (("IPsum", 62), ("CINS Army", 62), ("Emerging Threats", 66)):
+                main.entities.record_observation(conn, "indicator", val, "ingested", src, "feed", confidence=c)
+        # the second one is also confirmed by an independent source and must be kept alive
+        main.entities.record_observation(conn, "indicator", "91.92.111.2", "sighting", "ThreatFox", "feed", confidence=85)
+        conn.commit()
+        res = feeds.repair_overcounted(conn, main.record_score)
+    finally:
+        conn.close()
+    assert res["corrected"] >= 2
+    cur.execute("SELECT confidence, valid_until > NOW() FROM iocs WHERE value='91.92.111.1'")
+    assert cur.fetchone() == (62, False)          # corrected and expired: only the double count had admitted it
+    cur.execute("SELECT confidence, valid_until > NOW() FROM iocs WHERE value='91.92.111.2'")
+    conf, alive = cur.fetchone()
+    assert conf > 90 and alive is True             # ThreatFox is a genuinely independent source
+    cur.execute("DELETE FROM iocs WHERE value IN ('91.92.111.1', '91.92.111.2')")      # leave no rows for other tests
 
 
 def test_sighting_refreshes_expiry_but_never_resurrects_false_positives(client, db):
