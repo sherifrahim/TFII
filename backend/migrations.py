@@ -9,8 +9,11 @@ and a new migration is a new list entry rather than another ad-hoc ALTER.
 Rules every migration follows:
   * additive and idempotent (IF NOT EXISTS) — nothing is dropped or rewritten,
     so rolling the code back leaves a working database;
-  * a statement marked optional (extensions, expression indexes) may fail on a
-    restricted database without blocking the migration;
+  * a statement marked optional (extensions and EVERY index) may fail on a
+    restricted database without blocking the migration. Indexes are optional
+    because the app's database role does not always own the older v1 tables
+    ("must be owner of table cve_findings" on production stopped migration 1
+    and therefore migration 2); an index is an optimisation, a column is not;
   * a required statement that fails stops that migration, is retried on the next
     start, and never stops the application from booting.
 """
@@ -53,18 +56,18 @@ MIGRATIONS = [
             title TEXT NOT NULL, body TEXT, ref_type VARCHAR(30), ref_id TEXT, created_by VARCHAR(50),
             occurred_at TIMESTAMP DEFAULT NOW(), created_at TIMESTAMP DEFAULT NOW())"""),
         R("ALTER TABLE admin_notes ADD COLUMN IF NOT EXISTS investigation_id VARCHAR(100)"),
-        R("CREATE INDEX IF NOT EXISTS idx_iocs_created_at ON iocs (created_at DESC)"),
-        R("CREATE INDEX IF NOT EXISTS idx_iocs_type ON iocs (type)"),
-        R("CREATE INDEX IF NOT EXISTS idx_iocs_campaign ON iocs (campaign_id)"),
-        R("CREATE INDEX IF NOT EXISTS idx_iocs_value_hash ON iocs USING hash (value)"),
-        R("CREATE INDEX IF NOT EXISTS idx_cvef_asset ON cve_findings (asset_id)"),
-        R("CREATE INDEX IF NOT EXISTS idx_cvef_cve ON cve_findings (cve_id)"),
-        R("CREATE INDEX IF NOT EXISTS idx_rel_source ON ioc_relationships (source_id)"),
-        R("CREATE INDEX IF NOT EXISTS idx_rel_target ON ioc_relationships (target_id)"),
-        R("CREATE INDEX IF NOT EXISTS idx_invitems_inv ON investigation_items (investigation_id)"),
-        R("CREATE INDEX IF NOT EXISTS idx_invitems_ref ON investigation_items (item_type, ref_id)"),
-        R("CREATE INDEX IF NOT EXISTS idx_invevents_inv ON investigation_events (investigation_id)"),
-        R("CREATE INDEX IF NOT EXISTS idx_prov_ioc ON ioc_provenance (ioc_id)"),
+        O("CREATE INDEX IF NOT EXISTS idx_iocs_created_at ON iocs (created_at DESC)"),
+        O("CREATE INDEX IF NOT EXISTS idx_iocs_type ON iocs (type)"),
+        O("CREATE INDEX IF NOT EXISTS idx_iocs_campaign ON iocs (campaign_id)"),
+        O("CREATE INDEX IF NOT EXISTS idx_iocs_value_hash ON iocs USING hash (value)"),
+        O("CREATE INDEX IF NOT EXISTS idx_cvef_asset ON cve_findings (asset_id)"),
+        O("CREATE INDEX IF NOT EXISTS idx_cvef_cve ON cve_findings (cve_id)"),
+        O("CREATE INDEX IF NOT EXISTS idx_rel_source ON ioc_relationships (source_id)"),
+        O("CREATE INDEX IF NOT EXISTS idx_rel_target ON ioc_relationships (target_id)"),
+        O("CREATE INDEX IF NOT EXISTS idx_invitems_inv ON investigation_items (investigation_id)"),
+        O("CREATE INDEX IF NOT EXISTS idx_invitems_ref ON investigation_items (item_type, ref_id)"),
+        O("CREATE INDEX IF NOT EXISTS idx_invevents_inv ON investigation_events (investigation_id)"),
+        O("CREATE INDEX IF NOT EXISTS idx_prov_ioc ON ioc_provenance (ioc_id)"),
     ]),
 
     (2, "phase2_intelligence_core", [
@@ -91,8 +94,8 @@ MIGRATIONS = [
             created_by VARCHAR(100),
             created_at TIMESTAMP DEFAULT NOW(),
             UNIQUE (src_kind, src_ref, rel_type, dst_kind, dst_ref, source))"""),
-        R("CREATE INDEX IF NOT EXISTS idx_er_src ON entity_relationships (src_kind, src_ref)"),
-        R("CREATE INDEX IF NOT EXISTS idx_er_dst ON entity_relationships (dst_kind, dst_ref)"),
+        O("CREATE INDEX IF NOT EXISTS idx_er_src ON entity_relationships (src_kind, src_ref)"),
+        O("CREATE INDEX IF NOT EXISTS idx_er_dst ON entity_relationships (dst_kind, dst_ref)"),
 
         # ── Observations / provenance: one row per thing a source told us (or an
         #    analyst did) about an entity. observed_at is when the SOURCE says it
@@ -111,8 +114,8 @@ MIGRATIONS = [
             actor VARCHAR(100),
             summary TEXT,
             data JSONB DEFAULT '{}')"""),
-        R("CREATE INDEX IF NOT EXISTS idx_eo_entity ON entity_observations (entity_kind, entity_ref)"),
-        R("CREATE INDEX IF NOT EXISTS idx_eo_ingested ON entity_observations (ingested_at DESC)"),
+        O("CREATE INDEX IF NOT EXISTS idx_eo_entity ON entity_observations (entity_kind, entity_ref)"),
+        O("CREATE INDEX IF NOT EXISTS idx_eo_ingested ON entity_observations (ingested_at DESC)"),
 
         # ── Workspace: why is this entity part of the investigation?
         R("ALTER TABLE investigation_items ADD COLUMN IF NOT EXISTS reason TEXT"),
@@ -124,12 +127,12 @@ MIGRATIONS = [
             fetched_at TIMESTAMP DEFAULT NOW())"""),
 
         # ── Lookup indexes for the entity resolver and search.
-        R("CREATE INDEX IF NOT EXISTS idx_iocs_lower_value ON iocs (LOWER(value))"),
-        R("CREATE INDEX IF NOT EXISTS idx_iocs_analyst_status ON iocs (analyst_status) WHERE analyst_status IS NOT NULL"),
-        R("CREATE INDEX IF NOT EXISTS idx_iocs_last_seen ON iocs (last_seen DESC)"),
-        R("CREATE INDEX IF NOT EXISTS idx_iocs_family ON iocs (LOWER(enrichment->>'malware_family')) WHERE enrichment ? 'malware_family'"),
-        R("CREATE INDEX IF NOT EXISTS idx_campaigns_actor ON campaigns (LOWER(threat_actor))"),
-        R("CREATE INDEX IF NOT EXISTS idx_invitems_value ON investigation_items (LOWER(value))"),
+        O("CREATE INDEX IF NOT EXISTS idx_iocs_lower_value ON iocs (LOWER(value))"),
+        O("CREATE INDEX IF NOT EXISTS idx_iocs_analyst_status ON iocs (analyst_status) WHERE analyst_status IS NOT NULL"),
+        O("CREATE INDEX IF NOT EXISTS idx_iocs_last_seen ON iocs (last_seen DESC)"),
+        O("CREATE INDEX IF NOT EXISTS idx_iocs_family ON iocs (LOWER(enrichment->>'malware_family')) WHERE enrichment ? 'malware_family'"),
+        O("CREATE INDEX IF NOT EXISTS idx_campaigns_actor ON campaigns (LOWER(threat_actor))"),
+        O("CREATE INDEX IF NOT EXISTS idx_invitems_value ON investigation_items (LOWER(value))"),
         O(f"CREATE INDEX IF NOT EXISTS idx_iocs_url_host ON iocs (({URL_HOST_SQL})) WHERE type = 'URL'"),
         # Trigram indexes make substring search (ILIKE '%…%') index-assisted once
         # the table is large. pg_trgm is a trusted extension on PostgreSQL 13+.
