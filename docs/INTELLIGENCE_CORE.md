@@ -114,6 +114,19 @@ unknown, never guessed), `ingested_at`, `confidence`, `actor`, `summary`.
 
 Everything else (v1: `/iocs`, `/cves/*`, TAXII/STIX, OSINT, admin) is unchanged.
 
+## Where an indicator "is" (`geo.py`)
+
+Bulk lookup and the observable page label every location by what it is, because a country beside a domain reads as "where it comes from" and TFII cannot establish that:
+
+| `geo.kind` | Meaning |
+|---|---|
+| `ip` | GeoIP location of that address; compared with AbuseIPDB and VirusTotal (`agreement`: agree / differ) |
+| `hosting` | where the web host its name resolves to is located; every public A/AAAA is resolved, all countries listed |
+| `cdn_edge` | the address belongs to a CDN (Cloudflare, Akamai, Fastly, ...), which answers from the location nearest the asker, so **no country is claimed** (`edge_country` is kept separately) |
+| `unknown` | unresolvable; only the registry hint may be present |
+
+`cctld_country_code` is the registry country of a real country-code TLD (`.mu` -> MU); it is a hint shown separately, never a location, and generic-use ccTLDs (`.io`, `.tv`, ...) are ignored.
+
 ## Indicator feeds and confidence (`feeds.py`)
 
 Sources are declared in `feeds.FEEDS` (URL + pure parser + reliability + expiry + interval); the three abuse.ch connectors
