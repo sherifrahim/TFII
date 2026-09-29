@@ -1,0 +1,39 @@
+name: Probe AlienVault OTX from the server (read-only)
+
+# Manual only. Answers "why can the server not reach OTX": DNS, IPv4 vs IPv6, TLS, and the HTTP status
+# for the exact request the key check and the feed make. No key is sent, and none is printed.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          script: |
+            H=otx.alienvault.com
+            echo "--- dns ---"; getent ahosts $H | head -6 || echo "dns lookup failed"
+            for v in -4 -6; do
+              for path in /api/v1/user/me /api/v1/pulses/subscribed?limit=1; do
+                out=$(curl $v -s -o /dev/null -m 20 -w "%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s" \
+                  -H "X-OTX-API-KEY: invalid" -A "python-httpx" "https://$H$path" 2>&1) || out="curl-failed($?) $out"
+                printf '%s %-34s %s\n' "$v" "$path" "$out"
+              done
+            done
+            echo "--- same request as the app (python httpx, 12s timeout) ---"
+            cd /home/ubuntu/threatfeed && venv/bin/python - <<'PY'
+            import httpx, time
+            for path in ("/api/v1/user/me",):
+                t = time.time()
+                try:
+                    r = httpx.get("https://otx.alienvault.com" + path, headers={"X-OTX-API-KEY": "invalid"}, timeout=12)
+                    print(path, r.status_code, f"{time.time()-t:.1f}s", "server:", r.headers.get("server"))
+                except Exception as e:
+                    print(path, "FAILED", type(e).__name__, f"{time.time()-t:.1f}s")
+            PY
