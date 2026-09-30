@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TFII — self-hosted threat intelligence that shows its work</title>
+<meta name="description" content="TFII is a free, open-source, self-hosted threat intelligence platform. Multi-source IOC feeds with corroborated confidence, honest location for domains behind CDNs, CVE monitoring, bulk lookup and STIX/TAXII. Runs on your own server.">
+<link rel="canonical" href="https://sherifrahim.github.io/TFII/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="TFII — threat intelligence that shows its work">
+<meta property="og:description" content="Free, open-source, self-hosted threat intel: corroborated feed confidence, honest IOC location, CVE monitoring, bulk triage.">
+<meta property="og:url" content="https://sherifrahim.github.io/TFII/">
+<meta property="og:image" content="https://sherifrahim.github.io/TFII/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="TFII — threat intelligence that shows its work">
+<meta name="twitter:description" content="Free, open-source, self-hosted threat intel: corroborated feed confidence, honest IOC location, CVE monitoring, bulk triage.">
+<meta name="twitter:image" content="https://sherifrahim.github.io/TFII/og.png">
+<meta name="theme-color" content="#0b1220">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"TFII (ThreatFeed Intelligence Platform)","applicationCategory":"SecurityApplication","operatingSystem":"Linux, Docker","description":"Free, open-source, self-hosted threat intelligence platform with multi-source IOC feeds, CVE monitoring and STIX/TAXII.","url":"https://sherifrahim.github.io/TFII/","codeRepository":"https://github.com/sherifrahim/TFII","license":"https://opensource.org/licenses/MIT","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+</script>
+<style>
+:root{--bg:#0b1220;--panel:#111a2e;--line:#1f2b46;--text:#e6ebf5;--muted:#9aa8c4;--accent:#5eead4;--accent2:#7aa2ff;--warn:#fbbf24}
+@media (prefers-color-scheme:light){:root{--bg:#f6f8fc;--panel:#fff;--line:#dbe2ef;--text:#0f1a30;--muted:#51617f;--accent:#0f766e;--accent2:#2952d9;--warn:#b45309}}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+a{color:var(--accent2)}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+header.top{display:flex;align-items:center;justify-content:space-between;padding:18px 0}
+.brand{font-weight:700;letter-spacing:.02em;color:var(--text);text-decoration:none}
+.brand span{color:var(--accent)}
+nav a{margin-left:18px;color:var(--muted);text-decoration:none;font-size:15px}
+nav a:hover{color:var(--text)}
+.hero{padding:48px 0 32px;text-align:center}
+.hero h1{font-size:clamp(32px,5.5vw,54px);line-height:1.1;margin:0 0 16px;letter-spacing:-.02em}
+.hero h1 em{font-style:normal;color:var(--accent)}
+.hero p.lead{max-width:680px;margin:0 auto 26px;color:var(--muted);font-size:clamp(17px,2.2vw,20px)}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-block;padding:12px 20px;border-radius:10px;font-weight:600;text-decoration:none;border:1px solid var(--line);color:var(--text);background:var(--panel)}
+.btn.primary{background:var(--accent);color:#04211d;border-color:transparent}
+.btn:hover{filter:brightness(1.08)}
+pre.code{max-width:640px;margin:22px auto 0;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.shot{margin:36px auto 0;border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.35)}
+.shot img{display:block;width:100%;height:auto}
+.note{color:var(--muted);font-size:13px;margin:8px 0 0;text-align:center}
+section{padding:56px 0;border-top:1px solid var(--line)}
+section h2{font-size:clamp(24px,3.4vw,34px);margin:0 0 10px;letter-spacing:-.01em}
+section p.sub{color:var(--muted);max-width:720px;margin:0 0 28px}
+.grid{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
+.card h3{margin:0 0 6px;font-size:18px}
+.card p{margin:0;color:var(--muted);font-size:15px}
+.two{display:grid;gap:28px;grid-template-columns:1fr 1fr;align-items:center}
+@media(max-width:820px){.two{grid-template-columns:1fr}nav{display:none}}
+.two img{width:100%;height:auto;border:1px solid var(--line);border-radius:12px}
+ul.tick{list-style:none;padding:0;margin:0}
+ul.tick li{padding-left:26px;position:relative;margin:8px 0;color:var(--muted)}
+ul.tick li::before{content:"✓";position:absolute;left:0;color:var(--accent);font-weight:700}
+ul.not li::before{content:"–";color:var(--warn)}
+.tags{display:flex;flex-wrap:wrap;gap:8px}
+.tag{border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:14px;color:var(--muted);background:var(--panel)}
+footer{border-top:1px solid var(--line);padding:32px 0 48px;color:var(--muted);font-size:14px}
+footer p{margin:6px 0;max-width:860px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="#top">TF<span>II</span></a>
+    <nav>
+      <a href="#why">Why</a><a href="#features">Features</a><a href="#start">Get started</a>
+      <a href="https://github.com/sherifrahim/TFII">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <div class="hero">
+      <h1>Threat intelligence that <em>shows its work</em></h1>
+      <p class="lead">A free, open-source, self-hosted platform that brings public threat feeds and CVE data into one analyst workspace, and explains why it believes what it says.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/sherifrahim/TFII#quick-start">Get started</a>
+        <a class="btn" href="https://github.com/sherifrahim/TFII">View on GitHub</a>
+      </div>
+      <pre class="code">git clone https://github.com/sherifrahim/TFII.git &amp;&amp; cd TFII
+./scripts/docker-setup.sh</pre>
+      <div class="shot"><img src="screenshots/01-command-center.png" width="1440" height="900" alt="TFII Command Center showing indicator counts, trends, actively exploited CVEs and connector health"></div>
+      <p class="note">Screenshots show seeded demo data.</p>
+    </div>
+
+    <section id="why">
+      <h2>Feeds tell you what to block. TFII tells you how sure to be.</h2>
+      <p class="sub">Public feeds are noisy and easy to misread. TFII keeps the evidence next to every conclusion.</p>
+      <div class="grid">
+        <div class="card"><h3>Corroborated confidence</h3><p>Each source has a reliability. Independent sources add up; an aggregator is never counted twice against the lists it aggregates. Every indicator page shows the reasoning.</p></div>
+        <div class="card"><h3>Honest location</h3><p>A domain behind a CDN does not get a country pinned on it. TFII labels each fact: IP location, hosted in, CDN edge node, TLD registry, registrant country, past addresses.</p></div>
+        <div class="card"><h3>Your keys, isolated</h3><p>Bring your own API keys. They are encrypted, visible only to their owner, and have a Test button so you know they work before you rely on them.</p></div>
+        <div class="card"><h3>Nothing phones home</h3><p>No telemetry, no vendor cloud. Every outbound call is listed in <a href="https://github.com/sherifrahim/TFII/blob/master/docs/DATA_FLOWS.md">DATA_FLOWS.md</a>.</p></div>
+      </div>
+    </section>
+
+    <section id="features">
+      <h2>What's inside</h2>
+      <p class="sub">Built for triage and investigation on a small team's budget.</p>
+      <div class="two" style="margin-bottom:36px">
+        <div>
+          <h3>Look at one indicator, see the whole picture</h3>
+          <ul class="tick">
+            <li>Reputation with the reasoning behind the score</li>
+            <li>VirusTotal, AbuseIPDB and URLhaus enrichment</li>
+            <li>DNS records with SPF and DMARC flagged</li>
+            <li>Relationship graph, timeline, notes, hunting queries (KQL, SPL, YARA)</li>
+          </ul>
+        </div>
+        <img src="screenshots/03-indicator-and-dns.png" loading="lazy" width="1440" height="900" alt="Indicator page with confidence reasoning and DNS records">
+      </div>
+      <div class="two" style="margin-bottom:36px">
+        <img src="screenshots/05-bulk-lookup.png" loading="lazy" width="1440" height="900" alt="Bulk lookup results with location and reputation">
+        <div>
+          <h3>Triage a list in minutes</h3>
+          <ul class="tick">
+            <li>Paste up to 150 IOCs at once, defanged is fine</li>
+            <li>Reputation, network owner and labelled location per row</li>
+            <li>Export to CSV, add to an investigation</li>
+          </ul>
+        </div>
+      </div>
+      <div class="two">
+        <div>
+          <h3>CVEs that matter to your software</h3>
+          <ul class="tick">
+            <li>CISA KEV and EPSS alongside NVD severity</li>
+            <li>Tracks the products you run and flags exploited ones</li>
+            <li>STIX 2.1 export and a TAXII 2.1 server for your other tools</li>
+          </ul>
+        </div>
+        <img src="screenshots/06-cve-intelligence.png" loading="lazy" width="1440" height="900" alt="CVE Intelligence view grouped by software">
+      </div>
+      <p style="margin-top:32px" class="tags">
+        <span class="tag">Feodo Tracker</span><span class="tag">OpenPhish</span><span class="tag">Phishing.Database</span><span class="tag">IPsum</span><span class="tag">CINS Army</span><span class="tag">Emerging Threats</span><span class="tag">blocklist.de</span><span class="tag">AlienVault OTX</span><span class="tag">abuse.ch</span><span class="tag">NVD</span><span class="tag">CISA KEV</span><span class="tag">EPSS</span><span class="tag">MITRE ATT&amp;CK</span>
+      </p>
+    </section>
+
+    <section>
+      <h2>What it is not</h2>
+      <p class="sub">So nobody wastes an evening.</p>
+      <ul class="tick not">
+        <li>Not a SIEM or EDR: it does not see your network.</li>
+        <li>Not a replacement for a paid commercial intelligence service. Public feeds are noisy and scores are a triage aid, not a verdict.</li>
+        <li>No independent security audit yet. Run it behind HTTPS and read <a href="https://github.com/sherifrahim/TFII/blob/master/SECURITY.md">SECURITY.md</a>.</li>
+      </ul>
+    </section>
+
+    <section id="start">
+      <h2>Run it in about five minutes</h2>
+      <p class="sub">Docker with Compose v2 is all you need. The setup script generates your secrets and a one-off admin password.</p>
+      <pre class="code" style="margin:0 0 20px">git clone https://github.com/sherifrahim/TFII.git &amp;&amp; cd TFII
+chmod +x scripts/docker-setup.sh &amp;&amp; ./scripts/docker-setup.sh</pre>
+      <div class="cta" style="justify-content:flex-start">
+        <a class="btn primary" href="https://github.com/sherifrahim/TFII">Star it on GitHub</a>
+        <a class="btn" href="https://github.com/sherifrahim/TFII/issues/new/choose">Report an issue or request a feature</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>TFII is open source under the MIT licence. Independent project: not affiliated with or endorsed by MITRE, NIST, CISA, VirusTotal, AbuseIPDB, abuse.ch, AlienVault or any other data provider named here. This product uses data from the NVD API but is not endorsed or certified by the NVD. All names and marks belong to their owners.</p>
+    <p><a href="https://github.com/sherifrahim/TFII">GitHub</a> · <a href="https://github.com/sherifrahim/TFII/blob/master/SECURITY.md">Security</a> · <a href="https://github.com/sherifrahim/TFII/blob/master/docs/DATA_FLOWS.md">Data flows</a> · <a href="https://github.com/sherifrahim/TFII/blob/master/LICENSE">MIT</a></p>
+  </footer>
+</div>
+</body>
+</html>

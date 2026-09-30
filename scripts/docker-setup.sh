@@ -40,9 +40,11 @@ if [ ! -f .env ]; then
     SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     DB_PASS=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
     ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || echo "")
+    ADMIN_PW=$(python3 -c "import secrets; print(secrets.token_urlsafe(14))")
 
     sed -i "s|replace_with_64_char_hex_string|${SECRET_KEY}|g" .env
     sed -i "s|change_this_strong_password|${DB_PASS}|g" .env
+    sed -i "s|^ADMIN_INITIAL_PASSWORD=.*|ADMIN_INITIAL_PASSWORD=${ADMIN_PW}|" .env
     if [ -n "$ENCRYPTION_KEY" ]; then
         sed -i "s|replace_with_fernet_key|${ENCRYPTION_KEY}|g" .env
     fi
@@ -119,12 +121,17 @@ else
     echo -e "  🌐 Open: ${BOLD}http://localhost/ui/${NC}"
 fi
 echo ""
-echo -e "  👤 Default admin login:"
+ADMIN_PW=$(grep "^ADMIN_INITIAL_PASSWORD=" .env | cut -d= -f2-)
+echo -e "  👤 First admin login:"
 echo -e "     Username: ${BOLD}admin${NC}"
-echo -e "     Password: ${BOLD}TFeed@99${NC}"
+if [ -n "$ADMIN_PW" ]; then
+    echo -e "     Password: ${BOLD}${ADMIN_PW}${NC}   (generated for you; it is also in .env)"
+else
+    echo -e "     Password: printed once in the backend log:  ${BOLD}docker compose logs backend | grep 'First-run admin'${NC}"
+fi
 echo ""
-echo -e "${YELLOW}  ⚠ Change the admin password on first login!${NC}"
-echo -e "     Settings → Change Password"
+echo -e "${YELLOW}  ⚠ Change the admin password on first login (Settings → Change Password).${NC}"
+echo -e "    The password only applies on the first start; later edits to .env do not change it."
 echo ""
 echo -e "  Useful commands:"
 echo -e "     ${BOLD}docker compose logs -f backend${NC}   — view logs"

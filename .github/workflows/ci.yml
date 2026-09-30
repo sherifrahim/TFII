@@ -1,0 +1,48 @@
+name: CI
+
+# Tests for pull requests (contributors' changes are checked before they are merged).
+# Pushes to master run the same suites as the first job of the Deploy workflow.
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tfii
+          POSTGRES_PASSWORD: tfii-ci
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tfii" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DB_HOST: localhost
+      DB_USER: tfii
+      DB_PASS: tfii-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Backend tests
+        working-directory: backend
+        run: |
+          pip install -r requirements-dev.txt
+          python -m pytest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Frontend lint and unit tests
+        working-directory: frontend
+        run: |
+          npm ci --legacy-peer-deps
+          npx eslint src --ext .js --max-warnings 0
+          CI=true npm test

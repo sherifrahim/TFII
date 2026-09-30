@@ -39,10 +39,16 @@ TOKEN_EXPIRE       = int(os.getenv("TOKEN_EXPIRE_MINUTES", "120"))   # default 2
 # old default of "*" let any website script this API from a visitor's browser.
 ALLOWED_ORIGINS    = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 ADMIN_DEFAULT_USER = "admin"
-# First-run admin only (created when the users table is empty). The historical
-# default is public in the README, so set ADMIN_INITIAL_PASSWORD on new installs
-# and change it after first login.
-ADMIN_DEFAULT_PASS = os.getenv("ADMIN_INITIAL_PASSWORD", "TFeed@99")
+# First-run admin only (created when the users table is empty). Set
+# ADMIN_INITIAL_PASSWORD to choose the password; otherwise a random one is generated
+# and printed once in the startup log. There is no default password.
+def initial_admin_password() -> tuple:
+    """(password, generated). A password the operator configured is used if it is a real one; a template
+    placeholder, or one shorter than MIN_PASSWORD_LEN, is ignored and a strong random one is generated."""
+    configured = os.getenv("ADMIN_INITIAL_PASSWORD", "").strip()
+    if configured and not configured.lower().startswith("replace_with") and len(configured) >= 10:
+        return configured, False
+    return secrets.token_urlsafe(14), True
 MIN_PASSWORD_LEN   = 10
 VT_API_KEY         = os.getenv("VT_API_KEY", "")
 ABUSEIPDB_API_KEY  = os.getenv("ABUSEIPDB_API_KEY", "")
@@ -536,11 +542,15 @@ async def startup():
 
     cur.execute("SELECT COUNT(*) FROM users")
     if cur.fetchone()[0] == 0:
+        first_pw, generated = initial_admin_password()
         cur.execute("INSERT INTO users (id,username,password,role) VALUES (%s,%s,%s,%s)",
-            (f"user--{uuid.uuid4()}", ADMIN_DEFAULT_USER, pwd_ctx.hash(ADMIN_DEFAULT_PASS), "admin"))
-        print("[startup] Default admin created" +
-              ("" if os.getenv("ADMIN_INITIAL_PASSWORD") else
-               " with the DOCUMENTED DEFAULT PASSWORD — change it now (Settings → Change Password)"))
+            (f"user--{uuid.uuid4()}", ADMIN_DEFAULT_USER, pwd_ctx.hash(first_pw), "admin"))
+        if generated:
+            print(f"[startup] First-run admin created. Username: {ADMIN_DEFAULT_USER}  Password: {first_pw}  "
+                  "(shown once; change it under Settings → Change Password)")
+        else:
+            print(f"[startup] First-run admin created with the password from ADMIN_INITIAL_PASSWORD "
+                  "(change it under Settings → Change Password)")
 
     conn.commit(); cur.close(); conn.close()
     refresh_platform_keys()
