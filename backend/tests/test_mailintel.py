@@ -268,3 +268,104 @@ def test_risk_needs_the_callers_own_key_and_then_remembers_the_answer(client, an
     assert client.get("/v2/mail/risk", params={"address": "x@example.com"}, headers=analyst).json()["cached"] is True and len(ipqs) == 1
     assert client.get("/v2/mail/risk", params={"address": "bad"}, headers=analyst).status_code == 400
     assert client.get("/v2/mail/risk", params={"address": "x@example.com"}).status_code in (401, 403)
+
+
+# ── deep analysis (MxToolbox) ────────────────────────────────────────────────
+def _mxt_item(name, info="", url="https://mxtoolbox.com/x"):
+    return {"ID": 1, "Name": name, "Info": info, "Url": url}
+
+
+def _mxt_handler(seen, fail=None, bodies=None):
+    def handler(req):
+        cmd = req.url.path.rstrip("/").rsplit("/", 1)[1]
+        seen.append((cmd, req.url.params["argument"], req.headers.get("authorization")))
+        if fail and cmd in fail:
+            return httpx.Response(fail[cmd])
+        body = (bodies or {}).get(cmd) or {"Failed": [], "Warnings": [], "Passed": [_mxt_item(cmd + " ok")], "Timeouts": []}
+        return httpx.Response(200, json=body)
+    return handler
+
+
+def _report(handler, domain="corp.example", **kw):
+    async def go():
+        async with REAL_ASYNC_CLIENT(transport=httpx.MockTransport(handler)) as c:
+            return await mailintel.mxtoolbox_report(domain, "mxt-key-0123456789", client=c, **kw)
+    mailintel._MXT_CACHE.clear()
+    return asyncio.run(go())
+
+
+def test_report_runs_the_dns_tests_and_summarises_them():
+    seen = []
+    bodies = {"spf": {"Failed": [_mxt_item("SPF Record Published", "No SPF record found")], "Warnings": [_mxt_item("SPF Included Lookups", "9 of 10")],
+                      "Passed": [], "Timeouts": []}}
+    r = _report(_mxt_handler(seen, bodies=bodies))
+    assert [c for c, _a, _k in seen] == list(mailintel.MXT_DNS_COMMANDS) or sorted(c for c, _a, _k in seen) == sorted(mailintel.MXT_DNS_COMMANDS)
+    assert all(a == "corp.example" and k == "mxt-key-0123456789" for _c, a, k in seen)
+    assert r["summary"] == {"failed": 1, "warnings": 1, "passed": 5} and r["errors"] == {} and r["deep"] is False
+    assert r["checks"]["spf"]["failed"][0]["name"] == "SPF Record Published"
+
+
+def test_network_tests_are_opt_in_and_a_plan_without_them_is_reported_not_fatal(monkeypatch):
+    async def posture(domain, client=None): return {"checked": True, "exists": True, "mx": [{"priority": 10, "host": "mx1.corp.example"}]}
+    monkeypatch.setattr(mailintel, "mail_posture", posture)
+    seen = []
+    r = _report(_mxt_handler(seen, fail={"blacklist": 403, "smtp": 403}), deep=True, selector="google")
+    assert {"blacklist", "smtp", "dkim"} <= {c for c, _a, _k in seen}
+    assert ("smtp", "mx1.corp.example") in [(c, a) for c, a, _k in seen] and ("dkim", "corp.example:google") in [(c, a) for c, a, _k in seen]
+    assert r["errors"]["blacklist"]["kind"] == "forbidden" and "plan" in r["errors"]["smtp"]["message"] and "spf" in r["checks"]
+    plain = []
+    _report(_mxt_handler(plain))
+    assert not {"blacklist", "smtp", "dkim"} & {c for c, _a, _k in plain}
+
+
+def test_a_rejected_key_or_total_refusal_is_an_error_and_input_is_checked():
+    with pytest.raises(mailintel.MailApiError) as e:
+        _report(_mxt_handler([], fail={c: 401 for c in mailintel.MXT_DNS_COMMANDS}))
+    assert e.value.kind == "invalid"
+    with pytest.raises(mailintel.MailApiError) as e:
+        _report(_mxt_handler([], fail={c: 429 for c in mailintel.MXT_DNS_COMMANDS}))
+    assert e.value.kind == "rate_limited" and "00:00 UTC" in str(e.value)
+    for bad in ("1.2.3.4", "not a domain", ""):
+        with pytest.raises(mailintel.MailApiError):
+            _report(_mxt_handler([]), domain=bad)
+    with pytest.raises(mailintel.MailApiError):
+        _report(_mxt_handler([]), selector="bad selector!")
+
+
+def test_the_report_is_cached_to_save_the_daily_allowance():
+    seen = []
+    handler = _mxt_handler(seen)
+
+    async def twice():
+        async with REAL_ASYNC_CLIENT(transport=httpx.MockTransport(handler)) as c:
+            a = await mailintel.mxtoolbox_report("corp.example", "k" * 20, client=c)
+            b = await mailintel.mxtoolbox_report("corp.example", "k" * 20, client=c)
+            return a, b
+    mailintel._MXT_CACHE.clear()
+    a, b = asyncio.run(twice())
+    assert a["cached"] is False and b["cached"] is True and len(seen) == len(mailintel.MXT_DNS_COMMANDS)
+
+
+@pytest.fixture
+def mxt(client, analyst, monkeypatch):
+    import entity_api
+    mailintel._MXT_CACHE.clear()
+    monkeypatch.setattr(entity_api, "DEEP_LIMIT", entity_api.dnsintel.UserLimiter(limit=50))
+    seen = []
+    monkeypatch.setattr(mailintel.httpx, "AsyncClient", lambda **kw: REAL_ASYNC_CLIENT(transport=httpx.MockTransport(_mxt_handler(seen))))
+    yield seen
+    client.delete("/users/me/api-keys/mxtoolbox", headers=analyst)
+
+
+def test_deep_endpoint_needs_a_key_and_a_real_mail_domain(client, analyst, mxt):
+    r = client.get("/v2/mail/deep", params={"address": "x@corp.example"}, headers=analyst)
+    assert r.status_code in (400, 429) and "MxToolbox" in r.json()["detail"] and mxt == []
+    assert client.post("/users/me/api-keys/mxtoolbox", json={"api_key": "mxt-analyst-key-0123456789"}, headers=analyst).status_code in (200, 201)
+    ok = client.get("/v2/mail/deep", params={"address": "X@Corp.Example"}, headers=analyst)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["domain"] == "corp.example" and ok.json()["summary"]["passed"] == 6 and mxt[0][2] == "mxt-analyst-key-0123456789"
+    assert client.get("/v2/mail/deep", params={"domain": "corp.example"}, headers=analyst).json()["cached"] is True
+    free = client.get("/v2/mail/deep", params={"address": "me@gmail.com"}, headers=analyst)
+    assert free.status_code == 400 and "free mailbox" in free.json()["detail"]
+    assert client.get("/v2/mail/deep", params={"address": "bad"}, headers=analyst).status_code == 400
+    assert client.get("/v2/mail/deep", params={"domain": "corp.example"}).status_code in (401, 403)

@@ -232,5 +232,7 @@ No free source rates an individual mailbox, so TFII judges the part that can be 
 
 - **Address risk** (`GET /v2/mail/risk`) asks IPQualityScore about the exact address with the caller's own key: fraud score, valid / disposable, recent abuse, leaked, honeypot, first seen. It is on request only, because the free plan is small, and it is a provider estimate rather than proof.
 
+- **Deep mail analysis** (`GET /v2/mail/deep`) runs MxToolbox's tests on the address's domain with the caller's own key: MX, SPF, DMARC, MTA-STS, TLS reporting and BIMI (and DKIM when a selector is given), each reported as failed / warning / passed. The blocklist and SMTP tests need a paid MxToolbox plan and are opt-in; a plan that lacks them is reported per test, not as a failure of the report. Free-mail domains are refused, since their mail setup says nothing about an address there.
+
 Bulk lookup accepts email addresses, looks each domain up once however many addresses use it, and shows the observations on each row. AlienVault OTX was evaluated for address lookups and not used: its own SDK lists email as unsupported by its API.
 

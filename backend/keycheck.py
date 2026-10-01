@@ -57,11 +57,13 @@ PROBES: Dict[str, Probe] = {
     "urlhaus":    Probe("GET", "https://urlhaus-api.abuse.ch/v1/urls/recent/limit/1/", _h("Auth-Key"), _NONE),
     "otx":        Probe("GET", "https://otx.alienvault.com/api/v1/user/me", _h("X-OTX-API-KEY"), _NONE),
     # The credit-usage endpoint costs no lookup. The provider only takes the key in the URL path.
+    # The usage endpoint does not count against the lookup quota.
+    "mxtoolbox":  Probe("GET", "https://api.mxtoolbox.com/api/v1/Usage", _h("Authorization"), _NONE),
     "ipqs":       Probe("GET", "https://www.ipqualityscore.com/api/json/account/{key}", _NONE, _NONE, judge=_ipqs_judge),
 }
 
 NAMES = {"virustotal": "VirusTotal", "abuseipdb": "AbuseIPDB", "shodan": "Shodan", "groq": "Groq", "nvd": "NVD",
-         "urlhaus": "abuse.ch", "otx": "AlienVault OTX", "ipqs": "IPQualityScore"}
+         "urlhaus": "abuse.ch", "otx": "AlienVault OTX", "ipqs": "IPQualityScore", "mxtoolbox": "MxToolbox"}
 
 
 def _result(status: str, message: str) -> dict:

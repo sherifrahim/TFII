@@ -15,6 +15,7 @@ hazard that a query string simply does not have.
     GET  /v2/dns?domain=               richer DNS records (NSLookup.io): A/AAAA/NS/MX/TXT/SOA/CAA, SPF, DMARC (cached)
   GET  /v2/mail/exposure?address=    breach exposure of one mailbox (XposedOrNot, on request, shared budget)
   GET  /v2/mail/risk?address=        address risk (IPQualityScore, on request, the caller's own key)
+  GET  /v2/mail/deep?address=|domain= deep mail-domain tests (MxToolbox, on request, the caller's own key)
     POST /v2/entity/sync-mitre         materialise ATT&CK associations for an actor
     POST /v2/relationships             assert a typed relationship (with provenance)
     DELETE /v2/relationships/{id}
@@ -68,6 +69,7 @@ class ReasonIn(BaseModel):
 class RefIn(BaseModel):
     ref: str
 
+DEEP_LIMIT = dnsintel.UserLimiter(limit=3)          # MxToolbox reports per user per minute
 RISK_LIMIT = dnsintel.UserLimiter(limit=6)          # address-risk lookups per user per minute
 EXPOSURE_LIMIT = dnsintel.UserLimiter(limit=3)      # breach lookups per user per minute; the budget itself is shared
 
@@ -384,6 +386,34 @@ def register(app, d, h):
         d.log_api_call(conn, "ipqs", "email", False, user["id"])          # the address itself is not recorded
         try:
             return await mailintel.ipqs_email(address, key, refresh=refresh)
+        except mailintel.MailApiError as e:
+            raise HTTPException({"invalid": 400, "rate_limited": 429, "busy": 429}.get(e.kind, 502), str(e))
+
+    # ── Deep mail-domain analysis (MxToolbox), on request, with the caller's own key ──
+    @app.get("/v2/mail/deep")
+    async def v2_mail_deep(address: Optional[str] = None, domain: Optional[str] = None, deep: bool = False,
+                           selector: Optional[str] = None, refresh: bool = False, user=Depends(current), conn=Depends(get_db)):
+        target = domain
+        if address:
+            parts = mailintel.split_email(address)
+            if not parts:
+                raise HTTPException(400, "Enter a valid email address")
+            target = parts[1]
+        target = geo.lookup_host(target or "")
+        if not target:
+            raise HTTPException(400, "Enter an email address or a mail domain")
+        if mailintel.provider_kind(target) == "free":
+            raise HTTPException(400, f"{target} is a free mailbox service; its mail setup says nothing about this address")
+        if not DEEP_LIMIT.allow(user["id"]):
+            raise HTTPException(429, "Too many deep analyses in the last minute; wait a moment and try again")
+        key, _personal, quota = d.resolve_api_key(conn, "mxtoolbox", user)
+        if not key:
+            raise HTTPException(400 if quota is None else 429,
+                                "No MxToolbox key: add yours in Settings (a free account includes 64 DNS lookups a day)" if quota is None
+                                else f"Daily quota of {d.DAILY_FREE_QUOTA} free checks reached. Add your MxToolbox key in Settings.")
+        d.log_api_call(conn, "mxtoolbox", target, False, user["id"])
+        try:
+            return await mailintel.mxtoolbox_report(target, key, deep=deep, selector=selector, refresh=refresh)
         except mailintel.MailApiError as e:
             raise HTTPException({"invalid": 400, "rate_limited": 429, "busy": 429}.get(e.kind, 502), str(e))
 

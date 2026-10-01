@@ -5,7 +5,7 @@ import { safeUrl, installLinkGuard } from "../lib/safe";
 import { geoFacts, regionName } from "../lib/geo";
 import { runningBundle, servedBundle, isStale } from "../lib/update";
 import { dnsHost, DnsResult, HistoryList } from "../pages/entity/DnsPanel";
-import { MailSignals, ExposureResult, RiskResult } from "../pages/entity/MailPanel";
+import { MailSignals, ExposureResult, RiskResult, DeepResult } from "../pages/entity/MailPanel";
 import { entityPath, canonicalKind, KINDS } from "../lib/entity";
 import { entityRoute } from "../lib/router";
 import { detectType, refang, defang, confBand } from "../lib/format";
@@ -236,5 +236,13 @@ describe("mail address panel", () => {
     expect(html).not.toContain("In a data leak");
     expect(html).not.toContain("Spam trap");
     expect(renderToStaticMarkup(<RiskResult r={{ fraud_score: null }} />)).toContain("no score");
+  });
+  test("deep analysis lists what failed and warned per test, and says what the plan could not run", () => {
+    const r = { summary: { failed: 1, warnings: 1, passed: 3 }, errors: { blacklist: { kind: "forbidden", message: "Not included in this MxToolbox plan" } }, checks: {
+      spf: { failed: [{ name: "SPF Record Published", info: "No SPF record found" }], warnings: [], passed: [{ name: "a" }], timeouts: [] },
+      dmarc: { failed: [], warnings: [{ name: "DMARC Policy Not Enabled", info: "p=none" }], passed: [{ name: "b" }, { name: "c" }], timeouts: [] },
+      mx: { failed: [], warnings: [], passed: [], timeouts: [] } } };
+    const html = renderToStaticMarkup(<DeepResult r={r} />);
+    for (const t of ["1 failed", "1 warnings", "3 passed", "SPF Record Published", "No SPF record found", "DMARC Policy Not Enabled", "Nothing to report", "Blocklists", "Not included in this MxToolbox plan"]) expect(html).toContain(t);
   });
 });

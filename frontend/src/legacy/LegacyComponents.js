@@ -4395,6 +4395,7 @@ function ApiKeyModal({token, C, onClose}){
     {id:"nvd",        name:"NVD",           url:"https://nvd.nist.gov/developers/request-an-api-key","desc":"CVE database (higher rate limit)","placeholder":"Enter your NVD key"},
     {id:"otx",        name:"AlienVault OTX",url:"https://otx.alienvault.com/settings",            desc:"Threat pulses with adversary and malware context (IOC feed)", placeholder:"Enter your OTX key"},
     {id:"ipqs",      name:"IPQualityScore",url:"https://www.ipqualityscore.com/create-account",  desc:"Email address risk: fraud score, disposable, recent abuse (on request)", placeholder:"Enter your IPQualityScore key"},
+    {id:"mxtoolbox", name:"MxToolbox",     url:"https://mxtoolbox.com/user/api",                  desc:"Deep email-domain analysis: MX, SPF, DMARC, MTA-STS, BIMI tests (on request)", placeholder:"Enter your MxToolbox API key"},
   ];
 
   function loadStatus(){

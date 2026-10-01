@@ -96,6 +96,75 @@ function Risk({ address }) {
   );
 }
 
+const CMD_LABEL = { mx: "Mail servers (MX)", spf: "SPF", dmarc: "DMARC", "mta-sts": "MTA-STS", tlsrpt: "TLS reporting", bimi: "BIMI", dkim: "DKIM", blacklist: "Blocklists", smtp: "SMTP server" };
+
+export function DeepResult({ r }) {
+  const sum = r.summary || {};
+  const cmds = Object.keys(r.checks || {});
+  return (
+    <>
+      <div className="row wrap" style={{ gap: 6, marginBottom: 8 }}>
+        <Badge tone={sum.failed ? "critical" : "low"} dot>{sum.failed || 0} failed</Badge>
+        <Badge tone={sum.warnings ? "high" : "low"} dot>{sum.warnings || 0} warnings</Badge>
+        <Badge tone="success" dot>{sum.passed || 0} passed</Badge>
+      </div>
+      <div className="stack" style={{ gap: 10 }}>
+        {cmds.map(cmd => {
+          const c = r.checks[cmd];
+          const rows = [["Failed", "critical", c.failed], ["Warning", "high", c.warnings], ["Timed out", "low", c.timeouts]].flatMap(([label, tone, items]) => (items || []).map(i => ({ ...i, label, tone })));
+          return (
+            <div key={cmd}>
+              <div className="strong small">{CMD_LABEL[cmd] || cmd} <span className="faint xs">· {(c.passed || []).length} passed</span></div>
+              {rows.length === 0 ? <div className="xs faint">Nothing to report.</div> : rows.map((i, n) => (
+                <div key={n} className="row" style={{ gap: 8, alignItems: "flex-start", marginTop: 4 }}>
+                  <Badge tone={i.tone} outline>{i.label}</Badge>
+                  <span className="small" style={{ minWidth: 0, overflowWrap: "anywhere" }}>{i.name}{i.info ? <span className="faint"> — {i.info}</span> : null}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+        {Object.entries(r.errors || {}).map(([cmd, e]) => (
+          <div key={cmd} className="xs faint">{CMD_LABEL[cmd] || cmd}: {e.message}</div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// Asks MxToolbox to run its mail tests on the address's domain, with the caller's own key. A free MxToolbox account
+// allows 64 DNS lookups a day (one report uses about 6), so it is on request, and the blocklist / SMTP tests (which
+// need a paid plan) are an explicit option.
+function Deep({ address }) {
+  const [r, setR] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [deep, setDeep] = useState(false);
+  const [selector, setSelector] = useState("");
+  async function run(refresh) {
+    setBusy(true); setErr(null);
+    const q = `address=${encodeURIComponent(address)}${deep ? "&deep=true" : ""}${selector.trim() ? `&selector=${encodeURIComponent(selector.trim())}` : ""}${refresh ? "&refresh=true" : ""}`;
+    try { setR(await apiJSON(`/v2/mail/deep?${q}`)); } catch (e) { setErr(e); }
+    setBusy(false);
+  }
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div className="eyebrow" style={{ marginBottom: 6 }}>Deep mail analysis</div>
+      <div className="row wrap" style={{ gap: 12, alignItems: "flex-start" }}>
+        <Button size="sm" loading={busy} onClick={() => run(!!r)}>{r ? "Run again" : "Run MxToolbox tests"}</Button>
+        <label className="small row" style={{ gap: 6 }}><input type="checkbox" checked={deep} onChange={e => setDeep(e.target.checked)} /> Also blocklist and SMTP tests (paid MxToolbox plan)</label>
+        <input className="input" style={{ width: 170 }} placeholder="DKIM selector (optional)" value={selector} onChange={e => setSelector(e.target.value)} />
+      </div>
+      {!r && <div className="small faint" style={{ marginTop: 6, maxWidth: 560 }}>MxToolbox tests the domain's MX, SPF, DMARC, MTA-STS, TLS reporting and BIMI records and reports what fails. Uses your own MxToolbox key (Settings → Manage API Keys); the domain is sent to them.</div>}
+      {err && <div className="small" style={{ color: "var(--critical)", marginTop: 6 }}>{err.message}</div>}
+      {r && <div style={{ marginTop: 10 }}>
+        <DeepResult r={r} />
+        <div className="xs faint" style={{ marginTop: 8 }}>MxToolbox · {r.domain} · {r.cached ? `saved ${timeAgo(r.checked_at)}` : "just checked"}{r.link ? <> · <a className="link" href={r.link} target="_blank" rel="noreferrer">open on MxToolbox ↗</a></> : null}</div>
+      </div>}
+    </div>
+  );
+}
+
 // Breach exposure is asked for on request: the full address goes to a third party (XposedOrNot) and its free
 // tier is small and shared by every user of this server.
 function Exposure({ address }) {
@@ -139,6 +208,7 @@ export default function MailPanel({ address, mail }) {
       {!mail
         ? <Callout tone="info">Run Re-enrich (or a lookup) to check this address's domain: reputation, age and how it is set up to send mail. TFII judges the domain, not the person: no free source rates an individual mailbox.</Callout>
         : <MailSignals mail={mail} />}
+      <Deep address={address} />
       <Risk address={address} />
       <Exposure address={address} />
     </Panel>

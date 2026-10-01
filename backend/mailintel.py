@@ -379,3 +379,115 @@ async def ipqs_email(address: str, key: str, client: Optional[httpx.AsyncClient]
         _RISK_CACHE.clear()
     _RISK_CACHE[norm] = {"data": data, "fetched": now}
     return {**data, "cached": False, "checked_at": now.isoformat()}
+
+
+# ── Deep mail analysis (MxToolbox API), on request, with the caller's own key ─────────────────────────────
+# MxToolbox runs the same tests as its website: it lints the domain's MX, SPF, DMARC, MTA-STS, TLS-RPT and BIMI
+# records and reports each test as failed / warning / passed. Their free plan allows 64 DNS lookups a day and no
+# network lookups, so one report (6 DNS lookups) is cached for hours and never run automatically. The blocklist and
+# SMTP tests are network lookups: they only work on a paid plan, so they are an explicit opt-in.
+MXT_BASE = "https://api.mxtoolbox.com/api/v1/Lookup/{command}/"
+MXT_DNS_COMMANDS = ("mx", "spf", "dmarc", "mta-sts", "tlsrpt", "bimi")
+MXT_NETWORK_COMMANDS = ("blacklist", "smtp")
+MXT_CACHE_HOURS = 6
+_MXT_CACHE: dict = {}
+_MXT_BUCKETS = ("failed", "warnings", "passed", "timeouts")
+
+
+def parse_mxtoolbox(command: str, status: int, body) -> dict:
+    """One lookup, reduced to test results. Raises MailApiError for key / quota / provider problems."""
+    if status == 401:
+        raise MailApiError("invalid", "MxToolbox rejected the key: check it in Settings")
+    if status == 403:
+        raise MailApiError("forbidden", "Not included in this MxToolbox plan")
+    if status == 429:
+        raise MailApiError("rate_limited", "MxToolbox daily limit reached (it resets at 00:00 UTC)")
+    if status != 200 or not isinstance(body, dict):
+        raise MailApiError("unavailable", f"MxToolbox answered HTTP {status}")
+    out = {"command": command}
+    for bucket in _MXT_BUCKETS:
+        items = []
+        for it in (body.get(bucket.capitalize()) or [])[:30]:
+            if isinstance(it, dict) and it.get("Name"):
+                items.append({"name": str(it["Name"])[:160], "info": str(it.get("Info") or "")[:400], "url": str(it.get("Url") or "")[:300] or None})
+        out[bucket] = items
+    return out
+
+
+async def mxtoolbox_lookup(command: str, argument: str, key: str, client: httpx.AsyncClient) -> dict:
+    """The key goes in the Authorization header to the fixed MxToolbox host; the argument is validated by the caller."""
+    try:
+        r = await client.get(MXT_BASE.format(command=command), params={"argument": argument}, headers={"Authorization": key, "Accept": "application/json"})
+    except httpx.HTTPError:
+        raise MailApiError("unavailable", "MxToolbox could not be reached")
+    try:
+        body = r.json()
+    except ValueError:
+        body = None
+    return parse_mxtoolbox(command, r.status_code, body)
+
+
+async def mxtoolbox_report(domain: str, key: str, deep: bool = False, selector: Optional[str] = None,
+                           client: Optional[httpx.AsyncClient] = None, refresh: bool = False) -> dict:
+    """The MxToolbox mail tests for one domain. Raises MailApiError only when nothing usable came back
+    (bad key, or every test refused); individual tests that fail are reported in place."""
+    domain = (domain or "").strip().lower().rstrip(".")
+    if not security.is_valid_domain(domain) or security.is_valid_ip(domain):
+        raise MailApiError("invalid", "Enter a valid mail domain")
+    if selector is not None:
+        selector = selector.strip()
+        if selector and not re.fullmatch(r"[A-Za-z0-9._-]{1,63}", selector):
+            raise MailApiError("invalid", "A DKIM selector is letters, digits, dots, dashes and underscores")
+    selector = selector or None
+    cache_key = (domain, bool(deep), selector)
+    now = datetime.now(timezone.utc)
+    hit = _MXT_CACHE.get(cache_key)
+    if hit and not refresh and (now - hit["fetched"]).total_seconds() < MXT_CACHE_HOURS * 3600:
+        return {**hit["data"], "cached": True, "checked_at": hit["fetched"].isoformat()}
+
+    own = client is None
+    c = client or httpx.AsyncClient(timeout=25)
+    try:
+        jobs = [(cmd, domain) for cmd in MXT_DNS_COMMANDS]
+        if selector:
+            jobs.append(("dkim", f"{domain}:{selector}"))
+        if deep:
+            jobs.append(("blacklist", domain))
+            posture = await mail_posture(domain)                      # the primary mail server, for the SMTP test
+            host = next((m["host"] for m in posture.get("mx", []) if m["host"] and security.is_valid_domain(m["host"])), None)
+            if host:
+                jobs.append(("smtp", host))
+        results = await _gather_limited(c, jobs, key)
+    finally:
+        if own:
+            await c.aclose()
+    checks, errors = {}, {}
+    for (cmd, _arg), res in zip(jobs, results):
+        if isinstance(res, MailApiError):
+            if res.kind == "invalid":
+                raise res                                              # a rejected key is the same for every test
+            errors[cmd] = {"kind": res.kind, "message": str(res)}
+        elif isinstance(res, Exception):
+            errors[cmd] = {"kind": "unavailable", "message": "The test could not be completed"}
+        else:
+            checks[cmd] = res
+    if not checks:
+        first = next(iter(errors.values()))
+        raise MailApiError(first["kind"] if first["kind"] != "forbidden" else "unavailable", first["message"])
+    summary = {b: sum(len(v[b]) for v in checks.values()) for b in ("failed", "warnings", "passed")}
+    data = {"source": "MxToolbox", "domain": domain, "checks": checks, "errors": errors, "summary": summary, "deep": bool(deep),
+            "link": f"https://mxtoolbox.com/SuperTool.aspx?action=mx%3a{domain}"}
+    if len(_MXT_CACHE) > 200:
+        _MXT_CACHE.clear()
+    _MXT_CACHE[cache_key] = {"data": data, "fetched": now}
+    return {**data, "cached": False, "checked_at": now.isoformat()}
+
+
+async def _gather_limited(client, jobs, key, limit: int = 3):
+    import asyncio
+    sem = asyncio.Semaphore(limit)          # be polite: a few at a time
+
+    async def one(cmd, arg):
+        async with sem:
+            return await mxtoolbox_lookup(cmd, arg, key, client)
+    return await asyncio.gather(*[one(c, a) for c, a in jobs], return_exceptions=True)

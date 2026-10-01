@@ -58,7 +58,7 @@ Change it right away under Settings → Change Password. Free public feeds (Feod
 | **IOC Intelligence** | Server-side paginated table (thousands of rows), search, type/source/TLP/confidence/time filters, facets, bulk actions, STIX 2.1 export, TAXII 2.1 server, STIX/TAXII/MISP/CSV import. |
 | **Multi-source feeds** | Feodo Tracker, OpenPhish, Phishing.Database, IPsum, CINS Army, Emerging Threats, blocklist.de, AlienVault OTX, and abuse.ch ThreatFox, MalwareBazaar and URLhaus. Per-source reliability, expiry, and consensus rules. |
 | **Entity Intelligence** | One page per indicator: reputation, confidence reasoning, VirusTotal / AbuseIPDB / URLhaus enrichment, provenance, related IOCs, linked CVEs, relationship graph, timeline, notes, generated KQL / SPL / YARA hunting queries. |
-| **Email addresses** | Judged through their domain (reputation, age, MX / SPF / DMARC, disposable and free-mail detection), with on-request breach exposure (XposedOrNot) and address risk (IPQualityScore, your own key). Works in bulk lookup too. |
+| **Email addresses** | Judged through their domain (reputation, age, MX / SPF / DMARC, disposable and free-mail detection), with on-request breach exposure (XposedOrNot) and address risk (IPQualityScore) and deep mail-domain tests (MxToolbox), each with your own key. Works in bulk lookup too. |
 | **DNS records** | Name servers, mail servers, TXT, CAA and SOA for a domain, with SPF and DMARC parsed and flagged — via the public NSLookup.io API, cached, rate-limited. |
 | **CVE Intelligence** | Per-product severity mix, KEV, EPSS, affected versions, multi-source lookup (NVD, CVE.org, OSV, exploit references), reports. NVD is polled every 6 hours. |
 | **Actors & campaigns** | MITRE ATT&CK actor profiles, campaign pages with an infrastructure graph. |
@@ -226,6 +226,7 @@ sudo certbot --nginx -d your-domain.com
 | `ENCRYPTION_KEY` | ✓ | Fernet key for stored API keys |
 | `ADMIN_INITIAL_PASSWORD` | Optional | Password of the first admin. Blank = a random one is generated and printed once in the backend log (see [First login](#first-login)) |
 | `IPQS_API_KEY` | Optional | IPQualityScore email address risk (on request) |
+| `MXTOOLBOX_API_KEY` | Optional | MxToolbox deep mail-domain analysis (on request) |
 | `GROQ_API_KEY` | Optional | KQL/SPL query builder ([console.groq.com](https://console.groq.com)) |
 | `VT_API_KEY` | Optional | VirusTotal enrichment |
 | `OTX_API_KEY` | Optional | AlienVault OTX pulses feed |

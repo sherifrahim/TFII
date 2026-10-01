@@ -127,3 +127,14 @@ def test_ipqs_failures_do_not_echo_the_url_that_carries_the_key():
     r = _check("ipqs", "ipqs-key-0123456789", boom)
     assert r["status"] == "unreachable" and "ipqs-key" not in json.dumps(r)
     assert _check("ipqs", "ipqs-key-0123456789", lambda req: httpx.Response(200, text="<html>"))["status"] == "unexpected"
+
+
+def test_mxtoolbox_key_goes_in_the_authorization_header_to_the_usage_endpoint():
+    seen = {}
+
+    def handler(req):
+        seen["path"], seen["auth"] = req.url.path, req.headers.get("authorization")
+        return httpx.Response(200, json={"DnsRequests": 1, "DnsMax": 64, "NetworkRequests": 0, "NetworkMax": 0})
+    assert _check("mxtoolbox", "mxt-key-0123456789", handler)["status"] == "valid"
+    assert seen == {"path": "/api/v1/Usage", "auth": "mxt-key-0123456789"}
+    assert _check("mxtoolbox", "mxt-key-0123456789", lambda req: httpx.Response(401))["status"] == "invalid"
