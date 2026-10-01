@@ -1,0 +1,50 @@
+name: Probe whether AlienVault OTX answers email lookups (manual, read-only)
+
+# Manual only. OTX's own SDK marks EMAIL as having no API section, and users report empty answers. This checks
+# the live API with the platform OTX key (admin's saved key first): which status the email endpoint returns, and
+# whether an email that appears in a subscribed pulse comes back with that pulse. Prints status and counts only.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          script: |
+            cd /home/ubuntu/threatfeed && set -a && . ./.env && set +a
+            venv/bin/python - <<'PY' 2>&1 | grep -v "^\[WARN\]\|Deprecat\|scheduler"
+            import httpx, main
+            main.refresh_platform_keys()
+            key = main.PLATFORM_KEYS.get("otx")
+            if not key:
+                raise SystemExit("no OTX key available")
+            H = {"X-OTX-API-KEY": key}
+            B = "https://otx.alienvault.com/api/v1"
+            def show(label, r):
+                try: j = r.json()
+                except Exception: j = None
+                pi = (j or {}).get("pulse_info") if isinstance(j, dict) else None
+                print(f"{label:48s} HTTP {r.status_code}", f"keys={sorted(j)[:8]}" if isinstance(j, dict) else "", f"pulse_count={pi.get('count')}" if pi else "")
+            with httpx.Client(timeout=20, headers=H) as c:
+                show("email general (test@example.com)", c.get(f"{B}/indicators/email/test@example.com/general"))
+                show("domain general (example.com)", c.get(f"{B}/indicators/domain/example.com/general"))
+                show("domain general (nonexistent-tfii-probe.example)", c.get(f"{B}/indicators/domain/nonexistent-tfii-probe.example/general"))
+                r = c.get(f"{B}/pulses/subscribed", params={"limit": 50})
+                print("subscribed pulses: HTTP", r.status_code)
+                emails = []
+                for p in (r.json().get("results") or []) if r.status_code == 200 else []:
+                    for ind in p.get("indicators") or []:
+                        if str(ind.get("type", "")).lower() in ("email",):
+                            emails.append(ind.get("indicator"))
+                print("email indicators found in the first 50 subscribed pulses:", len(emails))
+                for e in emails[:3]:
+                    show("email general (from a pulse)", c.get(f"{B}/indicators/email/{e}/general"))
+                    show("email general, section=full", c.get(f"{B}/indicators/email/{e}"))
+            PY
