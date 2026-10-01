@@ -31,6 +31,7 @@ import ReportPage from "./pages/Report";
 import { WorkspacePage, InvestigationPage } from "./pages/Workspace";
 // Platform / OSINT screens sit on the large legacy component library, so they
 // load on demand rather than with the first paint.
+const OSINT_NAMES = { lookup: "IOC Lookup", bulk: "Bulk IOC Lookup", urldecode: "URL Decoder", safelinks: "Safe Link Extractor", ua: "User Agent Parser", trace: "Redirect Tracer", diff: "Diff Checker", public: "Public Lookup" };
 const OsintToolkit = lazy(() => import("./pages/Osint"));
 const GeoPage = lazy(() => import("./pages/Geo"));          // carries the world-map data, so it loads on its own
 const platform = name => lazy(() => import("./pages/Platform").then(m => ({ default: m[name] })));
@@ -133,7 +134,7 @@ function resolve(route, ctx) {
     case "search": return { crumbs: [{ label: "Global Search" }], el: <SearchPage q={q.q || ""} kinds={q.kinds || ""} /> };
     case "explorer": return { crumbs: [{ label: "Entity Explorer" }], el: <ExplorerPage query={q} /> };
     case "report": return { crumbs: [{ label: "OSINT Toolkit", to: "/osint" }, { label: "Bulk lookup", to: "/osint/bulk" }, { label: "Detailed report" }], el: <ReportPage query={q} /> };
-    case "osint": return { crumbs: [{ label: "OSINT Toolkit", to: "/osint" }, ...(b ? [{ label: b }] : [])], el: <OsintToolkit tool={b} /> };
+    case "osint": return { crumbs: [{ label: "OSINT Toolkit", to: "/osint" }, ...(b ? [{ label: OSINT_NAMES[b] || b }] : [])], el: <OsintToolkit tool={b} /> };
     case "query": return { crumbs: [{ label: "Query Builder" }], el: <QueryPage /> };
     case "geo": return { crumbs: [{ label: "Geo Intelligence" }], el: <GeoPage /> };
     case "workspace": return { crumbs: [{ label: "Workspace" }], el: <WorkspacePage query={q} /> };

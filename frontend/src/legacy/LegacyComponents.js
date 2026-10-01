@@ -2781,7 +2781,7 @@ function UserAgentParser({C}){
     </div>
   );
 
-  const deviceIcon=result?(result.bot?"🤖":result.device==="Mobile"?"📱":result.device==="Tablet"?"📲":"🖥️"):"";
+  const deviceIcon="";
 
   return(
     <div style={{maxWidth:800}}>
@@ -2809,15 +2809,15 @@ function UserAgentParser({C}){
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
             {[
               [deviceIcon,result.device],
-              result.bot?["⚠️","Bot / Crawler"]:null,
-              result.browser.name!=="Unknown"?["🌐",`${result.browser.name} ${result.browser.version}`.trim()]:null,
-              result.os.name!=="Unknown"?["💻",`${result.os.name} ${result.os.version}`.trim()]:null,
+              result.bot?["","Bot / Crawler"]:null,
+              result.browser.name!=="Unknown"?["",`${result.browser.name} ${result.browser.version}`.trim()]:null,
+              result.os.name!=="Unknown"?["",`${result.os.name} ${result.os.version}`.trim()]:null,
             ].filter(Boolean).map(([icon,label],i)=>(
               <span key={i} style={{fontSize:12,padding:"4px 12px",borderRadius:20,fontWeight:600,
                 background:result.bot&&label.includes("Bot")?C.amber+"15":C.accentDim,
                 border:`1px solid ${result.bot&&label.includes("Bot")?C.amber+"40":C.accent+"30"}`,
                 color:result.bot&&label.includes("Bot")?C.amber:C.accentText}}>
-                {icon} {label}
+                {label}
               </span>
             ))}
           </div>
@@ -4577,7 +4577,7 @@ function NoteCard({note,onEdit,onTogglePin,onArchive,onDelete,onToggleCheck,onTa
           style={{background:"none",border:"none",cursor:"pointer",
             fontSize:14,opacity:note.pinned?1:0.3,padding:2,
             color:note.color==="default"?C.white||C.textHi:"#fff",
-            lineHeight:1}}>📌</button>
+            lineHeight:1}}>{note.pinned?"Pinned":"Pin"}</button>
       </div>
       {note.title&&<div style={{fontSize:13,fontWeight:700,marginBottom:6,paddingRight:28,
         color:note.color==="default"?C.white||C.textHi:"#fff",lineHeight:1.3}}>
@@ -4755,13 +4755,13 @@ function NoteEditor({editingNote,draftTitle,setDraftTitle,draftContent,setDraftC
 
           {/* Type toggle */}
           <div style={{display:"flex",borderRadius:6,overflow:"hidden",border:`1px solid rgba(255,255,255,0.15)`}}>
-            {[["text","📝"],["checklist","☑️"]].map(([t,icon])=>(
+            {[["text",""],["checklist",""]].map(([t,icon])=>(
               <button key={t} onClick={()=>setDraftType(t)}
                 style={{background:draftType===t?"rgba(255,255,255,0.2)":"transparent",
                   border:"none",cursor:"pointer",padding:"4px 12px",
                   fontSize:12,color:draftType===t?"#fff":"rgba(255,255,255,0.6)",
                   fontFamily:"inherit"}}>
-                {icon} {t.charAt(0).toUpperCase()+t.slice(1)}
+                {t.charAt(0).toUpperCase()+t.slice(1)}
               </button>
             ))}
           </div>
@@ -4977,18 +4977,14 @@ function WorkspacePage({token,C}){
     <div style={{maxWidth:1000}}>
       {/* Header */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
-        <div style={{fontSize:18,fontWeight:700,color:C.white||C.textHi}}>
-          Workspace
-        </div>
+        <div/>
         <div style={{display:"flex",gap:8,alignItems:"center",flex:1,maxWidth:400}}>
           <div style={{flex:1,position:"relative"}}>
             <input value={q} onChange={e=>setQ(e.target.value)}
               placeholder="Search notes..."
               style={{width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,
-                color:C.inputText,padding:"8px 12px 8px 32px",borderRadius:8,
+                color:C.inputText,padding:"8px 12px",borderRadius:8,
                 fontSize:13,outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
-            <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",
-              color:C.muted,fontSize:14}}>🔍</span>
           </div>
           <button onClick={openNew}
             style={{padding:"8px 18px",borderRadius:8,cursor:"pointer",fontFamily:"inherit",
@@ -5032,7 +5028,7 @@ function WorkspacePage({token,C}){
 
       {!loading&&notes.length===0&&(
         <div style={{textAlign:"center",padding:64,color:C.muted}}>
-          <div style={{fontSize:40,marginBottom:12}}>📝</div>
+          
           <div style={{fontSize:14,fontWeight:600,color:C.white||C.textHi,marginBottom:8}}>
             {q||tagFilter?"No notes match your search":"Your workspace is empty"}
           </div>
