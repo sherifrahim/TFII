@@ -19,6 +19,7 @@ import security
 import feeds
 import keycheck
 import geo as geoloc
+import mailintel
 import entities
 import psycopg2, psycopg2.extras
 from dotenv import load_dotenv
@@ -308,6 +309,8 @@ def check_filename_heuristics(filename: str) -> list:
 
 def compute_verdict(enrichment: dict) -> dict:
     """Aggregate per-source enrichment results into a single verdict."""
+    if (enrichment or {}).get("mail"):
+        return mailintel.verdict(enrichment["mail"], enrichment)
     vt = enrichment.get("virustotal", {}) or {}
     ab = enrichment.get("abuseipdb", {}) or {}
     uh = enrichment.get("urlhaus", {}) or {}
@@ -2248,10 +2251,21 @@ def _valid_for_enrichment(ioc_type: str, value: str) -> bool:
         return bool(re.fullmatch(rf"[0-9a-fA-F]{{{_HEX_LEN[ioc_type]}}}", value or ""))
     if ioc_type == "URL":
         return security.safe_http_url(value) is not None
-    return True   # Email / CVE / Filename have no upstream lookup
+    if ioc_type == "Email":
+        return mailintel.split_email(value) is not None
+    return True   # CVE / Filename have no upstream lookup
+
+def _once(memo, key, factory):
+    """Run `factory()` once per key within a request (bulk lookups see the same mail domain many times)."""
+    if memo is None:
+        return factory()
+    task = memo.get(key)
+    if task is None:
+        task = memo[key] = asyncio.ensure_future(factory())
+    return task
 
 async def enrich(ioc_type: str, value: str, base: int, conn=None,
-                 force: bool = False, existing: dict = None, user: dict = None) -> dict:
+                 force: bool = False, existing: dict = None, user: dict = None, memo: dict = None) -> dict:
     if not force and existing and is_cache_fresh(existing):
         if conn and user:
             log_api_call(conn, "cache", value, True, user.get("id"))
@@ -2313,6 +2327,28 @@ async def enrich(ioc_type: str, value: str, base: int, conn=None,
             else: results["virustotal"] = {"source":"VirusTotal","error":str(vt_r)}
             if not isinstance(uh_r, Exception): results["urlhaus"] = uh_r
             else: results["urlhaus"] = {"source":"URLhaus","error":str(uh_r)}
+        elif ioc_type == "Email":
+            local, domain = mailintel.split_email(value)
+            kind = mailintel.provider_kind(domain)
+            mail = {"address": value, "local": local, "domain": domain, "provider_kind": kind}
+            if kind is None:            # a free-mail or disposable domain says nothing: do not spend quota on it
+                vt_key, vt_quota = get_key("virustotal")
+                uh_key, uh_quota = get_key("urlhaus")
+                vt_task = _once(memo, ("vt", domain), lambda: vt_domain(domain, conn, vt_key, user_id)) if vt_key else asyncio.sleep(0, result=({"skipped":True} if vt_quota is None else quota_error("VirusTotal")))
+                uh_task = _once(memo, ("uh", domain), lambda: urlhaus_host_lookup(domain, conn, uh_key, user_id)) if uh_key else asyncio.sleep(0, result=({"skipped":True} if uh_quota is None else quota_error("URLhaus")))
+            else:
+                vt_task = asyncio.sleep(0, result={"skipped": True})
+                uh_task = asyncio.sleep(0, result={"skipped": True})
+            dns_task = _once(memo, ("mx", domain), lambda: mailintel.mail_posture(domain)) if kind != "free" else asyncio.sleep(0, result=None)
+            vt_r, uh_r, dns_r = await asyncio.gather(vt_task, uh_task, dns_task, return_exceptions=True)
+            if kind is None:            # only report the sources that were actually asked
+                results["virustotal"] = vt_r if not isinstance(vt_r, Exception) else {"source":"VirusTotal","error":str(vt_r)}
+                results["urlhaus"] = uh_r if not isinstance(uh_r, Exception) else {"source":"URLhaus","error":str(uh_r)}
+            posture = dns_r if isinstance(dns_r, dict) else None
+            mail["posture"] = posture
+            mail["registration"] = (results.get("virustotal") or {}).get("registration")
+            mail["signals"] = mailintel.signals(local, domain, kind, posture, mail["registration"])
+            results["mail"] = mail
         elif ioc_type in ("MD5","SHA1","SHA256"):
             vt_key, vt_quota = get_key("virustotal")
             vt_r = await vt_hash(value, conn, vt_key, user_id) if vt_key else ({"skipped":True} if vt_quota is None else quota_error("VirusTotal"))
@@ -3543,6 +3579,7 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
 
     # ── Phase 4: threat-intel enrichment (concurrency-limited) ───────────────
     sem = asyncio.Semaphore(BULK_CONCURRENCY)
+    memo: dict = {}                 # per-request: the same mail domain is looked up once, however many addresses use it
     deadline = asyncio.get_running_loop().time() + BULK_DEADLINE_SECONDS
 
     def build_geo(item):
@@ -3589,10 +3626,11 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
                 existing = cur.fetchone()
 
             enrichment = await enrich(ioc_type, refanged, 50, conn,
-                force=False, existing=existing.get("enrichment") if existing else None, user=user)
+                force=False, existing=existing.get("enrichment") if existing else None, user=user, memo=memo)
             verdict_info = compute_verdict(enrichment)
             geo = geoloc.cross_check(geo, enrichment)        # IPs: does AbuseIPDB / VirusTotal agree on the country?
-            geo = geoloc.add_registration(geo, enrichment, ioc_type)      # domains: who registered it, and when
+            if ioc_type != "Email":
+                geo = geoloc.add_registration(geo, enrichment, ioc_type)  # domains: who registered it, and when
 
             return {
                 "input": raw, "refanged": refanged,

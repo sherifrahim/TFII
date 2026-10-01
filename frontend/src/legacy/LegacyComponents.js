@@ -1354,6 +1354,13 @@ invoice.pdf.exe`;
                       {geo?.note&&(
                         <div style={{fontSize:10.5,color:C.muted,marginBottom:4,lineHeight:1.5}}>{geo.note}</div>
                       )}
+                      {item.type==="Email"&&item.enrichment?.mail?.signals?.length>0&&(
+                        <div style={{fontSize:11,color:C.muted,lineHeight:1.5,marginBottom:4}}>
+                          {item.enrichment.mail.signals.map((sg,i)=>(
+                            <div key={i} style={{color:sg.level==="warn"?C.amber:C.muted}}>{sg.level==="warn"?"⚠ ":"• "}{sg.text}</div>
+                          ))}
+                        </div>
+                      )}
                       {item.reason&&(
                         <div style={{fontSize:11,color:C.muted,lineHeight:1.5}}>{item.reason}</div>
                       )}

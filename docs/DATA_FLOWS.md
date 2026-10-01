@@ -21,12 +21,13 @@ TFII is self-hosted and has **no telemetry**. It never sends anything to the pro
 
 | Service | Sent | When | Notes |
 |---|---|---|---|
-| **VirusTotal** | The indicator (IP, domain, URL, hash) | Enrichment, bulk lookup, "Show past addresses" | Uses the requesting user's key, falling back to a key the admin saved. Query lookups are visible to VirusTotal under that key. |
+| **VirusTotal** | The indicator (IP, domain, URL, hash; for an email address, only its domain, and not for free-mail or disposable domains) | Enrichment, bulk lookup, "Show past addresses" | Uses the requesting user's key, falling back to a key the admin saved. Query lookups are visible to VirusTotal under that key. |
 | **AbuseIPDB** | The IP | Enrichment of IPs | Same key handling. |
 | **URLhaus (abuse.ch)** | The URL / host / hash | Enrichment | Auth-Key. |
 | **Shodan** | The IP or domain | OSINT lookup, if a key is set | Optional. |
 | **Groq** | The text of a query-builder or report prompt | Only when someone uses the KQL/SPL builder or AI features | Optional; no key, no call. Do not paste sensitive data into it. |
-| **dns.google** (Google Public DNS over HTTPS) | Domain name being looked up | Resolving domains to addresses for location context | Also used as a fallback to the OS resolver. |
+| **dns.google** (Google Public DNS over HTTPS) | Domain name being looked up (for an email address: its domain) | Resolving domains to addresses for location context; MX, SPF and DMARC of an email's domain | Also used as a fallback to the OS resolver. |
+| **XposedOrNot** | The full email address | Only when someone presses "Check breach exposure" on an email indicator | Public breach database, no key. Its free tier is small (about 25 requests an hour and 100 a day per IP), shared by everyone on your server, so TFII stays under it and caches answers for a day. Check their terms, especially for commercial use. |
 | **NSLookup.io** | Domain name | When a user presses "Look up DNS records" | Public API, no key. Results are cached for 6 hours; TFII throttles itself well under their limit. |
 | **RDAP** (IANA, ARIN) | Domain or IP | OSINT lookup | Public registries. |
 | **ip-api.com** | The IP addresses (an IP indicator, or the addresses a domain resolves to) | Location and network owner for bulk lookup and indicator pages | **See "Things to review before you rely on this" below.** |

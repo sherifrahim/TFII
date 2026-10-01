@@ -220,3 +220,15 @@ in production. A separately-hosted dev UI must relax that meta tag in its own bu
   component registered in `frontend/src/pages/EntityPage.js`.
 * **New relationship type** — one entry in `entities.REL_TYPES` (+ `GROUP_ORDER` if order matters).
 * **New feed** — write to `iocs` through `main._ingest_feed_ioc` so provenance and sightings are recorded.
+
+## Email addresses and mail domains
+
+No free source rates an individual mailbox, so TFII judges the part that can be checked (`backend/mailintel.py`):
+
+- **The domain.** VirusTotal and URLhaus reputation, registration age (very new domains are flagged), and how it is set up for mail: MX, SPF and DMARC read over DNS-over-HTTPS. These are reported as labelled observations ("No SPF record: easy to spoof"), not as a verdict on the person.
+- **The provider.** Free mailbox services (gmail.com, outlook.com, ...) and a short list of disposable-mail services are recognised. A free-mail domain's good name never makes an address `clean`: the verdict stays `unknown`. No reputation lookups are spent on free-mail or disposable domains.
+- **Role-style names** (`support@`, `billing@`, ...) are noted, since attackers pick them to look official.
+- **Breach exposure** of the mailbox itself is asked only on request (`GET /v2/mail/exposure`), through XposedOrNot's public API, because the full address leaves the server and the free allowance is small and shared. A "not found" answer is not proof the address was never exposed.
+
+Bulk lookup accepts email addresses, looks each domain up once however many addresses use it, and shows the observations on each row. AlienVault OTX was evaluated for address lookups and not used: its own SDK lists email as unsupported by its API.
+

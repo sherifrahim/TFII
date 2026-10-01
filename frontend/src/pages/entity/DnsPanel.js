@@ -2,11 +2,14 @@ import React, { useState } from "react";
 import { apiJSON } from "../../lib/api";
 import { Panel, Button, Badge, Callout, useToast } from "../../components/ui";
 
-// The host to look up for a Domain or URL indicator; "" for anything a DNS lookup does not apply to.
+// The host to look up for a Domain, URL or Email (its mail domain) indicator; "" for anything a DNS lookup does not apply to.
 export function dnsHost(value, type) {
   let host = "";
   if (type === "Domain") host = String(value || "");
-  else if (type === "URL") {
+  else if (type === "Email") {
+    const v = String(value || "").trim(), i = v.lastIndexOf("@");
+    host = i > 0 && i === v.indexOf("@") ? v.slice(i + 1) : "";
+  } else if (type === "URL") {
     try { host = new URL(String(value || "").replace(/^hxxp/i, "http")).hostname; } catch { host = ""; }
   }
   host = host.trim().replace(/\.$/, "").toLowerCase();

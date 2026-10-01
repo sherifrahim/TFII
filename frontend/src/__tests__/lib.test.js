@@ -5,6 +5,7 @@ import { safeUrl, installLinkGuard } from "../lib/safe";
 import { geoFacts, regionName } from "../lib/geo";
 import { runningBundle, servedBundle, isStale } from "../lib/update";
 import { dnsHost, DnsResult, HistoryList } from "../pages/entity/DnsPanel";
+import { MailSignals, ExposureResult } from "../pages/entity/MailPanel";
 import { entityPath, canonicalKind, KINDS } from "../lib/entity";
 import { entityRoute } from "../lib/router";
 import { detectType, refang, defang, confBand } from "../lib/format";
@@ -117,6 +118,10 @@ describe("DNS panel", () => {
     expect(dnsHost("1.2.3.4", "IPv4")).toBe("");
     expect(dnsHost("not a url", "URL")).toBe("");
     expect(dnsHost("", "Domain")).toBe("");
+    expect(dnsHost("Alice@Mail.Example.com", "Email")).toBe("mail.example.com");
+    expect(dnsHost("a@b@example.com", "Email")).toBe("");
+    expect(dnsHost("no-at-sign", "Email")).toBe("");
+    expect(dnsHost("a@1.2.3.4", "Email")).toBe("");
   });
   test("renders the records, the observations and the mail authentication", () => {
     const d = {
@@ -207,5 +212,22 @@ describe("search hits", () => {
   test("a kind the UI has never heard of does not crash the result list", () => {
     expect(hitRoute({ kind: "certificate", ref: "x" })[0]).toBe("/");
     expect(renderToStaticMarkup(<HitBadges h={{ kind: "certificate" }} />)).toBe("");
+  });
+});
+
+describe("mail address panel", () => {
+  test("shows the domain's mail setup and what was noticed, as facts", () => {
+    const mail = { domain: "new-shop.example", provider_kind: null, registration: { registrar: "R", created: "2026-09-25" },
+      posture: { checked: true, mx: [{ priority: 10, host: "mx.new-shop.example" }], spf: null, dmarc: { policy: "none", record: "v=DMARC1; p=none" } },
+      signals: [{ level: "warn", text: "No SPF record", code: "no_spf" }, { level: "info", text: "DMARC policy is 'none'", code: "dmarc_none" }] };
+    const html = renderToStaticMarkup(<MailSignals mail={mail} />);
+    for (const t of ["new-shop.example", "No SPF record", "Check", "Note", "10 mx.new-shop.example", "p=none", "not published", "R"]) expect(html).toContain(t);
+    expect(renderToStaticMarkup(<MailSignals mail={null} />)).toBe("");
+  });
+  test("a clean breach answer is not proof of safety, and a hit lists the breaches", () => {
+    expect(renderToStaticMarkup(<ExposureResult r={{ found: false, count: 0, breaches: [] }} />)).toContain("not proof");
+    const html = renderToStaticMarkup(<ExposureResult r={{ found: true, count: 2, breaches: ["Adobe", "LinkedIn"] }} />);
+    for (const t of ["2", "breaches", "Adobe", "LinkedIn"]) expect(html).toContain(t);
+    expect(renderToStaticMarkup(<ExposureResult r={{ found: true, count: 1, breaches: ["Adobe"] }} />)).toContain("1</strong> known breach include");
   });
 });

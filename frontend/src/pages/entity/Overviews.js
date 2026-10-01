@@ -6,6 +6,7 @@ import { timeAgo, detectionTemplates, typeGroup } from "../../lib/format";
 import { safeUrl } from "../../lib/safe";
 import { geoFacts } from "../../lib/geo";
 import DnsPanel from "./DnsPanel";
+import MailPanel from "./MailPanel";
 import { LEGACY_C } from "../../design/tokens";
 import {
   Panel, Button, IconButton, Badge, SevBadge, TypeBadge, Field, Callout, EmptyState, CopyButton, useToast, actionable, rowAction,
@@ -100,6 +101,7 @@ export function IndicatorOverview({ env, canEdit, reload }) {
           )}
         </Panel>
 
+        {ioc.type === "Email" && <MailPanel address={ioc.value} mail={enr.mail} />}
         <DnsPanel value={ioc.value} type={ioc.type} />
 
         {relGroups.length > 0 && (
@@ -252,6 +254,7 @@ export function ObservableOverview({ env }) {
           </>
         )}
       </Panel>
+      {hd.type === "Email" && <MailPanel address={hd.value} mail={lookup?.enrichment?.mail} />}
       <DnsPanel value={hd.value} type={hd.type} />
     </div>
   );

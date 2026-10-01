@@ -13,6 +13,7 @@ hazard that a query string simply does not have.
     POST /v2/entity/status             triage status of an indicator
     POST /v2/entity/resolve-dns        domain → A/AAAA, recorded with provenance
     GET  /v2/dns?domain=               richer DNS records (NSLookup.io): A/AAAA/NS/MX/TXT/SOA/CAA, SPF, DMARC (cached)
+  GET  /v2/mail/exposure?address=    breach exposure of one mailbox (XposedOrNot, on request, shared budget)
     POST /v2/entity/sync-mitre         materialise ATT&CK associations for an actor
     POST /v2/relationships             assert a typed relationship (with provenance)
     DELETE /v2/relationships/{id}
@@ -31,6 +32,7 @@ from pydantic import BaseModel
 import dnsintel
 import entities as E
 import geo
+import mailintel
 import search as S
 import security
 
@@ -64,6 +66,8 @@ class ReasonIn(BaseModel):
 
 class RefIn(BaseModel):
     ref: str
+
+EXPOSURE_LIMIT = dnsintel.UserLimiter(limit=3)      # breach lookups per user per minute; the budget itself is shared
 
 
 def _check_kind(kind):
@@ -352,6 +356,16 @@ def register(app, d, h):
         conn.commit()
         age = 0.0
         return out(data, False)
+
+    # ── Breach exposure of a mailbox (XposedOrNot), on request ────────────────
+    @app.get("/v2/mail/exposure")
+    async def v2_mail_exposure(address: str, refresh: bool = False, user=Depends(current)):
+        if not EXPOSURE_LIMIT.allow(user["id"]):
+            raise HTTPException(429, "Too many breach lookups in the last minute; wait a moment and try again")
+        try:
+            return await mailintel.breach_exposure(address, refresh=refresh)
+        except mailintel.MailApiError as e:
+            raise HTTPException({"invalid": 400, "rate_limited": 429, "busy": 429}.get(e.kind, 502), str(e))
 
     # ── MITRE ATT&CK associations ─────────────────────────────────────────────
     @app.post("/v2/entity/sync-mitre")

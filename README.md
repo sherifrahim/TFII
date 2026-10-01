@@ -58,6 +58,7 @@ Change it right away under Settings → Change Password. Free public feeds (Feod
 | **IOC Intelligence** | Server-side paginated table (thousands of rows), search, type/source/TLP/confidence/time filters, facets, bulk actions, STIX 2.1 export, TAXII 2.1 server, STIX/TAXII/MISP/CSV import. |
 | **Multi-source feeds** | Feodo Tracker, OpenPhish, Phishing.Database, IPsum, CINS Army, Emerging Threats, blocklist.de, AlienVault OTX, and abuse.ch ThreatFox, MalwareBazaar and URLhaus. Per-source reliability, expiry, and consensus rules. |
 | **Entity Intelligence** | One page per indicator: reputation, confidence reasoning, VirusTotal / AbuseIPDB / URLhaus enrichment, provenance, related IOCs, linked CVEs, relationship graph, timeline, notes, generated KQL / SPL / YARA hunting queries. |
+| **Email addresses** | Judged through their domain (reputation, age, MX / SPF / DMARC, disposable and free-mail detection), with an on-request breach-exposure check. Works in bulk lookup too. |
 | **DNS records** | Name servers, mail servers, TXT, CAA and SOA for a domain, with SPF and DMARC parsed and flagged — via the public NSLookup.io API, cached, rate-limited. |
 | **CVE Intelligence** | Per-product severity mix, KEV, EPSS, affected versions, multi-source lookup (NVD, CVE.org, OSV, exploit references), reports. NVD is polled every 6 hours. |
 | **Actors & campaigns** | MITRE ATT&CK actor profiles, campaign pages with an infrastructure graph. |
