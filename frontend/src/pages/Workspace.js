@@ -354,7 +354,7 @@ function Timeline({ events, onDelete }) {
   return (
     <div className="tl">
       {events.map(e => (
-        <div key={e.id} className={`tl-item ${e.event_type === "manual" ? "gold" : e.event_type === "created" ? "gold" : ""}`}>
+        <div key={e.id} className={`tl-item ${e.event_type === "manual" ? "accent" : e.event_type === "created" ? "accent" : ""}`}>
           <div className="tl-date row" style={{ gap: 6 }}>{fmtDateTime(e.occurred_at)}{e.created_by && <span>· {e.created_by}</span>}
             {onDelete && e.event_type === "manual" && <button className="btn ghost xs" onClick={() => onDelete(e)}>remove</button>}</div>
           <div className="tl-title">

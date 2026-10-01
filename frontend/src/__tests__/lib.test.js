@@ -6,6 +6,9 @@ import { geoFacts, regionName } from "../lib/geo";
 import { runningBundle, servedBundle, isStale } from "../lib/update";
 import { dnsHost, DnsResult, HistoryList } from "../pages/entity/DnsPanel";
 import { MailSignals, ExposureResult, RiskResult, DeepResult } from "../pages/entity/MailPanel";
+import { previewTokens, csvCell, resultsToCsv } from "../pages/BulkLookup";
+import { Section } from "../pages/Report";
+import { readReportItems, reportToMarkdown } from "../lib/report";
 import { entityPath, canonicalKind, KINDS } from "../lib/entity";
 import { entityRoute } from "../lib/router";
 import { detectType, refang, defang, confBand } from "../lib/format";
@@ -244,5 +247,48 @@ describe("mail address panel", () => {
       mx: { failed: [], warnings: [], passed: [], timeouts: [] } } };
     const html = renderToStaticMarkup(<DeepResult r={r} />);
     for (const t of ["1 failed", "1 warnings", "3 passed", "SPF Record Published", "No SPF record found", "DMARC Policy Not Enabled", "Nothing to report", "Blocklists", "Not included in this MxToolbox plan"]) expect(html).toContain(t);
+  });
+});
+
+describe("bulk lookup helpers", () => {
+  test("live counts describe what was pasted, defanged or not, once per value", () => {
+    const p = previewTokens("8.8.8.8\nevil[.]com, evil[.]com\nhxxp://bad[.]site/x\n  d41d8cd98f00b204e9800998ecf8427e\ntest[at]phish.net");
+    expect(p.total).toBe(5);
+    expect(p.counts).toEqual({ IP: 1, domain: 1, URL: 1, hash: 1, email: 1 });
+    expect(previewTokens("").total).toBe(0);
+  });
+  test("CSV cells are quoted and spreadsheet formulas are defused", () => {
+    expect(csvCell("a,b")).toBe('"a,b"');
+    expect(csvCell('say "hi"')).toBe('"say ""hi"""');
+    expect(csvCell("=HYPERLINK(\"http://x\")")).toMatch(/^"?'=/);
+    expect(csvCell("plain")).toBe("plain");
+    const csv = resultsToCsv([{ input: "evil[.]com", refanged: "evil.com", type: "Domain", verdict: "malicious", score: 88, reason: "r", geo: { kind: "hosting", country: "Italy", cctld_country_code: "MU", org: "Aruba" }, already_tracked: true }]);
+    const lines = csv.split("\r\n");
+    expect(lines[0].startsWith("input,refanged,type,verdict")).toBe(true);
+    expect(lines[1]).toContain("Italy,hosting,Mauritius,Aruba");
+    expect(lines[1].endsWith("yes")).toBe(true);
+  });
+});
+
+describe("detailed report", () => {
+  test("each kind of section renders its values as text", () => {
+    const kv = renderToStaticMarkup(<Section s={{ title: "Detections", type: "kv", rows: [["Malicious", "14"]] }} />);
+    expect(kv).toContain("Detections"); expect(kv).toContain("Malicious"); expect(kv).toContain("14");
+    const tb = renderToStaticMarkup(<Section s={{ title: "Engines", type: "table", cols: ["Engine", "Result"], rows: [["BadAV", "<script>x</script>"]] }} />);
+    expect(tb).toContain("BadAV"); expect(tb).not.toContain("<script>"); expect(tb).toContain("&lt;script&gt;");     // provider text is never markup
+    expect(renderToStaticMarkup(<Section s={{ title: "Tags", type: "tags", items: ["dga", "phishing"] }} />)).toContain("phishing");
+    expect(renderToStaticMarkup(<Section s={{ title: "WHOIS", type: "text", text: "Domain Name: X" }} />)).toContain("Domain Name: X");
+  });
+  test("the report is opened from the URL or from a parked list, never more than 25", () => {
+    expect(readReportItems({ items: JSON.stringify(["a.example", "1.2.3.4"]) })).toEqual(["a.example", "1.2.3.4"]);
+    expect(readReportItems({ items: "not json" })).toEqual([]);
+    expect(readReportItems({})).toEqual([]);
+    expect(readReportItems({ items: JSON.stringify(Array.from({ length: 40 }, (_, i) => `h${i}.example`)) })).toHaveLength(25);
+  });
+  test("Markdown carries what was scanned, what was not, and the section data", () => {
+    const md = reportToMarkdown([{ value: "evil.example", defanged: "evil[.]example", type: "Domain", verdict: "malicious", score: 88, reason: "why",
+      providers: [{ id: "virustotal", name: "VirusTotal", status: "ok", headline: "14 of 90 engines flagged it", message: "", sections: [{ title: "Detections", type: "kv", rows: [["Malicious", "14"]] }, { title: "Engines", type: "table", cols: ["Engine", "Result"], rows: [["BadAV", "a|b"]] }] },
+        { id: "abuseipdb", name: "AbuseIPDB", status: "skipped", message: "No API key available for this provider", headline: "", sections: [] }], tfii: [] }]);
+    for (const t of ["# TFII detailed report", "## evil[.]example", "Verdict: Malicious (88)", "VirusTotal: 14 of 90 engines flagged it", "AbuseIPDB: not scanned", "### VirusTotal: Detections", "**Malicious:** 14", "| Engine | Result |", "a\\|b"]) expect(md).toContain(t);
   });
 });

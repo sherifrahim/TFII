@@ -11,7 +11,7 @@ import Icon from "../components/Icon";
 import { SEV_COLOR } from "../design/tokens";
 
 const CATS = ["All", "CVE", "APT", "Ransomware", "Malware", "Vulnerability", "IOC"];
-const CAT_TONE = { CVE: "critical", APT: "violet", Ransomware: "high", Malware: "high", Vulnerability: "medium", IOC: "gold", General: "low" };
+const CAT_TONE = { CVE: "critical", APT: "violet", Ransomware: "high", Malware: "high", Vulnerability: "medium", IOC: "accent", General: "low" };
 const ENTITY_FILTERS = ["cve", "actor", "malware", "software", "indicator"];
 
 export default function IntelWall({ query }) {
@@ -71,7 +71,7 @@ export default function IntelWall({ query }) {
           <Button size="sm" icon="refresh" loading={loading && !!data} onClick={() => { if (refresh) reload(); else setRefresh(1); }}>Refresh</Button>
         </>} />
       {eKind && eRef && (
-        <Callout tone="gold" icon="filter" style={{ marginBottom: 10 }}>
+        <Callout tone="accent" icon="filter" style={{ marginBottom: 10 }}>
           <div className="row" style={{ gap: 8 }}>
             <span>Showing items that mention <strong style={{ overflowWrap: "anywhere" }}>{eRef}</strong> ({(KINDS[eKind] || {}).label || eKind}).</span>
             <span className="spacer" />

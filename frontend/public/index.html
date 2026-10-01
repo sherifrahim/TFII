@@ -2,16 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <link rel="icon" type="image/svg+xml" href="%PUBLIC_URL%/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#07070e" />
+    <meta name="theme-color" content="#05060A" />
     <meta name="description" content="TFII — ThreatFeed Intelligence Platform" />
     <!-- The UI is served as static files under /ui/ and talks only to its own
          origin. This CSP is what limits the damage of any injected markup: no
          inline/remote script, no framing tricks, no third-party connections.
          (frame-ancestors can't be set from a meta tag; nginx sends
          X-Frame-Options for that.) -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'" />
     <meta name="referrer" content="no-referrer" />
     <title>TFII — ThreatFeed Intelligence</title>
   </head>

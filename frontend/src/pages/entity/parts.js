@@ -84,7 +84,7 @@ export function RelationshipsTab({ env, kind, refv, inv, reload }) {
                           <div className="row" style={{ gap: 8 }}>
                             <EntityChip item={it} inv={inv} />
                             {it.type && it.kind === "indicator" && <TypeBadge type={it.type} />}
-                            {it.in_investigation && <Badge tone="gold" outline title="Already part of the investigation you came from">In investigation</Badge>}
+                            {it.in_investigation && <Badge tone="accent" outline title="Already part of the investigation you came from">In investigation</Badge>}
                           </div>
                           <div className="faint xs" style={{ marginTop: 2, overflowWrap: "anywhere" }}>
                             <span title={(ORIGIN[it.origin] || [])[1]}>{(ORIGIN[it.origin] || [it.origin])[0]}</span>
@@ -193,7 +193,7 @@ function AddRelationshipModal({ kind, refv, title, onClose, onDone }) {
 }
 
 // ── Activity (timeline) ─────────────────────────────────────────────────────
-const TL_TONE = { first_seen: "gold", kev: "red", expiry: "red", investigation: "gold", status: "gold", resolution: "gold" };
+const TL_TONE = { first_seen: "accent", kev: "red", expiry: "red", investigation: "accent", status: "accent", resolution: "accent" };
 export function TimelineTab({ events }) {
   return (
     <Panel title="Activity" sub="Only events with a recorded timestamp — nothing is estimated">

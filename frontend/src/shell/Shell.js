@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Icon from "../components/Icon";
-import { IconButton, useClickOutside, useHotkey, useLocal } from "../components/ui";
+import { IconButton, Menu, useClickOutside, useHotkey, useLocal } from "../components/ui";
+import Logo, { Wordmark } from "../components/Logo";
+import { Eggs, logoClicked } from "./Eggs";
 import { NAV } from "./nav";
 import { navigate, href } from "../lib/router";
 import { useSession } from "../lib/session";
@@ -11,6 +13,7 @@ import CommandPalette from "./CommandPalette";
 export default function Shell({ route, crumbs, children }) {
   const { me, can, logout } = useSession();
   const [collapsed, setCollapsed] = useLocal("tf_sidebar_collapsed", typeof window !== "undefined" && window.innerWidth < 900);
+  const [closed, setClosed] = useLocal("tf_nav_closed", { Platform: true });
   const [palette, setPalette] = useState(false);
   const openPalette = useCallback(() => setPalette(true), []);
 
@@ -27,14 +30,35 @@ export default function Shell({ route, crumbs, children }) {
   useEffect(() => { setPalette(false); }, [route.path]);
 
   const isExplorer = !can("data.workspace");
+  const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || "");
+  const mod = mac ? "⌘" : "Ctrl";
+  const [logoSpin, setLogoSpin] = useState(0);
+  // A thin bar sweeps across the top on every navigation.
+  const [bar, setBar] = useState(0);
+  useEffect(() => { setBar(b => b + 1); }, [route.path]);
+
+  const newItems = can("data.workspace") ? [
+    { label: "Add an indicator", icon: "plus", onClick: () => navigate("/iocs/new") },
+    { label: "Bulk lookup", icon: "layers", onClick: () => navigate("/osint/bulk") },
+    { label: "New investigation", icon: "briefcase", onClick: () => navigate("/workspace", { new: "1" }) },
+    "sep",
+    { label: "Import indicators", icon: "upload", onClick: () => navigate("/iocs/import") },
+  ] : [
+    { label: "Bulk lookup", icon: "layers", onClick: () => navigate("/osint/bulk") },
+    { label: "Look up a CVE", icon: "shieldAlert", onClick: () => navigate("/cve", { tab: "lookup" }) },
+  ];
 
   return (
     <div className="app">
+      <div key={bar} className="route-bar" aria-hidden />
+      <Eggs />
       <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
         <div className="sb-brand">
-          <div className="sb-logo">TF</div>
+          <span className="logo-hit" onClick={() => { if (logoClicked()) setLogoSpin(n => n + 1); }} role="presentation">
+            <Logo key={logoSpin} size={32} animate spin={logoSpin > 0} title="TFII" />
+          </span>
           <div className="sb-brand-text" style={{ minWidth: 0 }}>
-            <div className="sb-name">TFII</div>
+            <Wordmark />
             <div className="sb-sub">Threat Intelligence</div>
           </div>
         </div>
@@ -45,13 +69,18 @@ export default function Shell({ route, crumbs, children }) {
             if (!items.length) return null;
             return (
               <div key={section.sec}>
-                <div className="sb-sec">{section.sec}</div>
-                {items.map(it => {
+                {collapsed ? <div className="sb-sec">{section.sec}</div> : (
+                  <button className={`sb-sec sb-sec-btn ${closed[section.sec] ? "closed" : ""}`} aria-expanded={!closed[section.sec]}
+                    onClick={() => setClosed(c => ({ ...c, [section.sec]: !c[section.sec] }))}>
+                    {section.sec}<Icon name="chevronDown" size={12} />
+                  </button>
+                )}
+                {(collapsed || !closed[section.sec] || items.some(it => it.match(route.path))) && items.map(it => {
                   const active = it.match(route.path);
                   const locked = isExplorer && it.data;
                   return (
                     <a key={it.id} href={href(it.to)} className={`sb-item ${active ? "active" : ""} ${locked ? "locked" : ""}`}
-                      title={collapsed ? it.label : locked ? "Requires full access" : undefined} aria-current={active ? "page" : undefined}>
+                      data-tip={collapsed ? it.label : locked ? "Requires full access" : undefined} aria-current={active ? "page" : undefined}>
                       <Icon name={it.icon} size={16} />
                       <span className="sb-label">{it.label}</span>
                       {locked && <Icon name="lock" size={12} className="sb-count" />}
@@ -63,17 +92,24 @@ export default function Shell({ route, crumbs, children }) {
           })}
         </nav>
         <div className="sb-foot">
-          <button className="sb-item" onClick={() => setCollapsed(c => !c)} title={collapsed ? "Expand sidebar (Ctrl+B)" : "Collapse sidebar (Ctrl+B)"}>
-            <Icon name="panel" size={16} /><span className="sb-label">Collapse</span><span className="sb-count"><kbd>Ctrl B</kbd></span>
+          <button className="sb-item" onClick={() => setCollapsed(c => !c)} data-tip={collapsed ? `Expand sidebar (${mod} B)` : undefined}>
+            <Icon name="panel" size={16} /><span className="sb-label">Collapse</span><span className="sb-count"><kbd>{mod} B</kbd></span>
           </button>
-          <div className="sb-user">
-            <div className="avatar">{(me?.username || "?")[0].toUpperCase()}</div>
-            <div className="sb-label" style={{ minWidth: 0, flex: 1 }}>
-              <div className="trunc" style={{ color: "var(--text)", fontSize: 12.5, fontWeight: 500 }}>{me?.username}</div>
-              <div className="faint xs" style={{ textTransform: "capitalize" }}>{me?.role}</div>
-            </div>
-            {!collapsed && <IconButton icon="logout" size="sm" title="Sign out" onClick={logout} />}
-          </div>
+          <Menu align="left" width={216} trigger={(toggle) => (
+            <button className="sb-user" onClick={toggle} aria-label="Account menu" style={{ border: 0, cursor: "pointer", textAlign: "left", width: "100%", color: "inherit" }}>
+              <div className="avatar">{(me?.username || "?")[0].toUpperCase()}</div>
+              <div className="sb-label" style={{ minWidth: 0, flex: 1 }}>
+                <div className="trunc" style={{ color: "var(--text)", fontSize: 13, fontWeight: 550 }}>{me?.username}</div>
+                <div className="faint xs" style={{ textTransform: "capitalize" }}>{me?.role}</div>
+              </div>
+              {!collapsed && <Icon name="chevronUp" size={14} style={{ color: "var(--text-4)" }} />}
+            </button>
+          )} items={[
+            { label: "Settings", icon: "settings", onClick: () => navigate("/platform/settings") },
+            { label: "API keys", icon: "key", onClick: () => window.dispatchEvent(new Event("tf:keys")) },
+            "sep",
+            { label: "Sign out", icon: "logout", onClick: logout, danger: true },
+          ]} />
         </div>
       </aside>
 
@@ -82,7 +118,7 @@ export default function Shell({ route, crumbs, children }) {
           <div className="crumbs">
             {crumbs.map((c, i) => (
               <React.Fragment key={i}>
-                {i > 0 && <span className="sep">/</span>}
+                {i > 0 && <Icon name="chevronRight" size={12} className="sep" />}
                 {c.to && i < crumbs.length - 1 ? <a href={href(c.to)}>{c.label}</a> : <span className={i === crumbs.length - 1 ? "cur" : ""}>{c.label}</span>}
               </React.Fragment>
             ))}
@@ -90,11 +126,11 @@ export default function Shell({ route, crumbs, children }) {
           <button className="search-trigger" onClick={openPalette} aria-label="Search (Ctrl+K)">
             <Icon name="search" size={14} />
             <span>Search IOCs, CVEs, actors, campaigns…</span>
-            <kbd>Ctrl K</kbd>
+            <kbd>{mod} K</kbd>
           </button>
-          {can("data.workspace") && (
-            <IconButton icon="plus" title="Add IOC" onClick={() => navigate("/iocs/new")} />
-          )}
+          <Menu width={220} trigger={(toggle) => (
+            <button className="btn primary" onClick={toggle} aria-label="Create new"><Icon name="plus" size={14} />New</button>
+          )} items={newItems} />
           <NotificationCenter />
         </header>
         <main className="content" id="tf-content">{children}</main>

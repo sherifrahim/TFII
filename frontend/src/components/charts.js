@@ -1,8 +1,15 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { fmtNum } from "../lib/format";
 import { SEV_COLOR } from "../design/tokens";
 
-export function Sparkline({ data = [], color = "#8B929D", w = 120, h = 32, fill = true }) {
+// True one frame after mount: lets bars, rings and fills transition in from zero.
+function useMounted() {
+  const [m, setM] = useState(false);
+  useEffect(() => { const id = requestAnimationFrame(() => setM(true)); return () => cancelAnimationFrame(id); }, []);
+  return m;
+}
+
+export function Sparkline({ data = [], color = "#8C95A8", w = 120, h = 32, fill = true }) {
   if (!data.length) return null;
   const max = Math.max(...data, 1), min = Math.min(...data, 0);
   const pts = data.map((v, i) => [(i / Math.max(1, data.length - 1)) * w, h - 2 - ((v - min) / (max - min || 1)) * (h - 4)]);
@@ -10,7 +17,7 @@ export function Sparkline({ data = [], color = "#8B929D", w = 120, h = 32, fill 
   return (
     <svg width={w} height={h} aria-hidden style={{ overflow: "visible" }}>
       {fill && <path d={`${d} L${w},${h} L0,${h} Z`} fill={color} opacity={0.1} />}
-      <path d={d} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" />
+      <path d={d} className="spark-path" pathLength="200" style={{ "--len": 200 }} fill="none" stroke={color} strokeWidth={1.8} strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
 }
@@ -29,7 +36,7 @@ export function StackedBars({ days, series, height = 180, onBarClick }) {
         onMouseLeave={() => setHover(null)}>
         {ticks.map((t, i) => {
           const y = H - pad - (t / max) * (H - pad - 6);
-          return <line key={i} x1={0} x2={W} y1={y} y2={y} stroke="#1A1F26" strokeWidth={1} vectorEffect="non-scaling-stroke" />;
+          return <line key={i} x1={0} x2={W} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth={1} strokeDasharray="3 4" vectorEffect="non-scaling-stroke" />;
         })}
         {days.map((d, i) => {
           let y = H - pad;
@@ -42,8 +49,9 @@ export function StackedBars({ days, series, height = 180, onBarClick }) {
                 if (!v) return null;
                 const bh = (v / max) * (H - pad - 6);
                 y -= bh;
-                return <rect key={s.key} x={i * bw + bw * 0.18} y={y} width={bw * 0.64} height={Math.max(bh, 1)} fill={s.color}
-                  opacity={hover === null || hover === i ? 0.9 : 0.45} rx={1} />;
+                return <rect key={s.key} x={i * bw + bw * 0.16} y={y} width={bw * 0.68} height={Math.max(bh, 1)} fill={s.color}
+                  opacity={hover === null || hover === i ? 0.95 : 0.4}
+                  style={{ transformBox: "fill-box", transformOrigin: "bottom", animation: `tf-grow-y 650ms var(--spring) ${Math.min(i * 14, 500)}ms both`, transition: "opacity 120ms" }} />;
               })}
             </g>
           );
@@ -66,18 +74,19 @@ export function StackedBars({ days, series, height = 180, onBarClick }) {
 }
 
 export function Donut({ data, size = 132, thickness = 16, center, onSlice }) {
+  const mounted = useMounted();
   const total = data.reduce((s, d) => s + d.value, 0) || 1;
   const r = (size - thickness) / 2, c = 2 * Math.PI * r;
   let acc = 0;
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }}>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#171B21" strokeWidth={thickness} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={thickness} />
       {data.filter(d => d.value > 0).map(d => {
         const len = (d.value / total) * c;
         const el = (
           <circle key={d.label} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={d.color} strokeWidth={thickness}
-            strokeDasharray={`${Math.max(len - 1.5, 0.5)} ${c}`} strokeDashoffset={-acc} transform={`rotate(-90 ${size / 2} ${size / 2})`}
-            style={{ cursor: onSlice ? "pointer" : "default" }} onClick={onSlice ? () => onSlice(d) : undefined}>
+            strokeDasharray={`${mounted ? Math.max(len - 2, 0.5) : 0} ${c}`} strokeDashoffset={-acc} strokeLinecap="butt" transform={`rotate(-90 ${size / 2} ${size / 2})`}
+            style={{ cursor: onSlice ? "pointer" : "default", transition: "stroke-dasharray 1000ms cubic-bezier(.2,.7,.2,1)" }} onClick={onSlice ? () => onSlice(d) : undefined}>
             <title>{`${d.label}: ${d.value}`}</title>
           </circle>
         );
@@ -86,8 +95,8 @@ export function Donut({ data, size = 132, thickness = 16, center, onSlice }) {
       })}
       {center && (
         <>
-          <text x="50%" y="48%" textAnchor="middle" fill="#F5F7FA" fontSize={20} fontWeight={600} fontFamily="Inter, system-ui, sans-serif">{center.value}</text>
-          <text x="50%" y="62%" textAnchor="middle" fill="#5E6570" fontSize={10.5} fontFamily="Inter, system-ui, sans-serif">{center.label}</text>
+          <text x="50%" y="48%" textAnchor="middle" fill="#F3F6FB" fontSize={22} fontWeight={650} fontFamily="'Inter Variable', Inter, system-ui, sans-serif">{center.value}</text>
+          <text x="50%" y="62%" textAnchor="middle" fill="#5E687C" fontSize={11} fontFamily="'Inter Variable', Inter, system-ui, sans-serif">{center.label}</text>
         </>
       )}
     </svg>
@@ -95,15 +104,16 @@ export function Donut({ data, size = 132, thickness = 16, center, onSlice }) {
 }
 
 // Ranked horizontal bars; rows are clickable for drill-down.
-export function BarList({ items, color = "#8B929D", onClick, max: maxProp, format = fmtNum, empty = "No data" }) {
+export function BarList({ items, color = "#8C95A8", onClick, max: maxProp, format = fmtNum, empty = "No data" }) {
+  const mounted = useMounted();
   const max = maxProp || Math.max(1, ...items.map(i => i.value));
   if (!items.length) return <div className="faint small" style={{ padding: "8px 0" }}>{empty}</div>;
   return (
     <div className="stack" style={{ gap: 4 }}>
       {items.map(it => (
         <div key={it.label} className={onClick ? "hover-link" : ""} onClick={onClick ? () => onClick(it) : undefined}
-          style={{ position: "relative", height: 26, display: "flex", alignItems: "center", cursor: onClick ? "pointer" : "default", borderRadius: 4, overflow: "hidden" }}>
-          <div style={{ position: "absolute", inset: 0, width: `${(it.value / max) * 100}%`, background: it.color || color, opacity: 0.13, borderRadius: 4 }} />
+          style={{ position: "relative", height: 32, display: "flex", alignItems: "center", cursor: onClick ? "pointer" : "default", borderRadius: 8, overflow: "hidden" }}>
+          <div style={{ position: "absolute", inset: 0, width: mounted ? `${(it.value / max) * 100}%` : "0%", background: `linear-gradient(90deg, ${it.color || color}, ${it.color || color}66)`, opacity: 0.2, borderRadius: 8, transition: "width 800ms cubic-bezier(.2,.7,.2,1)" }} />
           <div className="row between" style={{ position: "relative", width: "100%", padding: "0 8px", gap: 8 }}>
             <span className="row trunc small" style={{ gap: 6, color: "var(--text-2)" }}>
               {it.dot && <span className="sev-dot" style={{ background: it.color || color }} />}
@@ -124,9 +134,9 @@ export function SevStack({ counts, height = 6, showLegend = false }) {
   const total = keys.reduce((s, k) => s + (Number(counts[k]) || 0), 0);
   return (
     <div>
-      <div style={{ display: "flex", height, borderRadius: height, overflow: "hidden", background: "#171B21", gap: total ? 1 : 0 }}>
+      <div style={{ display: "flex", height, borderRadius: height, overflow: "hidden", background: "rgba(255,255,255,0.06)", gap: total ? 2 : 0 }}>
         {total > 0 && keys.map(k => counts[k] > 0 && (
-          <div key={k} title={`${k}: ${counts[k]}`} style={{ width: `${(counts[k] / total) * 100}%`, background: SEV_COLOR[k] }} />
+          <div key={k} title={`${k}: ${counts[k]}`} style={{ width: `${(counts[k] / total) * 100}%`, background: SEV_COLOR[k], transformOrigin: "left", animation: "tf-grow-x 800ms var(--spring) both" }} />
         ))}
       </div>
       {showLegend && (
@@ -150,8 +160,8 @@ export function YearBars({ rows, height = 140 }) {
         return (
           <div key={r.label} style={{ flex: 1, minWidth: 14, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, height: "100%" }} title={`${r.label}: ${tot}`}>
             <div className="faint xs num">{tot || ""}</div>
-            <div style={{ flex: 1, width: "70%", display: "flex", flexDirection: "column-reverse", borderRadius: 2, overflow: "hidden" }}>
-              {keys.map(k => r[k] ? <div key={k} style={{ height: `${(r[k] / max) * 100}%`, background: SEV_COLOR[k], opacity: .9 }} /> : null)}
+            <div style={{ flex: 1, width: "70%", display: "flex", flexDirection: "column-reverse", borderRadius: 5, overflow: "hidden", transformOrigin: "bottom", animation: "tf-grow-y 700ms var(--spring) both" }}>
+              {keys.map(k => r[k] ? <div key={k} style={{ height: `${(r[k] / max) * 100}%`, background: SEV_COLOR[k], opacity: .92 }} /> : null)}
             </div>
             <div className="faint xs num">{r.label}</div>
           </div>

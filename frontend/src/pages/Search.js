@@ -54,7 +54,7 @@ export function SearchPage({ q, kinds = "" }) {
       {data && (
         <div className="stack">
           {t && t !== "Unknown" && (
-            <Callout tone="gold" icon="target">
+            <Callout tone="accent" icon="target">
               <div className="row wrap" style={{ gap: 8 }}>
                 <span>Looks like {t === "CVE" ? "a CVE ID" : <>a <strong>{t}</strong> indicator</>}: <span className="mono" style={{ overflowWrap: "anywhere" }}>{norm}</span></span>
                 <span className="spacer" />

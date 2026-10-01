@@ -155,7 +155,7 @@ export function UsersPage() {
                   <tbody>{users.data.map(u => (
                     <tr key={u.id} className={perm?.id === u.id ? "selected" : ""}>
                       <td className="primary"><div className="row" style={{ gap: 8 }}><span className="avatar">{u.username[0].toUpperCase()}</span>{u.username}{u.id === me?.id && <span className="faint xs">(you)</span>}</div></td>
-                      <td><Badge tone={u.role === "admin" ? "gold" : u.role === "analyst" ? "medium" : "low"}>{u.role}</Badge></td>
+                      <td><Badge tone={u.role === "admin" ? "accent" : u.role === "analyst" ? "medium" : "low"}>{u.role}</Badge></td>
                       <td>{u.active ? <Badge tone="success" dot>Active</Badge> : <Badge tone="critical" outline>Disabled</Badge>}</td>
                       <td className="muted">{fmtDate(u.created_at)}</td>
                       <td className="r"><div className="row" style={{ gap: 4, justifyContent: "flex-end" }}>

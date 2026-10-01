@@ -1,4 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
 import "./design/tfii.css";
 import { API_BASE } from "./config";
 import { api, apiJSON, TOKEN_KEY, getToken } from "./lib/api";
@@ -9,6 +11,8 @@ import { SessionContext } from "./lib/session";
 import { ToastProvider, Button, Callout, Loading } from "./components/ui";
 import { LEGACY_C } from "./design/tokens";
 import Shell from "./shell/Shell";
+import Logo, { Wordmark } from "./components/Logo";
+import Icon from "./components/Icon";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { activeNav } from "./shell/nav";
 import { ApiKeyModal, DemoLockedPage } from "./legacy/lazy";
@@ -21,6 +25,7 @@ import { ActorsPage, ActorPublicPage } from "./pages/Actors";
 import { CampaignsPage } from "./pages/Campaigns";
 import IntelWall from "./pages/IntelWall";
 import { SearchPage, ExplorerPage } from "./pages/Search";
+import ReportPage from "./pages/Report";
 import { WorkspacePage, InvestigationPage } from "./pages/Workspace";
 // Platform / OSINT screens sit on the large legacy component library, so they
 // load on demand rather than with the first paint.
@@ -47,34 +52,42 @@ function Login({ onToken }) {
     } catch { setErr("Cannot reach the TFII server."); }
     setBusy(false);
   }
+  const [show, setShow] = useState(false);
   return (
     <div className="login">
       <div className="login-card">
-        <div className="row" style={{ gap: 10, justifyContent: "center", marginBottom: 24 }}>
-          <div className="sb-logo" style={{ width: 34, height: 34, fontSize: 13 }}>TF</div>
-          <div><div className="sb-name" style={{ fontSize: 17 }}>TFII</div><div className="sb-sub">Threat Intelligence Platform</div></div>
+        <div className="login-brand">
+          <Logo size={68} animate />
+          <div className="login-word"><Wordmark size={28} /></div>
+          <p>Threat intelligence that shows its work.</p>
         </div>
-        <form className="panel" style={{ padding: 24 }} onSubmit={submit}>
-          <div className="seg" style={{ width: "100%", marginBottom: 18 }}>
+        <form className="panel" style={{ padding: 26 }} onSubmit={submit}>
+          <div className="seg" style={{ width: "100%", marginBottom: 22 }}>
             {[["login", "Sign in"], ["signup", "Create account"]].map(([id, l]) => (
               <button type="button" key={id} className={tab === id ? "on" : ""} style={{ flex: 1 }} onClick={() => { setTab(id); setErr(""); }}>{l}</button>
             ))}
           </div>
-          <div className="field"><label>Username</label><input className="input" value={u} onChange={e => setU(e.target.value)} autoFocus autoComplete="username" /></div>
-          <div className="field"><label>Password</label><input className="input" type="password" value={p} onChange={e => setP(e.target.value)} autoComplete={tab === "login" ? "current-password" : "new-password"} /></div>
+          <div className="field"><label htmlFor="lg-user">Username</label><input id="lg-user" className="input" value={u} onChange={e => setU(e.target.value)} autoFocus autoComplete="username" /></div>
+          <div className="field">
+            <label htmlFor="lg-pass">Password</label>
+            <div className="pw-wrap">
+              <input id="lg-pass" className="input" type={show ? "text" : "password"} value={p} onChange={e => setP(e.target.value)} autoComplete={tab === "login" ? "current-password" : "new-password"} />
+              <button type="button" className="pw-toggle" onClick={() => setShow(v => !v)} aria-label={show ? "Hide password" : "Show password"} data-tip={show ? "Hide password" : "Show password"}><Icon name="eye" size={15} /></button>
+            </div>
+          </div>
           {tab === "signup" && (
             <div className="field">
-              <label>Invite code (optional)</label>
-              <input className="input mono" value={invite} onChange={e => setInvite(e.target.value)} />
+              <label htmlFor="lg-invite">Invite code <span className="faint">(optional)</span></label>
+              <input id="lg-invite" className="input mono" value={invite} onChange={e => setInvite(e.target.value)} />
               <div className="hint">Without an invite you get explorer access: CVE lookup, OSINT tools, query builder and bulk lookup. Full access can be requested from inside the app.</div>
             </div>
           )}
-          {err && <Callout tone="error" style={{ marginBottom: 14 }}>{err}</Callout>}
+          {err && <Callout tone="error" style={{ marginBottom: 16 }}>{err}</Callout>}
           <Button variant="primary" size="lg" style={{ width: "100%" }} loading={busy} disabled={!u || !p} type="submit">
             {tab === "login" ? "Sign in" : "Create account"}
           </Button>
         </form>
-        <div className="faint xs" style={{ textAlign: "center", marginTop: 14 }}>{API_BASE.replace(/^https?:\/\//, "")}</div>
+        <div className="login-foot">{API_BASE.replace(/^https?:\/\//, "")} · open source · self-hosted</div>
       </div>
     </div>
   );
@@ -116,6 +129,7 @@ function resolve(route, ctx) {
     case "intel": return { crumbs: [{ label: "Intel Wall" }], el: <IntelWall query={q} /> };
     case "search": return { crumbs: [{ label: "Global Search" }], el: <SearchPage q={q.q || ""} kinds={q.kinds || ""} /> };
     case "explorer": return { crumbs: [{ label: "Entity Explorer" }], el: <ExplorerPage query={q} /> };
+    case "report": return { crumbs: [{ label: "OSINT Toolkit", to: "/osint" }, { label: "Bulk lookup", to: "/osint/bulk" }, { label: "Detailed report" }], el: <ReportPage query={q} /> };
     case "osint": return { crumbs: [{ label: "OSINT Toolkit", to: "/osint" }, ...(b ? [{ label: b }] : [])], el: <OsintToolkit tool={b} /> };
     case "query": return { crumbs: [{ label: "Query Builder" }], el: <QueryPage /> };
     case "geo": return { crumbs: [{ label: "Geo Intelligence" }], el: <GeoPage /> };
@@ -146,6 +160,11 @@ export default function Root() {
   const route = useRoute();
   const newVersion = useNewVersion();
   useEffect(() => installLinkGuard(), []);
+  useEffect(() => {
+    const h = () => setShowKeys(true);
+    window.addEventListener("tf:keys", h);
+    return () => window.removeEventListener("tf:keys", h);
+  }, []);
 
   const logout = useCallback(() => {
     try { localStorage.removeItem(TOKEN_KEY); } catch {}

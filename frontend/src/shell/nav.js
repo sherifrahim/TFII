@@ -14,7 +14,7 @@ export const NAV = [
   { sec: "Investigate", items: [
     { id: "search", label: "Global Search", icon: "search", to: "/search", match: p => p.startsWith("/search") },
     { id: "explorer", label: "Entity Explorer", icon: "graph", to: "/explorer", match: p => p.startsWith("/explorer"), data: true },
-    { id: "osint", label: "OSINT Toolkit", icon: "radar", to: "/osint", match: p => p.startsWith("/osint") },
+    { id: "osint", label: "OSINT Toolkit", icon: "radar", to: "/osint", match: p => p.startsWith("/osint") || p === "/report" },
     { id: "query", label: "Query Builder", icon: "code", to: "/query", match: p => p.startsWith("/query") },
     { id: "geo", label: "Geo Intelligence", icon: "globe", to: "/geo", match: p => p.startsWith("/geo"), data: true },
   ] },

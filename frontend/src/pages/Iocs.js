@@ -114,7 +114,7 @@ export function IocIntel({ query }) {
       </div>
 
       {sel.size > 0 && (
-        <div className="panel row wrap" style={{ padding: "8px 12px", marginBottom: 10, gap: 8, borderColor: "var(--gold-line)" }}>
+        <div className="panel row wrap" style={{ padding: "8px 12px", marginBottom: 10, gap: 8, borderColor: "var(--accent-line)" }}>
           <span className="strong small">{sel.size} selected</span>
           <span className="spacer" />
           <Button size="sm" icon="briefcase" onClick={() => setPicker("bulk")}>Add to investigation</Button>

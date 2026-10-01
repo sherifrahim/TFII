@@ -4,15 +4,16 @@ import { getToken } from "../lib/api";
 import { PageHeader, Button } from "../components/ui";
 import Icon from "../components/Icon";
 import { LEGACY_C } from "../design/tokens";
+import BulkLookupPage from "./BulkLookup";
 import {
-  OSINTTool, URLDecoder, SafeLinkExtractor, UserAgentParser, RedirectTracer, DiffChecker, BulkLookup, PublicSearch,
+  OSINTTool, URLDecoder, SafeLinkExtractor, UserAgentParser, RedirectTracer, DiffChecker, PublicSearch,
 } from "../legacy/LegacyComponents";
 
 // Each tool keeps its original, working implementation; the toolkit gives them
 // a proper launcher and a consistent frame.
 export const TOOLS = [
-  { id: "lookup", name: "IOC Lookup", icon: "radar", desc: "DNS, WHOIS/RDAP, Shodan, HaveIBeenPwned and MX for a single target in one tabbed view.", inputs: ["Domain", "IP", "Email"], C: OSINTTool },
-  { id: "bulk", name: "Bulk IOC Lookup", icon: "layers", desc: "Paste or upload up to 150 mixed indicators. Classifies, geolocates and scores each against VirusTotal, AbuseIPDB and URLhaus, then adds the ones you pick to the feed.", inputs: ["IP", "Domain", "URL", "Hash", "Email", "File"], C: BulkLookup },
+  { id: "lookup", name: "IOC Lookup", icon: "radar", desc: "DNS, WHOIS/RDAP, Shodan and MX records for a single target in one tabbed view.", inputs: ["Domain", "IP", "Email"], C: OSINTTool },
+  { id: "bulk", name: "Bulk IOC Lookup", icon: "layers", desc: "Paste or upload up to 150 mixed indicators. Classifies, locates and scores each against VirusTotal, AbuseIPDB and URLhaus, then open a detailed report on any you pick.", inputs: ["IP", "Domain", "URL", "Hash", "Email", "File"], C: BulkLookupPage, native: true },
   { id: "urldecode", name: "URL Decoder", icon: "code", desc: "Decode percent-encoding, Base64 and nested encodings to reveal where a link really points.", inputs: ["URL", "Encoded text"], C: URLDecoder },
   { id: "safelinks", name: "Safe Link Extractor", icon: "unlink", desc: "Unwrap Microsoft Safe Links, Proofpoint URL Defense and other rewriters back to the original destination.", inputs: ["Rewritten URL"], C: SafeLinkExtractor },
   { id: "ua", name: "User Agent Parser", icon: "userAgent", desc: "Break a User-Agent string into browser, engine, OS and device — and flag tooling and anomalies.", inputs: ["User-Agent"], C: UserAgentParser },
@@ -39,7 +40,7 @@ export default function OsintToolkit({ tool }) {
             <Button size="sm" icon="grid" onClick={() => navigate("/osint")}>All tools</Button>
           </div>
         </div>
-        <div className="legacy-host"><Comp token={getToken()} C={LEGACY_C} /></div>
+        {t.native ? <Comp /> : <div className="legacy-host"><Comp token={getToken()} C={LEGACY_C} /></div>}
       </div>
     );
   }

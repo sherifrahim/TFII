@@ -82,7 +82,7 @@ export function Button({ variant, size, icon, iconRight, children, className = "
 
 export function IconButton({ icon, title, badge, size, className = "", ...rest }) {
   return (
-    <button className={`iconbtn ${size || ""} ${className}`} title={title} aria-label={title} {...rest}>
+    <button className={`iconbtn ${size || ""} ${className}`} data-tip={title} aria-label={title} {...rest}>
       <Icon name={icon} size={size === "sm" ? 14 : 16} />
       {badge ? <span className="dot-badge">{badge > 99 ? "99+" : badge}</span> : null}
     </button>
@@ -150,7 +150,7 @@ const STATUS_BADGE = {
   expired: { tone: "low", outline: true, label: "Expired" },
   false_positive: { tone: "high", outline: true, label: "False positive" },
   untracked: { tone: "low", outline: true, label: "Not tracked" },
-  tracked: { tone: "gold", dot: true, label: "Tracked" },
+  tracked: { tone: "accent", dot: true, label: "Tracked" },
   observed: { tone: "violet", dot: true, label: "Observed" },
   monitored: { tone: "success", dot: true, label: "Monitored" },
   inactive: { tone: "low", outline: true, label: "Inactive" },
@@ -434,10 +434,32 @@ export function ToastProvider({ children }) {
 }
 export function useToast() { return useContext(ToastCtx).push; }
 
+// Counts a number up to its value (once, ~700ms). Respects reduced motion and never animates non-numbers.
+export function useCountUp(target, ms = 700) {
+  const [v, setV] = useState(typeof target === "number" ? 0 : target);
+  useEffect(() => {
+    if (typeof target !== "number") { setV(target); return undefined; }
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) { setV(target); return undefined; }
+    let raf, start;
+    const from = 0;
+    const tick = t => {
+      if (start === undefined) start = t;
+      const p = Math.min(1, (t - start) / ms);
+      const e = 1 - Math.pow(1 - p, 3);
+      setV(Math.round(from + (target - from) * e));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return v;
+}
+
 // ── KPI tile ──────────────────────────────────────────────────────────────────
 // `upIsBad`: for exposure counts (unpatched, KEV) a rise is coloured red; for
 // neutral volume counts the arrow alone carries the direction.
 export function KPI({ label, value, sub, delta, deltaLabel, upIsBad = false, spark, sparkColor, onClick, tone, title }) {
+  const shown = useCountUp(value);
   let dcls = "delta-flat", dicon = null;
   if (delta !== null && delta !== undefined && delta !== 0) {
     const up = delta > 0;
@@ -449,7 +471,7 @@ export function KPI({ label, value, sub, delta, deltaLabel, upIsBad = false, spa
       onKeyDown={onClick ? e => { if (e.key === "Enter") onClick(); } : undefined}>
       <div className="kpi-l">{tone && <span className="sev-dot" style={{ background: tone }} />}{label}</div>
       <div className="kpi-row">
-        <div className="kpi-v">{typeof value === "number" ? fmtNum(value) : value ?? "—"}</div>
+        <div className="kpi-v">{typeof value === "number" ? fmtNum(shown) : value ?? "—"}</div>
         {spark && spark.length > 1 && <SparkInline data={spark} color={sparkColor} />}
       </div>
       <div className="kpi-d">
@@ -461,14 +483,69 @@ export function KPI({ label, value, sub, delta, deltaLabel, upIsBad = false, spa
   );
 }
 
-function SparkInline({ data, color = "#8B929D", w = 72, h = 26 }) {
+function SparkInline({ data, color = "#8C95A8", w = 84, h = 30 }) {
   const max = Math.max(...data, 1), min = Math.min(...data, 0);
   const pts = data.map((v, i) => [(i / (data.length - 1)) * w, h - 2 - ((v - min) / (max - min || 1)) * (h - 4)]);
   const d = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
   return (
     <svg width={w} height={h} style={{ flexShrink: 0, overflow: "visible" }} aria-hidden>
-      <path d={`${d} L${w},${h} L0,${h} Z`} fill={color} opacity={0.12} />
-      <path d={d} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+      <path d={`${d} L${w},${h} L0,${h} Z`} fill={color} opacity={0.14} />
+      <path d={d} className="spark-path" pathLength="200" style={{ "--len": 200 }} fill="none" stroke={color} strokeWidth={1.8} strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
 }
+
+
+// ── Controls: clear on/off, grouped settings, progressive disclosure ──────────
+// Switch: a labelled on/off control that says what it does and what it will do. Prefer it over a bare
+// checkbox for anything that changes behaviour. `hint` is one calm line of help under the label.
+export function Switch({ checked, onChange, label, hint, disabled, id }) {
+  return (
+    <button type="button" id={id} role="switch" aria-checked={!!checked} disabled={disabled} className={`switch ${checked ? "on" : ""}`}
+      onClick={() => onChange(!checked)}>
+      <span className="switch-track"><i /></span>
+      {(label || hint) && <span className="switch-text">{label && <b>{label}</b>}{hint && <small>{hint}</small>}</span>}
+    </button>
+  );
+}
+
+export function Check({ checked, onChange, children, disabled, indeterminate }) {
+  const ref = useRef(null);
+  useEffect(() => { if (ref.current) ref.current.indeterminate = !!indeterminate && !checked; }, [indeterminate, checked]);
+  return (
+    <label className="check">
+      <input ref={ref} type="checkbox" checked={!!checked} disabled={disabled} onChange={e => onChange(e.target.checked)} />
+      {children}
+    </label>
+  );
+}
+
+// A settings list: each row has a title and help on the left and its control on the right.
+export function Settings({ children }) { return <div className="settings">{children}</div>; }
+export function Setting({ title, hint, children }) {
+  return (
+    <div className="setting">
+      <div className="setting-main"><b>{title}</b>{hint && <small>{hint}</small>}</div>
+      <div className="setting-ctl">{children}</div>
+    </div>
+  );
+}
+
+// Hides the rarely used options until asked, so the common path stays short.
+export function Disclosure({ title, hint, children, defaultOpen = false, badge }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ borderTop: "1px solid var(--hair)" }}>
+      <button type="button" className="row" aria-expanded={open} onClick={() => setOpen(o => !o)}
+        style={{ width: "100%", background: "transparent", border: 0, color: "var(--text-2)", padding: "14px 0", cursor: "pointer", gap: 10, textAlign: "left" }}>
+        <Icon name="chevronRight" size={14} style={{ transition: "transform 200ms var(--spring)", transform: open ? "rotate(90deg)" : "none", color: "var(--text-4)" }} />
+        <span style={{ fontWeight: 550, color: "var(--text)" }}>{title}</span>
+        {badge && <Badge>{badge}</Badge>}
+        {hint && <span className="faint small">{hint}</span>}
+      </button>
+      {open && <div style={{ paddingBottom: 14, animation: "tf-rise 260ms var(--spring) both" }}>{children}</div>}
+    </div>
+  );
+}
+
+export function Kbd({ children }) { return <kbd>{children}</kbd>; }

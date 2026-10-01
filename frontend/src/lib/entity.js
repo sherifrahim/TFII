@@ -4,13 +4,13 @@
 const enc = encodeURIComponent;
 
 export const KINDS = {
-  indicator: { label: "Indicator", plural: "Indicators", icon: "crosshair", tone: "gold" },
+  indicator: { label: "Indicator", plural: "Indicators", icon: "crosshair", tone: "accent" },
   cve: { label: "Vulnerability", plural: "CVEs", icon: "shieldAlert", tone: "critical" },
   malware: { label: "Malware family", plural: "Malware", icon: "bug", tone: "violet" },
   actor: { label: "Threat actor", plural: "Threat actors", icon: "skull", tone: "critical" },
   campaign: { label: "Campaign", plural: "Campaigns", icon: "flag", tone: "high" },
   software: { label: "Software", plural: "Software", icon: "package", tone: "medium" },
-  investigation: { label: "Investigation", plural: "Investigations", icon: "briefcase", tone: "gold" },
+  investigation: { label: "Investigation", plural: "Investigations", icon: "briefcase", tone: "accent" },
   source: { label: "Source", plural: "Sources", icon: "rss", tone: "low" },
   note: { label: "Note", plural: "Notes", icon: "note", tone: "low" },
 };

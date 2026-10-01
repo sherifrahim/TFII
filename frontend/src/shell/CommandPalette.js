@@ -7,6 +7,7 @@ import { navigate, entityRoute, enc } from "../lib/router";
 import { detectType, refang } from "../lib/format";
 import { useSession, recentEntities, recentSearches, pushRecentSearch } from "../lib/session";
 import { flatNav } from "./nav";
+import { eggFor, fireEgg } from "./Eggs";
 
 const ACTIONS = [
   { id: "add-ioc", label: "Add IOC", icon: "plus", to: "/iocs/new", data: true, kw: "new indicator create" },
@@ -63,6 +64,9 @@ export default function CommandPalette({ onClose }) {
       recentEntities().forEach(r => add("Recent", { key: `re-${r.kind}-${r.ref}`, icon: r.kind === "cve" ? "shieldAlert" : r.kind === "investigation" ? "briefcase" : "clock", label: <span className={["ioc", "indicator", "cve"].includes(r.kind) ? "mono" : ""}>{r.label}</span>, meta: r.kind === "ioc" ? "indicator" : r.kind, run: () => navigate(entityRoute(r.kind, r.ref)) }));
       recentSearches().forEach(s => add("Recent searches", { key: `rs-${s}`, icon: "search", label: s, run: () => setQ(s) }));
     }
+
+    const egg = eggFor(q);
+    if (egg) add("Secret", { key: `egg-${egg.key}`, icon: "sparkle", label: egg.label, meta: "easter egg", run: () => fireEgg(egg.effect) });
 
     ACTIONS.filter(a => (!a.data || hasData) && (!ql || a.label.toLowerCase().includes(ql) || a.kw.includes(ql)))
       .forEach(a => add("Actions", { key: a.id, icon: a.icon, label: a.label, run: () => navigate(a.to, a.query) }));

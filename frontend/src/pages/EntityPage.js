@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useApi, apiJSON, api, downloadJSON } from "../lib/api";
+import { openReport } from "../lib/report";
 import { navigate, enc, setQuery } from "../lib/router";
 import { useSession, pushRecentEntity } from "../lib/session";
 import { KINDS, canonicalKind } from "../lib/entity";
@@ -216,6 +217,7 @@ export default function EntityPage({ kind: rawKind, refv, tab = "overview", inv 
         </div>
         <div className="page-actions">
           {kind === "indicator" && !tracked && <Button size="sm" icon="plus" onClick={() => navigate("/iocs/new", { value: hd.value })}>Track as IOC</Button>}
+          {kind === "indicator" && !["CVE", "Filename"].includes(hd.type) && <Button size="sm" icon="layers" onClick={() => openReport([hd.value])}>Detailed report</Button>}
           {kind === "software" && <SoftwareActions hd={hd} />}
           {kind === "campaign" && kd.data && <CampaignActions campaign={kd.data.campaign} onChanged={() => { kd.reload(true); reload(true); }} />}
           {hasData && <Button size="sm" variant="primary" icon="briefcase" onClick={() => setModal("add")}>Add to Workspace</Button>}
@@ -279,7 +281,7 @@ function LongValue({ value }) {
 function ContextBanner({ m, kind, onAdd, onEdit }) {
   const i = m.investigation;
   return (
-    <Callout tone="gold" icon="briefcase" style={{ marginBottom: 14 }}>
+    <Callout tone="accent" icon="briefcase" style={{ marginBottom: 14 }}>
       <div className="row wrap" style={{ gap: 10 }}>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div>Viewing from <a className="link" href={`#/investigations/${enc(i.id)}`}><span className="mono">{i.key}</span> {i.name}</a>
