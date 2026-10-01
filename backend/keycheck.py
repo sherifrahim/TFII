@@ -9,6 +9,7 @@ Result: {"status": "valid" | "invalid" | "rate_limited" | "unreachable" | "unexp
 """
 import logging
 import re
+from urllib.parse import quote
 from typing import Callable, Dict, NamedTuple, Optional
 
 import httpx
@@ -23,6 +24,7 @@ class Probe(NamedTuple):
     headers: Callable[[str], Dict[str, str]]
     params: Callable[[str], Dict[str, str]]
     invalid: tuple = (401, 403)            # statuses that mean "this key was rejected"
+    judge: Optional[Callable[[dict], Optional[str]]] = None   # reads a 200 body for providers that answer 200 either way
 
 
 def _h(name: str, prefix: str = ""):
@@ -30,6 +32,16 @@ def _h(name: str, prefix: str = ""):
 
 
 _NONE = lambda k: {}  # noqa: E731
+
+
+def _ipqs_judge(body: dict) -> Optional[str]:
+    """IPQualityScore answers 200 with {"success": false, "message": ...} for a bad key."""
+    if not isinstance(body, dict):
+        return None
+    if body.get("success") is True:
+        return "valid"
+    msg = str(body.get("message", "")).lower()
+    return "invalid" if ("invalid" in msg and "key" in msg) or "unauthorized" in msg else None
 
 PROBES: Dict[str, Probe] = {
     # A well-known public address keeps the request free of anything sensitive.
@@ -44,10 +56,12 @@ PROBES: Dict[str, Probe] = {
                         lambda k: {"resultsPerPage": "1"}, invalid=(401, 403, 404)),
     "urlhaus":    Probe("GET", "https://urlhaus-api.abuse.ch/v1/urls/recent/limit/1/", _h("Auth-Key"), _NONE),
     "otx":        Probe("GET", "https://otx.alienvault.com/api/v1/user/me", _h("X-OTX-API-KEY"), _NONE),
+    # The credit-usage endpoint costs no lookup. The provider only takes the key in the URL path.
+    "ipqs":       Probe("GET", "https://www.ipqualityscore.com/api/json/account/{key}", _NONE, _NONE, judge=_ipqs_judge),
 }
 
 NAMES = {"virustotal": "VirusTotal", "abuseipdb": "AbuseIPDB", "shodan": "Shodan", "groq": "Groq", "nvd": "NVD",
-         "urlhaus": "abuse.ch", "otx": "AlienVault OTX"}
+         "urlhaus": "abuse.ch", "otx": "AlienVault OTX", "ipqs": "IPQualityScore"}
 
 
 def _result(status: str, message: str) -> dict:
@@ -67,7 +81,8 @@ async def check_key(service: str, key: str, client: Optional[httpx.AsyncClient] 
     own = client is None
     c = client or httpx.AsyncClient(timeout=12, follow_redirects=False)
     try:
-        r = await c.request(probe.method, probe.url, headers=probe.headers(key), params=probe.params(key))
+        url = probe.url.replace("{key}", quote(key, safe=""))
+        r = await c.request(probe.method, url, headers=probe.headers(key), params=probe.params(key))
     except (httpx.TimeoutException, httpx.TransportError):
         return _result("unreachable", f"Could not reach {name} to check the key. Try again shortly.")
     except (httpx.InvalidURL, ValueError):
@@ -77,6 +92,16 @@ async def check_key(service: str, key: str, client: Optional[httpx.AsyncClient] 
         if own:
             await c.aclose()
     code = r.status_code
+    if code == 200 and probe.judge:
+        try:
+            verdict = probe.judge(r.json())
+        except ValueError:
+            verdict = None
+        if verdict == "valid":
+            return _result("valid", f"{name} accepted the key.")
+        if verdict == "invalid":
+            return _result("invalid", f"{name} rejected the key. Check that you copied all of it.")
+        return _result("unexpected", f"{name} answered, but not in a way that confirms the key.")
     if code == 200:
         return _result("valid", f"{name} accepted the key.")
     if code in probe.invalid:

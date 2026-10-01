@@ -5,7 +5,7 @@ import { safeUrl, installLinkGuard } from "../lib/safe";
 import { geoFacts, regionName } from "../lib/geo";
 import { runningBundle, servedBundle, isStale } from "../lib/update";
 import { dnsHost, DnsResult, HistoryList } from "../pages/entity/DnsPanel";
-import { MailSignals, ExposureResult } from "../pages/entity/MailPanel";
+import { MailSignals, ExposureResult, RiskResult } from "../pages/entity/MailPanel";
 import { entityPath, canonicalKind, KINDS } from "../lib/entity";
 import { entityRoute } from "../lib/router";
 import { detectType, refang, defang, confBand } from "../lib/format";
@@ -229,5 +229,12 @@ describe("mail address panel", () => {
     const html = renderToStaticMarkup(<ExposureResult r={{ found: true, count: 2, breaches: ["Adobe", "LinkedIn"] }} />);
     for (const t of ["2", "breaches", "Adobe", "LinkedIn"]) expect(html).toContain(t);
     expect(renderToStaticMarkup(<ExposureResult r={{ found: true, count: 1, breaches: ["Adobe"] }} />)).toContain("1</strong> known breach include");
+  });
+  test("an address risk answer shows the score as an estimate and only the facts it has", () => {
+    const html = renderToStaticMarkup(<RiskResult r={{ fraud_score: 88, valid: true, disposable: false, recent_abuse: true, leaked: null, spam_trap: "none", first_seen: "2 days ago" }} />);
+    for (const t of ["fraud score 88 / 100", "not proof", "Recent abuse", "yes", "Disposable", "no", "2 days ago"]) expect(html).toContain(t);
+    expect(html).not.toContain("In a data leak");
+    expect(html).not.toContain("Spam trap");
+    expect(renderToStaticMarkup(<RiskResult r={{ fraud_score: null }} />)).toContain("no score");
   });
 });

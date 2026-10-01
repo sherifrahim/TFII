@@ -76,6 +76,7 @@ PLATFORM_KEYS = {
     "groq":        GROQ_API_KEY,
     "urlhaus":     URLHAUS_AUTH_KEY,
     "otx":         os.getenv("OTX_API_KEY", ""),
+    "ipqs":        os.getenv("IPQS_API_KEY", ""),
 }
 # What .env provides. Platform-level calls (background feeds and pollers, shared enrichment, quota-based lookups)
 # use the key saved on an admin account first and this second: see refresh_platform_keys().
@@ -3032,7 +3033,7 @@ def change_password(body: PasswordChange, user=Depends(get_current_user), conn=D
 
 # ── USER API KEYS ─────────────────────────────────────────────────────────────
 
-ALLOWED_SERVICES = {"virustotal","abuseipdb","shodan","groq","nvd","urlhaus","otx"}
+ALLOWED_SERVICES = {"virustotal","abuseipdb","shodan","groq","nvd","urlhaus","otx","ipqs"}
 SERVICE_LABELS = {
     "virustotal": {"name":"VirusTotal",   "url":"https://www.virustotal.com/gui/my-apikey",    "placeholder":"Enter your VirusTotal API key"},
     "abuseipdb":  {"name":"AbuseIPDB",    "url":"https://www.abuseipdb.com/account/api",        "placeholder":"Enter your AbuseIPDB API key"},
@@ -3041,6 +3042,7 @@ SERVICE_LABELS = {
     "nvd":        {"name":"NVD",          "url":"https://nvd.nist.gov/developers/request-an-api-key","placeholder":"Enter your NVD API key"},
     "urlhaus":    {"name":"abuse.ch (URLhaus · ThreatFox · MalwareBazaar)","url":"https://auth.abuse.ch/","placeholder":"Enter your abuse.ch Auth-Key"},
     "otx":        {"name":"AlienVault OTX","url":"https://otx.alienvault.com/settings",         "placeholder":"Enter your OTX API key"},
+    "ipqs":       {"name":"IPQualityScore","url":"https://www.ipqualityscore.com/create-account", "placeholder":"Enter your IPQualityScore key"},
 }
 
 def _safe_mask(encrypted) -> Optional[str]:
@@ -7335,6 +7337,7 @@ INTEL_DEPS = _NS(   # module-level so tests can substitute the network fetchers
     audit=audit, create_notification=create_notification,
     fetch_rss=fetch_rss, fetch_cve_rss=fetch_cve_rss, RSS_FEEDS=RSS_FEEDS, CVE_FEEDS=CVE_FEEDS,
     mitre_lookup=mitre_lookup,
+    resolve_api_key=resolve_api_key, log_api_call=log_api_call, DAILY_FREE_QUOTA=DAILY_FREE_QUOTA,
 )
 _intel_api.register(app, INTEL_DEPS)
 

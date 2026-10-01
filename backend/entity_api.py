@@ -14,6 +14,7 @@ hazard that a query string simply does not have.
     POST /v2/entity/resolve-dns        domain → A/AAAA, recorded with provenance
     GET  /v2/dns?domain=               richer DNS records (NSLookup.io): A/AAAA/NS/MX/TXT/SOA/CAA, SPF, DMARC (cached)
   GET  /v2/mail/exposure?address=    breach exposure of one mailbox (XposedOrNot, on request, shared budget)
+  GET  /v2/mail/risk?address=        address risk (IPQualityScore, on request, the caller's own key)
     POST /v2/entity/sync-mitre         materialise ATT&CK associations for an actor
     POST /v2/relationships             assert a typed relationship (with provenance)
     DELETE /v2/relationships/{id}
@@ -67,6 +68,7 @@ class ReasonIn(BaseModel):
 class RefIn(BaseModel):
     ref: str
 
+RISK_LIMIT = dnsintel.UserLimiter(limit=6)          # address-risk lookups per user per minute
 EXPOSURE_LIMIT = dnsintel.UserLimiter(limit=3)      # breach lookups per user per minute; the budget itself is shared
 
 
@@ -364,6 +366,24 @@ def register(app, d, h):
             raise HTTPException(429, "Too many breach lookups in the last minute; wait a moment and try again")
         try:
             return await mailintel.breach_exposure(address, refresh=refresh)
+        except mailintel.MailApiError as e:
+            raise HTTPException({"invalid": 400, "rate_limited": 429, "busy": 429}.get(e.kind, 502), str(e))
+
+    # ── Address risk (IPQualityScore), on request, with the caller's own key ──
+    @app.get("/v2/mail/risk")
+    async def v2_mail_risk(address: str, refresh: bool = False, user=Depends(current), conn=Depends(get_db)):
+        if not mailintel.split_email(address):
+            raise HTTPException(400, "Enter a valid email address")
+        if not RISK_LIMIT.allow(user["id"]):
+            raise HTTPException(429, "Too many address checks in the last minute; wait a moment and try again")
+        key, _personal, quota = d.resolve_api_key(conn, "ipqs", user)
+        if not key:
+            raise HTTPException(400 if quota is None else 429,
+                                "No IPQualityScore key: add yours in Settings (the free plan includes 1,000 checks a month)" if quota is None
+                                else f"Daily quota of {d.DAILY_FREE_QUOTA} free checks reached. Add your IPQualityScore key in Settings.")
+        d.log_api_call(conn, "ipqs", "email", False, user["id"])          # the address itself is not recorded
+        try:
+            return await mailintel.ipqs_email(address, key, refresh=refresh)
         except mailintel.MailApiError as e:
             raise HTTPException({"invalid": 400, "rate_limited": 429, "busy": 429}.get(e.kind, 502), str(e))
 

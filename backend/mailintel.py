@@ -314,3 +314,68 @@ async def breach_exposure(address: str, client: Optional[httpx.AsyncClient] = No
         _EXPOSURE_CACHE.clear()
     _EXPOSURE_CACHE[key] = {"data": data, "fetched": now}
     return {**data, "cached": False, "checked_at": now.isoformat()}
+
+
+# ── Address risk (IPQualityScore email validation), on request, with the caller's own key ───────────────────
+# Free plan: 1,000 lookups a month, so it is never run automatically (not in bulk, not on every page view).
+# The provider only takes the key in the URL path: the URL is never logged or put in an error message.
+IPQS_URL = "https://www.ipqualityscore.com/api/json/email/{key}/{email}"
+RISK_CACHE_HOURS = 24
+_RISK_CACHE: dict = {}
+
+
+def parse_risk(status: int, body) -> dict:
+    """Reduce IPQualityScore's answer to the fields that matter. Raises MailApiError for provider-side problems."""
+    if status == 429:
+        raise MailApiError("rate_limited", "IPQualityScore is rate limiting requests; try again in a minute")
+    if status != 200 or not isinstance(body, dict):
+        raise MailApiError("unavailable", f"IPQualityScore answered HTTP {status}")
+    if body.get("success") is not True:
+        msg = str(body.get("message", "")).lower()
+        if "insufficient credits" in msg or "quota" in msg or "credits" in msg:
+            raise MailApiError("rate_limited", "Your IPQualityScore credits are used up for this period")
+        if "invalid" in msg and "key" in msg:
+            raise MailApiError("invalid", "IPQualityScore rejected the key: check it in Settings")
+        raise MailApiError("unavailable", "IPQualityScore could not process this address")
+    human = lambda v: (v.get("human") if isinstance(v, dict) else None)  # noqa: E731
+    fraud = body.get("fraud_score")
+    return {
+        "source": "IPQualityScore",
+        "fraud_score": fraud if isinstance(fraud, int) else None,
+        "valid": body.get("valid"), "deliverability": body.get("deliverability"), "dns_valid": body.get("dns_valid"),
+        "disposable": body.get("disposable"), "recent_abuse": body.get("recent_abuse"), "leaked": body.get("leaked"),
+        "honeypot": body.get("honeypot"), "spam_trap": body.get("spam_trap_score"), "suspect": body.get("suspect"),
+        "catch_all": body.get("catch_all"), "first_seen": human(body.get("first_seen")), "domain_age": human(body.get("domain_age")),
+        "link": "https://www.ipqualityscore.com/",
+    }
+
+
+async def ipqs_email(address: str, key: str, client: Optional[httpx.AsyncClient] = None, refresh: bool = False) -> dict:
+    """Risk of one address from IPQualityScore. Raises MailApiError. Answers are cached for a day to save credits."""
+    parts = split_email(address)
+    if not parts:
+        raise MailApiError("invalid", "Enter a valid email address")
+    norm = f"{parts[0].lower()}@{parts[1]}"
+    now = datetime.now(timezone.utc)
+    hit = _RISK_CACHE.get(norm)
+    if hit and not refresh and (now - hit["fetched"]).total_seconds() < RISK_CACHE_HOURS * 3600:
+        return {**hit["data"], "cached": True, "checked_at": hit["fetched"].isoformat()}
+    from urllib.parse import quote
+    own = client is None
+    c = client or httpx.AsyncClient(timeout=15)
+    try:
+        r = await c.get(IPQS_URL.format(key=quote(key, safe=""), email=quote(norm, safe="@")))
+    except httpx.HTTPError:
+        raise MailApiError("unavailable", "IPQualityScore could not be reached")
+    finally:
+        if own:
+            await c.aclose()
+    try:
+        body = r.json()
+    except ValueError:
+        body = None
+    data = parse_risk(r.status_code, body)
+    if len(_RISK_CACHE) > 500:
+        _RISK_CACHE.clear()
+    _RISK_CACHE[norm] = {"data": data, "fetched": now}
+    return {**data, "cached": False, "checked_at": now.isoformat()}

@@ -216,3 +216,55 @@ def test_exposure_rejects_bad_input_and_needs_a_login(client, analyst, xon):
     assert client.get("/v2/mail/exposure", params={"address": "not-an-email"}, headers=analyst).status_code == 400
     assert client.get("/v2/mail/exposure", params={"address": "a@example.com"}).status_code in (401, 403)
     assert xon == []
+
+
+# ── address risk (IPQualityScore) ────────────────────────────────────────────
+IPQS_OK = {"success": True, "message": "Success.", "valid": True, "disposable": False, "fraud_score": 88, "recent_abuse": True, "leaked": True,
+           "honeypot": False, "spam_trap_score": "low", "suspect": True, "deliverability": "high", "dns_valid": True, "catch_all": False,
+           "first_seen": {"human": "2 days ago", "timestamp": 1, "iso": "x"}, "domain_age": {"human": "3 weeks ago"}, "request_id": "r1"}
+
+
+def test_risk_parsing_keeps_the_useful_fields_only():
+    r = mailintel.parse_risk(200, IPQS_OK)
+    assert r["fraud_score"] == 88 and r["recent_abuse"] is True and r["first_seen"] == "2 days ago" and r["domain_age"] == "3 weeks ago"
+    assert "request_id" not in r and "message" not in r
+
+
+@pytest.mark.parametrize("status,body,kind", [
+    (429, {}, "rate_limited"), (500, {}, "unavailable"), (200, None, "unavailable"),
+    (200, {"success": False, "message": "You have insufficient credits to make this query."}, "rate_limited"),
+    (200, {"success": False, "message": "Invalid or unauthorized key."}, "invalid"),
+    (200, {"success": False, "message": "weird"}, "unavailable"),
+])
+def test_risk_provider_problems(status, body, kind):
+    with pytest.raises(mailintel.MailApiError) as e:
+        mailintel.parse_risk(status, body)
+    assert e.value.kind == kind
+
+
+@pytest.fixture
+def ipqs(client, analyst, monkeypatch):
+    import entity_api
+    mailintel._RISK_CACHE.clear()
+    monkeypatch.setattr(entity_api, "RISK_LIMIT", entity_api.dnsintel.UserLimiter(limit=50))
+    seen = []
+
+    def handler(req):
+        seen.append(req.url.path)
+        return httpx.Response(200, json=IPQS_OK)
+    monkeypatch.setattr(mailintel.httpx, "AsyncClient", lambda **kw: REAL_ASYNC_CLIENT(transport=httpx.MockTransport(handler)))
+    yield seen
+    client.delete("/users/me/api-keys/ipqs", headers=analyst)
+
+
+def test_risk_needs_the_callers_own_key_and_then_remembers_the_answer(client, analyst, ipqs):
+    r = client.get("/v2/mail/risk", params={"address": "x@example.com"}, headers=analyst)
+    assert r.status_code in (400, 429) and "IPQualityScore" in r.json()["detail"] and ipqs == []
+    assert client.post("/users/me/api-keys/ipqs", json={"api_key": "ipqs-analyst-key-0123456789"}, headers=analyst).status_code in (200, 201)
+    ok = client.get("/v2/mail/risk", params={"address": "X@Example.com"}, headers=analyst)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["fraud_score"] == 88 and ok.json()["cached"] is False
+    assert ipqs == ["/api/json/email/ipqs-analyst-key-0123456789/x@example.com"]
+    assert client.get("/v2/mail/risk", params={"address": "x@example.com"}, headers=analyst).json()["cached"] is True and len(ipqs) == 1
+    assert client.get("/v2/mail/risk", params={"address": "bad"}, headers=analyst).status_code == 400
+    assert client.get("/v2/mail/risk", params={"address": "x@example.com"}).status_code in (401, 403)

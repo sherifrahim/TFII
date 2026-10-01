@@ -230,5 +230,7 @@ No free source rates an individual mailbox, so TFII judges the part that can be 
 - **Role-style names** (`support@`, `billing@`, ...) are noted, since attackers pick them to look official.
 - **Breach exposure** of the mailbox itself is asked only on request (`GET /v2/mail/exposure`), through XposedOrNot's public API, because the full address leaves the server and the free allowance is small and shared. A "not found" answer is not proof the address was never exposed.
 
+- **Address risk** (`GET /v2/mail/risk`) asks IPQualityScore about the exact address with the caller's own key: fraud score, valid / disposable, recent abuse, leaked, honeypot, first seen. It is on request only, because the free plan is small, and it is a provider estimate rather than proof.
+
 Bulk lookup accepts email addresses, looks each domain up once however many addresses use it, and shows the observations on each row. AlienVault OTX was evaluated for address lookups and not used: its own SDK lists email as unsupported by its API.
 

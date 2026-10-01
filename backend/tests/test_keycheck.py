@@ -102,3 +102,28 @@ def test_key_test_requires_login_and_a_known_service(client, analyst, explorer, 
     assert client.post("/users/me/api-keys/nope/test", json={"api_key": "x" * 20}, headers=analyst).status_code == 400
     assert client.post("/users/me/api-keys/groq/test", json={"api_key": ["x"]}, headers=analyst).status_code == 400
     assert client.post("/users/me/api-keys/groq/test", json={"api_key": "good" + "x" * 20}, headers=explorer).status_code == 200
+
+
+# IPQualityScore answers 200 either way and takes the key in the URL path.
+@pytest.mark.parametrize("body,expect", [
+    ({"success": True, "message": "Success.", "credits": 900}, "valid"),
+    ({"success": False, "message": "Invalid or unauthorized key. Please check the API key and try again."}, "invalid"),
+    ({"success": False, "message": "Something else"}, "unexpected"),
+])
+def test_ipqs_judges_the_body_not_the_status(body, expect):
+    seen = []
+
+    def handler(req):
+        seen.append(req.url.path)
+        return httpx.Response(200, json=body)
+    r = _check("ipqs", "ipqs-key-0123456789", handler)
+    assert r["status"] == expect and seen == ["/api/json/account/ipqs-key-0123456789"]
+    assert "ipqs-key" not in json.dumps(r)
+
+
+def test_ipqs_failures_do_not_echo_the_url_that_carries_the_key():
+    def boom(req):
+        raise httpx.ConnectError("failed " + str(req.url))
+    r = _check("ipqs", "ipqs-key-0123456789", boom)
+    assert r["status"] == "unreachable" and "ipqs-key" not in json.dumps(r)
+    assert _check("ipqs", "ipqs-key-0123456789", lambda req: httpx.Response(200, text="<html>"))["status"] == "unexpected"

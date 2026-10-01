@@ -4394,6 +4394,7 @@ function ApiKeyModal({token, C, onClose}){
     {id:"shodan",     name:"Shodan",        url:"https://account.shodan.io/",                     desc:"Port scan & host lookup",      placeholder:"Enter your Shodan key"},
     {id:"nvd",        name:"NVD",           url:"https://nvd.nist.gov/developers/request-an-api-key","desc":"CVE database (higher rate limit)","placeholder":"Enter your NVD key"},
     {id:"otx",        name:"AlienVault OTX",url:"https://otx.alienvault.com/settings",            desc:"Threat pulses with adversary and malware context (IOC feed)", placeholder:"Enter your OTX key"},
+    {id:"ipqs",      name:"IPQualityScore",url:"https://www.ipqualityscore.com/create-account",  desc:"Email address risk: fraud score, disposable, recent abuse (on request)", placeholder:"Enter your IPQualityScore key"},
   ];
 
   function loadStatus(){

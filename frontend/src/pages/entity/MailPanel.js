@@ -45,6 +45,57 @@ export function ExposureResult({ r }) {
   );
 }
 
+const yn = v => v === true ? "yes" : v === false ? "no" : null;
+
+export function RiskResult({ r }) {
+  const score = r.fraud_score;
+  const tone = score === null || score === undefined ? "low" : score >= 85 ? "critical" : score >= 60 ? "high" : "success";
+  const rows = [
+    ["Valid address", yn(r.valid)], ["Deliverability", r.deliverability], ["Disposable", yn(r.disposable)], ["Recent abuse", yn(r.recent_abuse)],
+    ["In a data leak", yn(r.leaked)], ["Honeypot", yn(r.honeypot)], ["Spam trap", r.spam_trap && r.spam_trap !== "none" ? r.spam_trap : null],
+    ["Suspect", yn(r.suspect)], ["First seen", r.first_seen], ["Domain age", r.domain_age],
+  ].filter(([, v]) => v !== null && v !== undefined && v !== "");
+  return (
+    <>
+      <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+        <Badge tone={tone} dot>{score === null || score === undefined ? "no score" : `fraud score ${score} / 100`}</Badge>
+        <span className="xs faint">Higher means riskier. It is a provider estimate, not proof.</span>
+      </div>
+      <dl className="kv" style={{ gridTemplateColumns: "130px 1fr", margin: 0 }}>
+        {rows.map(([k, v]) => <React.Fragment key={k}><dt className="xs">{k}</dt><dd className="xs">{String(v)}</dd></React.Fragment>)}
+      </dl>
+    </>
+  );
+}
+
+// Uses the caller's own IPQualityScore key (free plan: 1,000 checks a month), so it is asked for on request only.
+function Risk({ address }) {
+  const [r, setR] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  async function run(refresh) {
+    setBusy(true); setErr(null);
+    try { setR(await apiJSON(`/v2/mail/risk?address=${encodeURIComponent(address)}${refresh ? "&refresh=true" : ""}`)); } catch (e) { setErr(e); }
+    setBusy(false);
+  }
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div className="eyebrow" style={{ marginBottom: 6 }}>Address risk</div>
+      {!r && (
+        <div className="row" style={{ gap: 12, alignItems: "flex-start" }}>
+          <Button size="sm" loading={busy} onClick={() => run(false)}>Check address risk</Button>
+          <span className="small faint" style={{ maxWidth: 520 }}>Asks IPQualityScore about this exact address using your own key (Settings → Manage API Keys; its free plan includes 1,000 checks a month). The full address is sent to them.</span>
+        </div>
+      )}
+      {err && <div className="small" style={{ color: "var(--critical)", marginTop: 6 }}>{err.message}</div>}
+      {r && <>
+        <RiskResult r={r} />
+        <div className="xs faint" style={{ marginTop: 6 }}>IPQualityScore · {r.cached ? `saved ${timeAgo(r.checked_at)}` : "just checked"}</div>
+      </>}
+    </div>
+  );
+}
+
 // Breach exposure is asked for on request: the full address goes to a third party (XposedOrNot) and its free
 // tier is small and shared by every user of this server.
 function Exposure({ address }) {
@@ -88,6 +139,7 @@ export default function MailPanel({ address, mail }) {
       {!mail
         ? <Callout tone="info">Run Re-enrich (or a lookup) to check this address's domain: reputation, age and how it is set up to send mail. TFII judges the domain, not the person: no free source rates an individual mailbox.</Callout>
         : <MailSignals mail={mail} />}
+      <Risk address={address} />
       <Exposure address={address} />
     </Panel>
   );
