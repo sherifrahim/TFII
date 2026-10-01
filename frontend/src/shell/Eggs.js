@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useToast } from "../components/ui";
+import { readPrefs } from "../lib/prefs";
 
 // Small, tasteful surprises. None of it touches data, all of it is skipped for people who ask their system
 // for reduced motion, and nothing here is needed to use the product.
@@ -137,6 +138,7 @@ export function Eggs() {
       stop.current = kind === "matrix" ? runMatrix(c) : runConfetti(c);
     };
     const on = e => {
+      if (readPrefs().fun === false) return;           // turned off under Settings → Display
       const k = e.detail;
       if (k === "matrix") { toast("Wake up. The signal has you.", "ok"); if (!reduced()) overlay("matrix"); }
       else if (k === "confetti") { toast("🎉 Nothing to celebrate, and yet.", "ok"); if (!reduced()) overlay("confetti"); }

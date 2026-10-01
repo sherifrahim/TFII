@@ -471,7 +471,7 @@ export function KPI({ label, value, sub, delta, deltaLabel, upIsBad = false, spa
       onKeyDown={onClick ? e => { if (e.key === "Enter") onClick(); } : undefined}>
       <div className="kpi-l">{tone && <span className="sev-dot" style={{ background: tone }} />}{label}</div>
       <div className="kpi-row">
-        <div className="kpi-v">{typeof value === "number" ? fmtNum(shown) : value ?? "—"}</div>
+        <div className="kpi-v" style={typeof value === "string" && value.length > 9 ? { fontSize: 20, lineHeight: "1.5" } : undefined}>{typeof value === "number" ? fmtNum(shown) : value ?? "—"}</div>
         {spark && spark.length > 1 && <SparkInline data={spark} color={sparkColor} />}
       </div>
       <div className="kpi-d">

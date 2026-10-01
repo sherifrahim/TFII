@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { apiJSON, api, getToken } from "../../lib/api";
+import { apiJSON, api } from "../../lib/api";
 import { navigate, enc } from "../../lib/router";
 import { useSession } from "../../lib/session";
 import { timeAgo, detectionTemplates, typeGroup } from "../../lib/format";
@@ -7,12 +7,11 @@ import { safeUrl } from "../../lib/safe";
 import { geoFacts } from "../../lib/geo";
 import DnsPanel from "./DnsPanel";
 import MailPanel from "./MailPanel";
-import { LEGACY_C } from "../../design/tokens";
 import {
   Panel, Button, IconButton, Badge, SevBadge, TypeBadge, Field, Callout, EmptyState, CopyButton, useToast, actionable, rowAction,
 } from "../../components/ui";
 import InvestigationPicker from "../../components/InvestigationPicker";
-import { CVELookup } from "../../legacy/lazy";
+import CveLookup from "../CveLookup";
 
 // ── Indicator ───────────────────────────────────────────────────────────────
 export function IndicatorOverview({ env, canEdit, reload }) {
@@ -336,7 +335,7 @@ export function CveOverview({ env }) {
 }
 
 function MultiSource({ cveId, bare }) {
-  const body = <div className="legacy-host"><CVELookup token={getToken()} C={LEGACY_C} initialId={cveId} key={cveId} /></div>;
+  const body = <CveLookup initialId={cveId} key={cveId} />;
   return bare ? body : <Panel title="Multi-source intelligence" sub="NVD · CVE.org · OSV · EPSS · CISA KEV · public PoCs">{body}</Panel>;
 }
 export { MultiSource };

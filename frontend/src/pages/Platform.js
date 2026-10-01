@@ -8,39 +8,15 @@ import { StackedBars, BarList } from "../components/charts";
 import Icon from "../components/Icon";
 import { LEGACY_C } from "../design/tokens";
 import {
-  HealthPage as LegacyHealth, SettingsPage as LegacySettings, FilesPage as LegacyFiles,
-  QueryGenerator, GeoMap, AdvisoryBuilder, PermissionsPanel, CVEReportModal,
+  PermissionsPanel, CVEReportModal,
 } from "../legacy/LegacyComponents";
 
-function Legacy({ title, sub, actions, children, narrow }) {
-  return (
-    <div className={`page ${narrow ? "narrow" : ""}`}>
-      <PageHeader title={title} sub={sub} actions={actions} />
-      <div className="legacy-host">{children}</div>
-    </div>
-  );
-}
-
-export function HealthPage() {
-  return <Legacy title="Health" sub="Database, schedulers, feeds, backups, notification delivery and upstream API reachability."><LegacyHealth token={getToken()} C={LEGACY_C} /></Legacy>;
-}
+export { default as HealthPage } from "./Health";
 export { ConnectorsPage } from "./Connectors";
-export function SettingsPage({ onOpenApiKeys }) {
-  const { me, logout } = useSession();
-  return <Legacy title="Settings" sub="Account, personal API keys, notifications and access requests." narrow><LegacySettings token={getToken()} onLogout={logout} C={LEGACY_C} me={me} onOpenApiKeys={onOpenApiKeys} /></Legacy>;
-}
-export function FilesPage() {
-  return <Legacy title="Files" sub="Owner-only file store with share links. Downloads are always forced as attachments."><LegacyFiles token={getToken()} C={LEGACY_C} /></Legacy>;
-}
-export function QueryPage() {
-  return <Legacy title="Query Builder" sub="Generate KQL / SPL detections for a use case, or paste a query to have it explained line by line."><QueryGenerator token={getToken()} C={LEGACY_C} /></Legacy>;
-}
-export function GeoPage() {
-  return <Legacy title="Geo Intelligence" sub="Country of origin for IP indicators, from AbuseIPDB and VirusTotal enrichment."><GeoMap token={getToken()} C={LEGACY_C} /></Legacy>;
-}
-export function AdvisoriesPage() {
-  return <Legacy title="Advisories" sub="Build a threat advisory from suggested CVEs and your IOC pool, ready to send."><AdvisoryBuilder token={getToken()} C={LEGACY_C} /></Legacy>;
-}
+export { default as SettingsPage } from "./Settings";
+export { default as QueryPage } from "./QueryBuilder";
+export { default as FilesPage } from "./Files";
+export { default as AdvisoriesPage } from "./Advisories";
 
 export function ReportsPage() {
   const [cve, setCve] = useState("");

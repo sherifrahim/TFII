@@ -6,10 +6,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { API_BASE } from "../config";
 import { geoFacts, regionName } from "../lib/geo";
-const TLP_COLORS = {
-  WHITE:{color:"#9ca3af",bg:"#9ca3af15"},GREEN:{color:"#16a34a",bg:"#16a34a15"},
-  AMBER:{color:"#d97706",bg:"#d9770615"},RED:{color:"#dc2626",bg:"#dc262615"},
-};
 // Any code missing here renders as a globe icon and its bare two-letter code on
 // the Geo Map, which is how SA and TW showed up once /stats/geo started
 // returning data. Extended to cover the hosting and telecom regions that
@@ -84,29 +80,29 @@ async function api(path,opts={},token=null){
 
 // ── ATOMS ─────────────────────────────────────────────────────────────────────
 function TLPBadge({level}){
-  const s=TLP_COLORS[level]??TLP_COLORS.WHITE;
-  return <span style={{display:"inline-block",fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,color:s.color,background:s.bg,border:`1px solid ${s.color}40`}}>TLP:{level}</span>;
+  return <span className={`badge tlp-${String(level||"white").toLowerCase()}`}>TLP:{level}</span>;
 }
 // eslint-disable-next-line no-unused-vars
 function Field({label,children,C}){
   return(
-    <div style={{marginBottom:16}}>
-      <label style={{display:"block",fontSize:12,color:C.muted,marginBottom:6,fontWeight:600}}>{label}</label>
+    <div className="field">
+      <label>{label}</label>
       {children}
     </div>
   );
 }
 function Inp({value,onChange,type="text",placeholder,C,rows}){
-  const base={width:"100%",background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"12px 16px",borderRadius:8,fontSize:14,outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
-  if(rows)return <textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} style={{...base,resize:"vertical"}}/>;
-  return <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={base}/>;
+  if(rows)return <textarea className="textarea" value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} style={{width:"100%"}}/>;
+  return <input className="input" type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{width:"100%"}}/>;
 }
+// Variants map onto the design system's button classes: primary = the one main action, ghost = a quiet bordered
+// action, danger = destructive, dim/success = tinted.
 function Btn({onClick,disabled,children,variant="primary",C,full,sm}){
-  const s={primary:{background:C.accent,color:"#fff",border:"none",boxShadow:C.glow||"none"},ghost:{background:"transparent",color:C.muted,border:`1px solid ${C.border}`},danger:{background:"transparent",color:C.red,border:`1px solid ${C.red}50`},dim:{background:C.accentDim,color:C.accentText,border:`1px solid ${C.accent}40`},success:{background:C.green+"20",color:C.green,border:`1px solid ${C.green}40`}};
-  return <button onClick={onClick} disabled={disabled} style={{padding:sm?"6px 12px":"10px 20px",borderRadius:8,cursor:disabled?"not-allowed":"pointer",fontSize:sm?12:14,fontFamily:"inherit",fontWeight:600,width:full?"100%":"auto",opacity:disabled?0.4:1,transition:"all .15s",...(s[variant]||s.primary)}}>{children}</button>;
+  const cls={primary:"primary",ghost:"",danger:"danger",dim:"tint",success:"ok"}[variant]??"primary";
+  return <button className={`btn ${cls} ${sm?"sm":""}`} onClick={onClick} disabled={disabled} style={full?{width:"100%"}:undefined}>{children}</button>;
 }
 function Card({C,children,style={}}){
-  return <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:20,boxShadow:C.shadow,...style}}>{children}</div>;
+  return <div className="panel" style={{padding:20,...style}}>{children}</div>;
 }
 // Some operations legitimately take 5-20s (KEV+EPSS cross-referencing, pulling
 // six feeds). Static text over that long is indistinguishable from a hang, so
@@ -134,11 +130,11 @@ function SlowLoader({C,message,hint,pad=32}){
   );
 }
 function SevBadge({severity,score,C}){
-  const s=String(severity||"").toUpperCase();
-  const map={CRITICAL:{bg:C.red+"20",color:C.red},HIGH:{bg:C.amber+"20",color:C.amber},MEDIUM:{bg:(C.blue||C.purple)+"20",color:C.blue||C.purple},LOW:{bg:C.muted+"20",color:C.mutedHi||C.muted}};
-  const style=map[s]||{bg:C.muted+"20",color:C.muted};
-  return <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,fontWeight:700,background:style.bg,color:style.color,border:`1px solid ${style.color}40`}}>{s||"?"}{score?` ${score}`:""}</span>;
+  const sv=String(severity||"").toLowerCase();
+  const tone={critical:"critical",high:"high",medium:"medium",low:"low"}[sv]||"low";
+  return <span className={`badge ${tone}`} style={{textTransform:"uppercase"}}>{sv||"?"}{score?` ${score}`:""}</span>;
 }
+
 function renderMarkdown(text, C){
   if(!text) return null;
   const lines = text.split('\n');
@@ -272,7 +268,7 @@ function CVEReportModal({cveId,token,C,onClose}){
         <div style={{padding:"16px 24px",borderBottom:`1px solid ${C.border}`,
           display:"flex",gap:12,alignItems:"center",flexShrink:0}}>
           <div style={{display:"flex",background:C.surfaceHi,borderRadius:8,padding:3,gap:2}}>
-            {[["email","📧 Email Draft"],["summary","📋 Summary Brief"]].map(([val,label])=>(
+            {[["email","Email Draft"],["summary","Summary Brief"]].map(([val,label])=>(
               <button key={val} onClick={()=>{setFormat(val);setResult(null);setErr("");}}
                 style={{padding:"8px 16px",borderRadius:6,border:"none",cursor:"pointer",
                   fontSize:12,fontFamily:"inherit",fontWeight:600,
@@ -283,7 +279,7 @@ function CVEReportModal({cveId,token,C,onClose}){
             ))}
           </div>
           <Btn onClick={generate} disabled={loading} C={C}>
-            {loading?"Generating...":"⚡ Generate"}
+            {loading?"Generating...":"Generate"}
           </Btn>
           {result&&(
             <>
@@ -359,7 +355,7 @@ function CVEReportModal({cveId,token,C,onClose}){
                       Top: <span style={{color:C.accentText,fontWeight:600}}>
                         {result.poc.top.source}
                       </span>
-                      {result.poc.top.stars>0&&` · ⭐ ${result.poc.top.stars}`}
+                      {result.poc.top.stars>0&&` · ${result.poc.top.stars}`}
                       {result.poc.top.description&&` · ${result.poc.top.description.slice(0,60)}...`}
                     </div>
                   )}
@@ -397,7 +393,7 @@ function CVEReportModal({cveId,token,C,onClose}){
                   border:`1px solid ${C.red}20`,borderRadius:10}}>
                   <div style={{fontSize:11,color:C.red,fontWeight:700,marginBottom:10,
                     textTransform:"uppercase",letterSpacing:"0.05em"}}>
-                    🔓 PoC / Exploit References ({result.poc.count} found)
+                    PoC / Exploit References ({result.poc.count} found)
                   </div>
                   {result.poc.results.map((poc,i)=>{
                     const QUAL_COLOR={"verified":C.red,"high":C.amber,"medium":C.purple,"low":C.muted};
@@ -416,7 +412,7 @@ function CVEReportModal({cveId,token,C,onClose}){
                             {poc.source}
                           </span>
                           {poc.stars>0&&(
-                            <span style={{fontSize:10,color:C.amber}}>⭐ {poc.stars}</span>
+                            <span style={{fontSize:10,color:C.amber}}>{poc.stars}</span>
                           )}
                           {poc.language&&(
                             <span style={{fontSize:10,color:C.muted,marginLeft:"auto"}}>
@@ -558,7 +554,7 @@ function CVEDetail({cve,token,onClose,C}){
                 <span style={{fontSize:16,fontWeight:800,color:C.accentText,fontFamily:"monospace",
                   letterSpacing:"-0.01em"}}>{d.cve_id}</span>
                 {inKev&&<span style={{fontSize:11,padding:"4px 8px",borderRadius:5,fontWeight:700,
-                  background:C.red+"20",color:C.red,border:`1px solid ${C.red}40`}}>🚨 CISA KEV</span>}
+                  background:C.red+"20",color:C.red,border:`1px solid ${C.red}40`}}>CISA KEV</span>}
                 {d.patch_available&&<span style={{fontSize:11,padding:"4px 8px",borderRadius:5,fontWeight:700,
                   background:C.green+"20",color:C.green,border:`1px solid ${C.green}40`}}>✅ Patch Available</span>}
                 <a href={`https://nvd.nist.gov/vuln/detail/${d.cve_id}`} target="_blank" rel="noreferrer"
@@ -592,7 +588,7 @@ function CVEDetail({cve,token,onClose,C}){
               <button onClick={()=>setShowReport(true)}
                 style={{padding:"7px 14px",background:C.accent,border:"none",color:"#fff",
                   borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700}}>
-                ⚡ Report
+                Report
               </button>
               <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,
                 fontSize:22,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
@@ -975,7 +971,7 @@ function CVEDetail({cve,token,onClose,C}){
                   )}
                   {src.status==="ok"&&src.source==="CVE Trends"&&(
                     <div style={{fontSize:12,color:src.trending?C.accentText:C.muted}}>
-                      {src.trending?"📈 Currently trending":"Not trending"}
+                      {src.trending?"Currently trending":"Not trending"}
                       {src.count_24h>0&&<span style={{marginLeft:8,color:C.muted}}>{src.count_24h} mentions/24h</span>}
                     </div>
                   )}
@@ -1185,7 +1181,7 @@ invoice.pdf.exe`;
               style={{fontSize:11,padding:"4px 12px",borderRadius:6,background:C.accentDim,
                 border:`1px solid ${C.accent}40`,color:C.accentText,cursor:"pointer",fontFamily:"inherit",
                 fontWeight:600}}>
-              {uploading?"Uploading...":"📁 Upload File"}
+              {uploading?"Uploading...":"Upload File"}
             </button>
           </div>
         </div>
@@ -1202,7 +1198,7 @@ invoice.pdf.exe`;
             Files: .txt, .csv, .log (max 2MB).
           </span>
           <Btn onClick={runLookup} disabled={loading||uploading||!input.trim()} C={C}>
-            {loading?"Checking...":"🔍 Run Bulk Lookup"}
+            {loading?"Checking...":"Run Bulk Lookup"}
           </Btn>
         </div>
       </div>
@@ -1235,7 +1231,7 @@ invoice.pdf.exe`;
             style={{marginLeft:"auto",fontSize:12,padding:"8px 16px",borderRadius:10,cursor:"pointer",
               background:C.surfaceHi,border:`1px solid ${C.border}`,color:C.text,fontWeight:600,
               fontFamily:"inherit",display:"flex",alignItems:"center",gap:8}}>
-            ⬇ Download CSV
+            Download CSV
           </button>
         </div>
       )}
@@ -1800,7 +1796,7 @@ function AssetManager({token,C,onChanged}){
                   {asset.version?`Monitoring v${asset.version}`:"Monitoring all versions"}
                 </span>
                 {(asset.kev_unpatched||0)>0&&(
-                  <span style={{color:C.red,fontWeight:700}}>🚨 {asset.kev_unpatched} KEV unpatched</span>
+                  <span style={{color:C.red,fontWeight:700}}>{asset.kev_unpatched} KEV unpatched</span>
                 )}
                 {(asset.critical_unpatched||0)>0&&(
                   <span style={{color:C.amber,fontWeight:600}}>⚠ {asset.critical_unpatched} critical</span>
@@ -1920,7 +1916,7 @@ function CVELookup({token,C,initialId=""}){
                   {result.in_kev&&(
                     <span style={{fontSize:12,padding:"4px 12px",borderRadius:4,fontWeight:700,
                       background:C.red+"20",color:C.red,border:`1px solid ${C.red}30`}}>
-                      🚨 CISA KEV — Added {result.kev_date}
+                      CISA KEV — Added {result.kev_date}
                     </span>
                   )}
                   {result.epss&&(
@@ -1961,7 +1957,7 @@ function CVELookup({token,C,initialId=""}){
                   style={{padding:"8px 16px",background:C.accent,border:"none",color:"#fff",
                     borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700,
                     alignSelf:"flex-start"}}>
-                  ⚡ Generate Report
+                  Generate Report
                 </button>
               </div>
             </div>
@@ -2061,7 +2057,7 @@ function CVELookup({token,C,initialId=""}){
                 {src.status==="ok"&&src.source==="CVE Trends"&&(
                   <div>
                     <div style={{fontSize:13,fontWeight:600,color:src.trending?C.accentText:C.muted,marginBottom:6}}>
-                      {src.trending?"📈 Currently trending":"Not trending"}
+                      {src.trending?"Currently trending":"Not trending"}
                     </div>
                     {src.count_24h>0&&(
                       <div style={{fontSize:12,color:C.muted}}>{src.count_24h} mentions in last 24h</div>
@@ -3997,7 +3993,7 @@ function QueryGenerator({token,C}){
       {/* Mode + Platform Switcher */}
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
         <div style={{display:"flex",background:C.surfaceHi,borderRadius:10,padding:3,gap:2}}>
-          {[["builder","⚡ Builder"],["explainer","🔍 Explainer"]].map(([id,label])=>(
+          {[["builder","Builder"],["explainer","Explainer"]].map(([id,label])=>(
             <button key={id} onClick={()=>setMode(id)}
               style={{padding:"8px 18px",borderRadius:8,border:"none",cursor:"pointer",
                 fontSize:13,fontFamily:"inherit",fontWeight:600,
@@ -4050,7 +4046,7 @@ function QueryGenerator({token,C}){
           </div>
           <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:20}}>
             <Btn onClick={generate} disabled={loading||!useCase.trim()} C={C}>
-              {loading?"Generating production queries...":"⚡ Generate Detection Queries"}
+              {loading?"Generating production queries...":"Generate Detection Queries"}
             </Btn>
             <span style={{fontSize:11,color:C.muted}}>Ctrl+Enter in description box also works</span>
           </div>
@@ -4211,7 +4207,7 @@ function QueryGenerator({token,C}){
                     {result.performance&&(
                       <div style={{fontSize:11,color:C.muted,padding:"8px 12px",
                         background:C.surfaceHi,borderRadius:8,lineHeight:1.5}}>
-                        ⚡ {result.performance}
+                        {result.performance}
                       </div>
                     )}
                   </div>
@@ -4238,7 +4234,7 @@ function QueryGenerator({token,C}){
           </Field>
           <div style={{display:"flex",gap:8,marginBottom:20,marginTop:10}}>
             <Btn onClick={explain} disabled={explaining||!explainQuery.trim()} C={C}>
-              {explaining?"Analyzing query...":"🔍 Explain This Query"}
+              {explaining?"Analyzing query...":"Explain This Query"}
             </Btn>
             {explainResult&&<Btn onClick={()=>{setExplainResult(null);setExplainQuery("");}} variant="dim" C={C}>Clear</Btn>}
           </div>
@@ -4354,7 +4350,7 @@ function QueryGenerator({token,C}){
                 <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px 18px"}}>
                   <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:12,
                     textTransform:"uppercase",letterSpacing:"0.05em"}}>
-                    🛠 Improvement Suggestions
+                    Improvement Suggestions
                   </div>
                   {explainResult.improvements.map((imp,i)=>(
                     <div key={i} style={{marginBottom:12,padding:"12px 16px",background:C.surfaceHi,borderRadius:8}}>
@@ -4547,7 +4543,7 @@ function ApiKeyModal({token, C, onClose}){
         <div style={{padding:"16px 24px",borderTop:`1px solid ${C.border}`,
           display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div style={{fontSize:11,color:C.muted}}>
-            🔒 Keys are encrypted at rest. You can update them anytime in Settings.
+            Keys are encrypted at rest. You can update them anytime in Settings.
           </div>
           <button onClick={onClose}
             style={{padding:"8px 20px",background:C.accentDim,border:`1px solid ${C.accent}40`,
@@ -4647,15 +4643,13 @@ function NoteCard({note,onEdit,onTogglePin,onArchive,onDelete,onToggleCheck,onTa
           style={{background:"none",border:"none",cursor:"pointer",
             fontSize:13,opacity:0.4,padding:"2px 4px",
             color:note.color==="default"?C.muted:"#fff",lineHeight:1}}>
-          📦
-        </button>
+                  </button>
         <button onClick={e=>onDelete(note,e)}
           title="Delete"
           style={{background:"none",border:"none",cursor:"pointer",
             fontSize:13,opacity:0.4,padding:"2px 4px",
             color:note.color==="default"?C.muted:"#fff",lineHeight:1}}>
-          🗑
-        </button>
+                  </button>
         <span style={{fontSize:10,marginLeft:"auto",opacity:0.4,
           color:note.color==="default"?C.muted:"#fff",alignSelf:"center"}}>
           {note.updated_at?new Date(note.updated_at).toLocaleDateString():""}
@@ -4779,7 +4773,7 @@ function NoteEditor({editingNote,draftTitle,setDraftTitle,draftContent,setDraftC
               style={{background:showColorPicker?"rgba(255,255,255,0.2)":"transparent",
                 border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,cursor:"pointer",
                 padding:"4px 12px",fontSize:12,color:"rgba(255,255,255,0.7)",fontFamily:"inherit"}}>
-              🎨 Color
+              Color
             </button>
             {showColorPicker&&(
               <div style={{position:"absolute",bottom:"calc(100% + 6px)",left:0,
@@ -5059,7 +5053,7 @@ function WorkspacePage({token,C}){
       {pinned.length>0&&(
         <div style={{marginBottom:20}}>
           <div style={{fontSize:10,fontWeight:700,color:C.muted,textTransform:"uppercase",
-            letterSpacing:"0.08em",marginBottom:10}}>📌 Pinned</div>
+            letterSpacing:"0.08em",marginBottom:10}}>Pinned</div>
           <div style={{columns:"2 300px",columnGap:12}}>
             {pinned.map(n=><NoteCard key={n.id} note={n} onEdit={openEdit} onTogglePin={togglePin} onArchive={archiveNote} onDelete={deleteNote} onToggleCheck={toggleCheckItem} onTagFilter={setTagFilter} C={C}/>)}
           </div>
@@ -5260,7 +5254,7 @@ function AdvisoryBuilder({token,C}){
             <div style={{fontSize:11,color:C.muted}}>{result.subject}</div>
           </div>
           <div style={{display:"flex",gap:8}}>
-            <Btn onClick={downloadEml} C={C}>📧 Download .eml (Open in Mail)</Btn>
+            <Btn onClick={downloadEml} C={C}>Download .eml (Open in Mail)</Btn>
             <Btn onClick={()=>setResult(null)} variant="ghost" C={C}>← Edit</Btn>
           </div>
         </div>
@@ -5297,7 +5291,7 @@ function AdvisoryBuilder({token,C}){
             <div style={{display:"flex",gap:8}}>
               <select value={familyFilter} onChange={e=>setFamilyFilter(e.target.value)}
                 style={{fontSize:11,background:C.inputBg,border:`1px solid ${C.inputBorder}`,color:C.inputText,padding:"4px 8px",borderRadius:6,fontFamily:"inherit"}}>
-                <option value="fintech">🏦 Fintech / GCC</option>
+                <option value="fintech">Fintech / GCC</option>
                 {families.map(f=><option key={f} value={f}>{f}</option>)}
                 <option value="">All families</option>
               </select>
@@ -5406,7 +5400,7 @@ function AdvisoryBuilder({token,C}){
                           fontWeight:700,background:sc+"15",color:sc}}>{cve.severity} {cve.cvss_score||""}</span>}
                         {cve.kev_date&&<span style={{fontSize:9,color:C.muted}}>KEV {cve.kev_date}</span>}
                         {cve.ransomware&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,
-                          background:C.red+"15",color:C.red,fontWeight:700}}>🔒 Ransomware</span>}
+                          background:C.red+"15",color:C.red,fontWeight:700}}>Ransomware</span>}
                       </div>
                       <div style={{fontSize:10,color:C.muted,lineHeight:1.4}}>
                         <strong style={{color:C.text}}>{cve.vendor} {cve.product}</strong>
@@ -5443,7 +5437,7 @@ function AdvisoryBuilder({token,C}){
                       <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",marginBottom:3}}>
                         <span style={{fontSize:11,fontWeight:700,color:already?C.accentText:C.text,fontFamily:"monospace"}}>{cve.id}</span>
                         {cve.severity&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,fontWeight:700,background:sc+"20",color:sc}}>{cve.severity}{cve.cvss_score?` ${cve.cvss_score}`:""}</span>}
-                        {cve.ransomware&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,background:C.red+"15",color:C.red,fontWeight:700}}>🔒 Ransomware</span>}
+                        {cve.ransomware&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,background:C.red+"15",color:C.red,fontWeight:700}}>Ransomware</span>}
                         {cve.epss_pct!=null&&<span style={{fontSize:9,color:C.muted}}>EPSS {cve.epss_pct}%ile</span>}
                       </div>
                       <div style={{fontSize:10,color:C.muted,lineHeight:1.4}}>
@@ -5529,7 +5523,7 @@ function AdvisoryBuilder({token,C}){
           {clientName&&<span style={{marginLeft:8}}>for <strong style={{color:C.text}}>{clientName}</strong></span>}
         </div>
         <Btn onClick={generate} disabled={generating||(!selectedIocIds.size&&!selectedCves.length)||!clientName} C={C}>
-          {generating?"Generating Advisory...":"✉ Generate Advisory"}
+          {generating?"Generating Advisory...":"Generate Advisory"}
         </Btn>
       </div>
       {err&&<div style={{marginTop:10,fontSize:12,color:C.red,fontWeight:600}}>{err}</div>}
@@ -5775,7 +5769,7 @@ function CleanupButton({token,C}){
   return(
     <div>
       <Btn onClick={run} disabled={running} variant="dim" C={C}>
-        {running?"Running...":"🧹 Run Cleanup Now"}
+        {running?"Running...":"Run Cleanup Now"}
       </Btn>
       {result&&<div style={{marginTop:10,fontSize:12,fontWeight:600,
         color:result.startsWith("✓")?C.green:C.red}}>{result}</div>}
@@ -5942,7 +5936,7 @@ function SettingsPage({token,onLogout,C,me,onOpenApiKeys}){
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
           padding:"20px 20px",marginBottom:16,boxShadow:C.shadow}}>
           <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:4}}>
-            🧹 IOC Feed Cleanup
+            IOC Feed Cleanup
           </div>
           <div style={{fontSize:11,color:C.muted,marginBottom:14,lineHeight:1.6}}>
             Removes false-positive IOCs that were auto-added from CVE references —
@@ -5960,7 +5954,7 @@ function SettingsPage({token,onLogout,C,me,onOpenApiKeys}){
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
             <div>
               <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
-                🔓 Access Requests {accessRequests.length>0&&`(${accessRequests.length})`}
+                Access Requests {accessRequests.length>0&&`(${accessRequests.length})`}
               </div>
               <div style={{fontSize:11,color:C.muted}}>
                 Explorer/demo users requesting full access to the IOC Feed, CVE Monitor, and Campaigns
@@ -6026,7 +6020,7 @@ function SettingsPage({token,onLogout,C,me,onOpenApiKeys}){
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
             <div>
               <div style={{fontSize:13,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
-                🔔 Admin Notifications
+                Admin Notifications
               </div>
               <div style={{fontSize:11,color:C.muted}}>
                 Daily CVE digest → your phone/email
@@ -6042,7 +6036,7 @@ function SettingsPage({token,onLogout,C,me,onOpenApiKeys}){
 
           {/* Schedule toggles */}
           <div style={{display:"flex",gap:12,marginBottom:18}}>
-            {[["daily_enabled","📅 Daily Brief (8 AM)"],["weekly_enabled","📊 Weekly Summary (Sunday)"]].map(([k,label])=>(
+            {[["daily_enabled","Daily Brief (8 AM)"],["weekly_enabled","Weekly Summary (Sunday)"]].map(([k,label])=>(
               <label key={k} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",
                 padding:"7px 14px",background:notifSettings[k]?C.accentDim:C.surfaceHi,
                 border:`1px solid ${notifSettings[k]?C.accent:C.border}`,
@@ -6062,7 +6056,7 @@ function SettingsPage({token,onLogout,C,me,onOpenApiKeys}){
             {/* ntfy.sh */}
             <div style={{padding:"16px 16px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
               <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
-                📱 ntfy (Push Notifications)
+                ntfy (Push Notifications)
               </div>
               <div style={{fontSize:10,color:C.muted,marginBottom:10,lineHeight:1.6}}>
                 Free push to Android/iOS. Works with ntfy.sh or your own server.{" "}
@@ -6119,7 +6113,7 @@ function SettingsPage({token,onLogout,C,me,onOpenApiKeys}){
               {/* Doze mode instructions */}
               <div style={{padding:"12px 12px",background:C.accentDim,border:`1px solid ${C.accent}30`,
                 borderRadius:8,fontSize:10,color:C.accentText,lineHeight:1.8}}>
-                <div style={{fontWeight:700,marginBottom:4}}>📲 Android Doze Mode Setup</div>
+                <div style={{fontWeight:700,marginBottom:4}}>Android Doze Mode Setup</div>
                 <div style={{color:C.text}}>
                   <b>Option 1 — ntfy.sh or self-hosted with FCM:</b><br/>
                   Set priority to <b>Urgent</b> above → notifications delivered via FCM,
@@ -6135,7 +6129,7 @@ function SettingsPage({token,onLogout,C,me,onOpenApiKeys}){
             {/* Telegram */}
             <div style={{padding:"16px 16px",background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:10}}>
               <div style={{fontSize:12,fontWeight:700,color:C.white||C.textHi,marginBottom:2}}>
-                ✈️ Telegram Bot
+                Telegram Bot
               </div>
               <div style={{fontSize:10,color:C.muted,marginBottom:10,lineHeight:1.5}}>
                 Create a bot via @BotFather → get token. Message the bot to get your Chat ID.
@@ -6148,7 +6142,7 @@ function SettingsPage({token,onLogout,C,me,onOpenApiKeys}){
           {/* Email */}
           <details style={{marginBottom:16}}>
             <summary style={{fontSize:12,fontWeight:600,color:C.muted,cursor:"pointer",marginBottom:8}}>
-              📧 Email (SMTP) — expand to configure
+              Email (SMTP) — expand to configure
             </summary>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:10}}>
               <NF label="Recipient Email" field="email_to" placeholder="you@email.com"/>
@@ -6163,19 +6157,19 @@ function SettingsPage({token,onLogout,C,me,onOpenApiKeys}){
           {/* Actions */}
           <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
             <Btn onClick={saveNotif} disabled={notifSaving} C={C}>
-              {notifSaving?"Saving...":"💾 Save Settings"}
+              {notifSaving?"Saving...":"Save Settings"}
             </Btn>
             <Btn onClick={testNotif} disabled={notifLoading} variant="dim" C={C}>
-              {notifLoading?"Sending...":"🧪 Send Test"}
+              {notifLoading?"Sending...":"Send Test"}
             </Btn>
             <Btn onClick={()=>sendNow("daily")} disabled={!!sending} variant="dim" C={C}>
-              {sending==="daily"?"Sending...":"📅 Send Daily Now"}
+              {sending==="daily"?"Sending...":"Send Daily Now"}
             </Btn>
             <Btn onClick={()=>sendNow("weekly")} disabled={!!sending} variant="dim" C={C}>
-              {sending==="weekly"?"Sending...":"📊 Send Weekly Now"}
+              {sending==="weekly"?"Sending...":"Send Weekly Now"}
             </Btn>
             <Btn onClick={()=>loadPreview("daily")} disabled={previewLoading} variant="dim" C={C}>
-              {previewLoading?"Loading...":"👁 Preview Brief"}
+              {previewLoading?"Loading...":"Preview Brief"}
             </Btn>
           </div>
           {notifMsg&&(

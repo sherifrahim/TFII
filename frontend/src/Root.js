@@ -15,7 +15,9 @@ import Logo, { Wordmark } from "./components/Logo";
 import Icon from "./components/Icon";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { activeNav } from "./shell/nav";
-import { ApiKeyModal, DemoLockedPage } from "./legacy/lazy";
+import { DemoLockedPage } from "./legacy/lazy";
+import { ApiKeysModal } from "./components/ApiKeys";
+import { applyPrefs } from "./lib/prefs";
 
 import CommandCenter from "./pages/CommandCenter";
 import { IocIntel, AddIoc, ImportIocs, ExportIocs } from "./pages/Iocs";
@@ -30,10 +32,11 @@ import { WorkspacePage, InvestigationPage } from "./pages/Workspace";
 // Platform / OSINT screens sit on the large legacy component library, so they
 // load on demand rather than with the first paint.
 const OsintToolkit = lazy(() => import("./pages/Osint"));
+const GeoPage = lazy(() => import("./pages/Geo"));          // carries the world-map data, so it loads on its own
 const platform = name => lazy(() => import("./pages/Platform").then(m => ({ default: m[name] })));
 const HealthPage = platform("HealthPage"), ConnectorsPage = platform("ConnectorsPage"), ApiUsagePage = platform("ApiUsagePage"),
   UsersPage = platform("UsersPage"), SettingsPage = platform("SettingsPage"), FilesPage = platform("FilesPage"),
-  QueryPage = platform("QueryPage"), GeoPage = platform("GeoPage"), AdvisoriesPage = platform("AdvisoriesPage"), ReportsPage = platform("ReportsPage");
+  QueryPage = platform("QueryPage"), AdvisoriesPage = platform("AdvisoriesPage"), ReportsPage = platform("ReportsPage");
 
 function Login({ onToken }) {
   const [tab, setTab] = useState("login");
@@ -144,7 +147,7 @@ function resolve(route, ctx) {
       if (b === "api-usage") return { crumbs: [P, { label: "API Usage" }], el: <ApiUsagePage /> };
       if (b === "users") return { crumbs: [P, { label: "Users" }], el: <UsersPage /> };
       if (b === "files") return { crumbs: [P, { label: "Files" }], el: <FilesPage /> };
-      return { crumbs: [P, { label: "Settings" }], el: <SettingsPage onOpenApiKeys={ctx.openApiKeys} /> };
+      return { crumbs: [P, { label: "Settings" }], el: <SettingsPage query={q} /> };
     }
     default:
       void c;
@@ -160,6 +163,7 @@ export default function Root() {
   const route = useRoute();
   const newVersion = useNewVersion();
   useEffect(() => installLinkGuard(), []);
+  useEffect(() => { applyPrefs(); }, []);
   useEffect(() => {
     const h = () => setShowKeys(true);
     window.addEventListener("tf:keys", h);
@@ -221,7 +225,7 @@ export default function Root() {
           </div>
         )}
         {showKeys && (
-          <ApiKeyModal token={token} C={LEGACY_C} onClose={() => {
+          <ApiKeysModal onClose={() => {
             setShowKeys(false);
             if (me?.id) localStorage.setItem(`apikeys_setup_done_${me.id}`, "1");
           }} />

@@ -10,7 +10,8 @@ import {
 import { SevStack, YearBars, BarList } from "../components/charts";
 import { SEV_COLOR, T, LEGACY_C } from "../design/tokens";
 import { safeUrl } from "../lib/safe";
-import { AssetManager, CVEDetail, CVELookup, CVEReportModal } from "../legacy/lazy";
+import { AssetManager, CVEDetail, CVEReportModal } from "../legacy/lazy";
+import CveLookup from "./CveLookup";
 
 const STATUS = {
   kev_exposed: { label: "KEV exposure", tone: "critical" },
@@ -92,7 +93,7 @@ export function CveIntel({ query }) {
       ]} />
       {tab === "software" && hasData && <SoftwareView year={query.year || ""} />}
       {tab === "cves" && hasData && <CveView query={query} />}
-      {tab === "lookup" && <div className="legacy-host"><CVELookup token={getToken()} C={LEGACY_C} initialId={query.id || ""} /></div>}
+      {tab === "lookup" && <CveLookup initialId={query.id || ""} />}
       {tab === "manage" && hasData && <div className="legacy-host"><AssetManager token={getToken()} C={LEGACY_C} onChanged={() => summary.reload(true)} /></div>}
     </div>
   );
@@ -357,7 +358,7 @@ export function CvePublicPage({ cveId }) {
         </div>
       </div>
       <Panel title="Multi-source intelligence" sub="NVD · CVE.org · OSV · EPSS · CISA KEV · public PoCs">
-        <div className="legacy-host"><CVELookup token={getToken()} C={LEGACY_C} initialId={cveId} key={cveId} /></div>
+        <CveLookup initialId={cveId} key={cveId} />
       </Panel>
       {report && <CVEReportModal cveId={cveId} token={getToken()} C={LEGACY_C} onClose={() => setReport(false)} />}
     </div>

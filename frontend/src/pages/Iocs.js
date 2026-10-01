@@ -8,6 +8,7 @@ import {
   SkeletonRows, EmptyState, ErrorState, Menu, Modal, Field, Callout, Tabs, useDebounced, useToast, CopyButton, rowAction,
 } from "../components/ui";
 import InvestigationPicker from "../components/InvestigationPicker";
+import Icon from "../components/Icon";
 import { API_BASE } from "../config";
 
 const TYPE_CHIPS = [["", "All"], ["ip", "IPs"], ["domain", "Domains"], ["url", "URLs"], ["hash", "Hashes"], ["email", "Emails"]];
@@ -16,6 +17,13 @@ const STATUS_OPTS = [["live", "Live (all but expired / FP)"], ["active", "Active
 const ENRICH_LABEL = { enriched: "Enriched", not_enriched: "Not enriched", error: "Lookup failed" };
 const LIVE = ["active", "suspicious", "confirmed", "unknown"];
 const TYPE_GROUP_OF = { IPv4: "ip", IPv6: "ip", Domain: "domain", URL: "url", MD5: "hash", SHA1: "hash", SHA256: "hash", Email: "email" };
+
+function FilterField({ label, children }) {
+  return <div className="filter-field"><label>{label}</label>{children}</div>;
+}
+
+const FILTER_LABEL = { tlp: v => `TLP:${v}`, source: v => `Source: ${v}`, tag: v => `#${v}`, campaign_id: () => "Campaign", min_conf: v => `Confidence ≥ ${v}`, since_days: v => `First seen ≤ ${v}d`,
+  severity: v => `Severity: ${v}`, enrichment: v => ENRICH_LABEL[v] || v, last_seen_days: v => `Seen ≤ ${v}d`, expiring_days: v => `Expires ≤ ${v}d`, analyst: v => `Analyst: ${v}` };
 
 export function IocIntel({ query }) {
   const { me, can } = useSession();
@@ -52,6 +60,8 @@ export function IocIntel({ query }) {
     return out;
   }, [facets.data]);
   const activeFilters = ["type", "tlp", "source", "tag", "campaign_id", "min_conf", "since_days", "severity", "enrichment", "last_seen_days", "expiring_days", "analyst"].filter(k => params[k]);
+  const advanced = activeFilters.filter(k => k !== "type");
+  const [showFilters, setShowFilters] = useState(advanced.length > 0);
 
   async function bulk(action, extra = {}) {
     try {
@@ -86,23 +96,30 @@ export function IocIntel({ query }) {
           <Button size="sm" variant="primary" icon="plus" onClick={() => navigate("/iocs/new")}>Add IOC</Button>
         </>} />
 
-      <div className="row wrap" style={{ gap: 8, marginBottom: 10 }}>
-        <SearchInput value={text} onChange={setText} placeholder="Search value, description, tag, malware family… (fanged or defanged)" style={{ flex: "1 1 320px", maxWidth: 520 }} />
+      <div className="row wrap" style={{ gap: 10, marginBottom: 12 }}>
+        <SearchInput value={text} onChange={setText} placeholder="Search value, description, tag, malware family… (fanged or defanged)" style={{ flex: "1 1 340px", maxWidth: 560 }} />
         <Select value={params.status} onChange={v => set({ status: v })} options={STATUS_OPTS} />
-        <Select value={params.tlp} onChange={v => set({ tlp: v })} options={[["", "Any TLP"], ...TLP_LEVELS.map(t => [t, `TLP:${t}`])]} />
-        <Select value={params.source} onChange={v => set({ source: v })}
-          options={[["", "Any source"], ...((options.data?.sources || []).map(s => [s.k, `${s.k} (${fmtNum(s.n)})`])), ...(params.source && !(options.data?.sources || []).some(s => s.k === params.source) ? [[params.source, params.source]] : [])]} />
-        <Select value={params.severity} onChange={v => set({ severity: v })} options={[["", "Any severity"], ["critical", "Critical (≥90)"], ["high", "High (75–89)"], ["medium", "Medium (50–74)"], ["low", "Low (<50)"]]} />
-        <Select value={params.min_conf} onChange={v => set({ min_conf: v })} options={[["", "Any confidence"], ["50", "≥ 50"], ["75", "≥ 75"], ["80", "≥ 80"], ["90", "≥ 90"]]} />
-        <Select value={params.since_days} onChange={v => set({ since_days: v })} options={[["", "Any time"], ["1", "Last 24h"], ["7", "Last 7 days"], ["30", "Last 30 days"], ["90", "Last 90 days"]]} />
-        <Select value={params.last_seen_days} onChange={v => set({ last_seen_days: v })} options={[["", "Any last seen"], ["1", "Seen in 24h"], ["7", "Seen in 7 days"], ["30", "Seen in 30 days"]]} />
-        <Select value={params.expiring_days} onChange={v => set({ expiring_days: v })} options={[["", "Any expiry"], ["7", "Expires within 7 days"], ["30", "Expires within 30 days"]]} />
-        <Select value={params.enrichment} onChange={v => set({ enrichment: v })} options={[["", "Any enrichment"], ["enriched", "Enriched"], ["not_enriched", "Not enriched"], ["error", "Lookup failed"]]} />
-        <Select value={params.campaign_id} onChange={v => set({ campaign_id: v })}
-          options={[["", "Any campaign"], ...((campaigns.data || []).map(c => [c.id, c.name]))]} style={{ maxWidth: 180 }} />
-        {(options.data?.analysts || []).length > 0 && <Select value={params.analyst} onChange={v => set({ analyst: v })} options={[["", "Any analyst"], ...options.data.analysts.map(a => [a.k, a.k])]} style={{ maxWidth: 150 }} />}
-        {activeFilters.length > 0 && <Button size="sm" variant="ghost" icon="x" onClick={() => set(Object.fromEntries(activeFilters.map(k => [k, ""])))}>Clear filters</Button>}
+        <Button icon="filter" className={showFilters ? "on-filter" : ""} aria-expanded={showFilters} onClick={() => setShowFilters(v => !v)}>
+          Filters{advanced.length > 0 && <span className="filter-count">{advanced.length}</span>}
+        </Button>
+        {activeFilters.length > 0 && <Button size="sm" variant="ghost" icon="x" onClick={() => set(Object.fromEntries(activeFilters.map(k => [k, ""])))}>Clear all</Button>}
       </div>
+
+      {showFilters && (
+        <div className="panel filter-panel">
+          <FilterField label="TLP"><Select value={params.tlp} onChange={v => set({ tlp: v })} options={[["", "Any"], ...TLP_LEVELS.map(t => [t, `TLP:${t}`])]} /></FilterField>
+          <FilterField label="Source"><Select value={params.source} onChange={v => set({ source: v })}
+            options={[["", "Any"], ...((options.data?.sources || []).map(s => [s.k, `${s.k} (${fmtNum(s.n)})`])), ...(params.source && !(options.data?.sources || []).some(s => s.k === params.source) ? [[params.source, params.source]] : [])]} /></FilterField>
+          <FilterField label="Severity"><Select value={params.severity} onChange={v => set({ severity: v })} options={[["", "Any"], ["critical", "Critical (≥90)"], ["high", "High (75–89)"], ["medium", "Medium (50–74)"], ["low", "Low (<50)"]]} /></FilterField>
+          <FilterField label="Confidence"><Select value={params.min_conf} onChange={v => set({ min_conf: v })} options={[["", "Any"], ["50", "≥ 50"], ["75", "≥ 75"], ["80", "≥ 80"], ["90", "≥ 90"]]} /></FilterField>
+          <FilterField label="First seen"><Select value={params.since_days} onChange={v => set({ since_days: v })} options={[["", "Any time"], ["1", "Last 24 hours"], ["7", "Last 7 days"], ["30", "Last 30 days"], ["90", "Last 90 days"]]} /></FilterField>
+          <FilterField label="Last seen"><Select value={params.last_seen_days} onChange={v => set({ last_seen_days: v })} options={[["", "Any time"], ["1", "Within 24 hours"], ["7", "Within 7 days"], ["30", "Within 30 days"]]} /></FilterField>
+          <FilterField label="Expires"><Select value={params.expiring_days} onChange={v => set({ expiring_days: v })} options={[["", "Any time"], ["7", "Within 7 days"], ["30", "Within 30 days"]]} /></FilterField>
+          <FilterField label="Enrichment"><Select value={params.enrichment} onChange={v => set({ enrichment: v })} options={[["", "Any"], ["enriched", "Enriched"], ["not_enriched", "Not enriched"], ["error", "Lookup failed"]]} /></FilterField>
+          <FilterField label="Campaign"><Select value={params.campaign_id} onChange={v => set({ campaign_id: v })} options={[["", "Any"], ...((campaigns.data || []).map(c => [c.id, c.name]))]} /></FilterField>
+          {(options.data?.analysts || []).length > 0 && <FilterField label="Analyst"><Select value={params.analyst} onChange={v => set({ analyst: v })} options={[["", "Any"], ...options.data.analysts.map(a => [a.k, a.k])]} /></FilterField>}
+        </div>
+      )}
       <div className="row wrap" style={{ gap: 6, marginBottom: 12 }}>
         {TYPE_CHIPS.map(([id, label]) => (
           <button key={id} className={`chip ${params.type === id || (!id && !params.type) ? "on" : ""}`} onClick={() => set({ type: id })}>
@@ -110,7 +127,9 @@ export function IocIntel({ query }) {
           </button>
         ))}
         {params.type && !TYPE_CHIPS.some(([id]) => id === params.type) && <button className="chip on" onClick={() => set({ type: "" })}>{params.type} ×</button>}
-        {params.tag && <button className="chip on" onClick={() => set({ tag: "" })}>#{params.tag} ×</button>}
+        {Object.keys(FILTER_LABEL).filter(k => params[k]).map(k => (
+          <button key={k} className="chip on" onClick={() => set({ [k]: "" })} title="Remove this filter">{FILTER_LABEL[k](params[k])} <Icon name="x" size={11} /></button>
+        ))}
       </div>
 
       {sel.size > 0 && (
@@ -138,13 +157,13 @@ export function IocIntel({ query }) {
           <div className="tbl-wrap" style={{ maxHeight: "calc(100vh - 300px)", minHeight: 320 }}>
             <table className="tbl">
               <thead><tr>
-                <th style={{ width: 34 }}><input type="checkbox" className="check" checked={allSel} onChange={() => setSel(allSel ? new Set() : new Set(items.map(i => i.id)))} aria-label="Select all" /></th>
+                <th style={{ width: 34 }}><input type="checkbox" checked={allSel} onChange={() => setSel(allSel ? new Set() : new Set(items.map(i => i.id)))} aria-label="Select all" /></th>
                 <Th id="value" label="Indicator" sort={params.sort} dir={params.dir} onSort={onSort} />
                 <Th id="type" label="Type" sort={params.sort} dir={params.dir} onSort={onSort} />
                 <Th id="confidence" label="Confidence" sort={params.sort} dir={params.dir} onSort={onSort} />
-                <Th id="source" label="Source" sort={params.sort} dir={params.dir} onSort={onSort} />
+                <Th id="source" label="Source" sort={params.sort} dir={params.dir} onSort={onSort} className="opt-lg" />
                 <th className="opt-xl">Tags</th>
-                <th>Campaign / Actor</th>
+                <th className="opt-lg">Campaign / Actor</th>
                 <Th id="created" label="First seen" sort={params.sort} dir={params.dir} onSort={onSort} />
                 <Th id="last_seen" label="Last seen" sort={params.sort} dir={params.dir} onSort={onSort} className="opt-lg" />
                 <th className="opt-xl">Expires</th>
@@ -168,7 +187,7 @@ export function IocIntel({ query }) {
                     <tr key={i.id} className={`clickable ${sel.has(i.id) ? "selected" : ""}`} {...rowAction(() => navigate(entityRoute("ioc", i.id)))}
                       style={{ opacity: LIVE.includes(i.status) ? 1 : 0.6 }}>
                       <td onClick={e => e.stopPropagation()}>
-                        <input type="checkbox" className="check" checked={sel.has(i.id)} aria-label="Select"
+                        <input type="checkbox" checked={sel.has(i.id)} aria-label="Select"
                           onChange={() => setSel(s => { const n = new Set(s); n.has(i.id) ? n.delete(i.id) : n.add(i.id); return n; })} />
                       </td>
                       <td className="primary" style={{ maxWidth: 340 }}>
@@ -180,14 +199,14 @@ export function IocIntel({ query }) {
                       </td>
                       <td><TypeBadge type={i.type} /></td>
                       <td><Conf value={i.confidence} /></td>
-                      <td className="muted">{i.source}</td>
+                      <td className="muted opt-lg">{i.source}</td>
                       <td className="opt-xl" style={{ maxWidth: 180 }}>
                         <div className="row" style={{ gap: 3, overflow: "hidden" }}>
                           {tags.slice(0, 2).map(t => <span key={t} className="tag link" onClick={e => { e.stopPropagation(); set({ tag: t }); }}>{t}</span>)}
                           {tags.length > 2 && <span className="faint xs">+{tags.length - 2}</span>}
                         </div>
                       </td>
-                      <td style={{ maxWidth: 180 }}>
+                      <td className="opt-lg" style={{ maxWidth: 180 }}>
                         {i.campaign_name ? (
                           <span className="trunc hover-link" style={{ display: "block" }} onClick={e => { e.stopPropagation(); navigate(entityRoute("campaign", i.campaign_id)); }}>
                             {i.campaign_name}{i.threat_actor && <span className="faint"> · {i.threat_actor}</span>}
