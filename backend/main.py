@@ -20,6 +20,8 @@ import feeds
 import keycheck
 import geo as geoloc
 import mailintel
+import details
+from contextvars import ContextVar
 import entities
 import psycopg2, psycopg2.extras
 from dotenv import load_dotenv
@@ -2057,7 +2059,8 @@ async def vt_ip(ip, conn=None, key: str = None, user_id: str = None):
     mal = stats.get("malicious",0); total = sum(stats.values()) or 1
     return {"source":"VirusTotal","malicious":mal,"total":total,"vt_score":round((mal/total)*100),
             "country":attrs.get("country","?"),"asn":str(attrs.get("asn","?")),
-            "link":f"https://www.virustotal.com/gui/ip-address/{ip}"}
+            "link":f"https://www.virustotal.com/gui/ip-address/{ip}",
+            "_detail":{"sections":details.vt_sections("ip", attrs)}}
 
 async def vt_domain(domain, conn=None, key: str = None, user_id: str = None):
     k = key if key is not None else VT_API_KEY
@@ -2076,6 +2079,7 @@ async def vt_domain(domain, conn=None, key: str = None, user_id: str = None):
     reg = geoloc.vt_registration(attrs)          # registrar / creation date / registrant country: already in this answer
     if reg:
         out["registration"] = reg
+    out["_detail"] = {"sections": details.vt_sections("domain", attrs)}
     return out
 
 async def vt_hash(h, conn=None, key: str = None, user_id: str = None):
@@ -2091,7 +2095,8 @@ async def vt_hash(h, conn=None, key: str = None, user_id: str = None):
     mal = stats.get("malicious",0); total = sum(stats.values()) or 1
     return {"source":"VirusTotal","found":True,"malicious":mal,"total":total,
             "file_name":attrs.get("meaningful_name","unknown"),
-            "vt_score":round((mal/total)*100),"link":f"https://www.virustotal.com/gui/file/{h}"}
+            "vt_score":round((mal/total)*100),"link":f"https://www.virustotal.com/gui/file/{h}",
+            "_detail":{"sections":details.vt_sections("file", attrs)}}
 
 async def vt_url_lookup(url_val, conn=None, key: str = None, user_id: str = None):
     k = key if key is not None else VT_API_KEY
@@ -2121,7 +2126,8 @@ async def vt_url_lookup(url_val, conn=None, key: str = None, user_id: str = None
                             return {"source":"VirusTotal","malicious":mal,"total":total,
                                     "vt_score":round((mal/total)*100) if total else 0,
                                     "link":f"https://www.virustotal.com/gui/url/{url_id}",
-                                    "note":"Newly submitted — first scan"}
+                                    "note":"Newly submitted — first scan",
+                                    "_detail":{"sections":details.vt_sections("analysis", attrs)}}
             except Exception:
                 pass
             return {"source":"VirusTotal","found":False,"vt_score":0,
@@ -2129,10 +2135,12 @@ async def vt_url_lookup(url_val, conn=None, key: str = None, user_id: str = None
         if r.status_code == 401: return {"source":"VirusTotal","error":"Invalid API key"}
         if r.status_code == 429: return {"source":"VirusTotal","error":"Rate limit reached — try again later"}
         if r.status_code != 200: return {"source":"VirusTotal","error":f"HTTP {r.status_code}"}
-    stats = r.json().get("data",{}).get("attributes",{}).get("last_analysis_stats",{})
+    attrs = r.json().get("data",{}).get("attributes",{})
+    stats = attrs.get("last_analysis_stats",{})
     mal = stats.get("malicious",0); total = sum(stats.values()) or 1
     return {"source":"VirusTotal","malicious":mal,"total":total,
-            "vt_score":round((mal/total)*100),"link":f"https://www.virustotal.com/gui/url/{url_id}"}
+            "vt_score":round((mal/total)*100),"link":f"https://www.virustotal.com/gui/url/{url_id}",
+            "_detail":{"sections":details.vt_sections("url", attrs)}}
 
 async def abuseipdb_lookup(ip, conn=None, key: str = None, user_id: str = None):
     k = key if key is not None else ABUSEIPDB_API_KEY
@@ -2141,12 +2149,13 @@ async def abuseipdb_lookup(ip, conn=None, key: str = None, user_id: str = None):
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.get("https://api.abuseipdb.com/api/v2/check",
             headers={"Key":k,"Accept":"application/json"},
-            params={"ipAddress":ip,"maxAgeInDays":90})
+            params={"ipAddress":ip,"maxAgeInDays":90,"verbose":""})        # verbose adds the individual reports, at no extra cost
     if r.status_code != 200: return {"source":"AbuseIPDB","error":f"HTTP {r.status_code}"}
     d = r.json().get("data",{})
     return {"source":"AbuseIPDB","abuse_score":d.get("abuseConfidenceScore",0),
             "total_reports":d.get("totalReports",0),"country":d.get("countryCode","?"),
-            "isp":d.get("isp","?"),"link":f"https://www.abuseipdb.com/check/{ip}"}
+            "isp":d.get("isp","?"),"link":f"https://www.abuseipdb.com/check/{ip}",
+            "_detail":{"sections":details.abuse_sections(d)}}
 
 async def urlhaus_url_lookup(url_val, conn=None, key: str = None, user_id: str = None):
     k = key if key is not None else URLHAUS_AUTH_KEY
@@ -2160,7 +2169,8 @@ async def urlhaus_url_lookup(url_val, conn=None, key: str = None, user_id: str =
     d = r.json()
     if d.get("query_status") == "no_results": return {"source":"URLhaus","found":False}
     return {"source":"URLhaus","found":True,"threat":d.get("threat","?"),
-            "url_status":d.get("url_status","?"),"link":d.get("urlhaus_reference","")}
+            "url_status":d.get("url_status","?"),"link":d.get("urlhaus_reference",""),
+            "_detail":{"sections":details.urlhaus_sections("url", d)}}
 
 async def urlhaus_host_lookup(domain, conn=None, key: str = None, user_id: str = None):
     k = key if key is not None else URLHAUS_AUTH_KEY
@@ -2173,7 +2183,8 @@ async def urlhaus_host_lookup(domain, conn=None, key: str = None, user_id: str =
     if r.status_code != 200: return {"source":"URLhaus","error":f"HTTP {r.status_code}"}
     d = r.json()
     if d.get("query_status") == "no_results": return {"source":"URLhaus","found":False}
-    return {"source":"URLhaus","found":True,"urls_count":len(d.get("urls",[])),"link":d.get("urlhaus_reference","")}
+    return {"source":"URLhaus","found":True,"urls_count":len(d.get("urls",[])),"link":d.get("urlhaus_reference",""),
+            "_detail":{"sections":details.urlhaus_sections("host", d)}}
 
 # ── Geo / ASN / Org lookup (owner identification) ────────────────────────────
 CLOUD_PROVIDER_KEYWORDS = [
@@ -2265,6 +2276,21 @@ def _once(memo, key, factory):
     if task is None:
         task = memo[key] = asyncio.ensure_future(factory())
     return task
+
+# Provider answers carry a private "_detail" (display sections for the Detailed report). enrich() strips it from what it
+# returns, so stored enrichments and list responses stay small, and hands it to whoever asked for it through this sink.
+_DETAIL_SINK: ContextVar = ContextVar("detail_sink", default=None)
+
+def _strip_details(results: dict) -> None:
+    sink = _DETAIL_SINK.get()
+    for key in ("virustotal", "abuseipdb", "urlhaus"):
+        res = results.get(key)
+        if isinstance(res, dict) and "_detail" in res:
+            res = dict(res)                    # the memoised answer is shared between rows: never mutate it
+            det = res.pop("_detail")
+            results[key] = res
+            if sink is not None and det:
+                sink[key] = det
 
 async def enrich(ioc_type: str, value: str, base: int, conn=None,
                  force: bool = False, existing: dict = None, user: dict = None, memo: dict = None) -> dict:
@@ -2360,6 +2386,7 @@ async def enrich(ioc_type: str, value: str, base: int, conn=None,
     except Exception as e:
         results["error"] = str(e)
 
+    _strip_details(results)
     final_score, reasons = calc_confidence(results, base)
     results["calculated_confidence"] = final_score
     results["confidence_reasons"]    = reasons
@@ -3530,7 +3557,33 @@ BULK_CONCURRENCY = 10
 # (so the analyst can re-run just those) instead of the whole request dying with a gateway error.
 BULK_DEADLINE_SECONDS = 100
 
-async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
+DETAIL_CACHE_HOURS = 24
+
+def store_detail_reports(conn, user_id: str, reports: list) -> None:
+    """Remember what each provider said about each looked-up indicator (per user). Never fails a lookup."""
+    if not reports:
+        return
+    try:
+        cur = conn.cursor()
+        for rep in reports:
+            cur.execute("""INSERT INTO lookup_detail_cache (user_id, value, ioc_type, data, fetched_at) VALUES (%s,%s,%s,%s,NOW())
+                           ON CONFLICT (user_id, value) DO UPDATE SET ioc_type = EXCLUDED.ioc_type, data = EXCLUDED.data, fetched_at = NOW()""",
+                        (user_id, rep["value"], rep["type"], psycopg2.extras.Json(rep)))
+        cur.execute("DELETE FROM lookup_detail_cache WHERE fetched_at < NOW() - INTERVAL '7 days'")
+        conn.commit()
+    except Exception as e:
+        print(f"[detail-cache] could not store reports: {type(e).__name__}")
+        try: conn.rollback()
+        except Exception: pass
+
+def load_detail_report(conn, user_id: str, value: str):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""SELECT data, fetched_at FROM lookup_detail_cache WHERE user_id=%s AND value=%s
+                   AND fetched_at > NOW() - (%s || ' hours')::interval""", (user_id, value, str(DETAIL_CACHE_HOURS)))
+    row = cur.fetchone()
+    return row["data"] if row else None
+
+async def run_bulk_lookup(raw_text: str, user: dict, conn, force_fresh: bool = False, collect: dict = None) -> dict:
     """
     Core bulk IOC validator logic — shared by the paste-text and
     file-upload endpoints. Paste/file content of mixed IPs, domains,
@@ -3583,6 +3636,7 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
 
     # ── Phase 4: threat-intel enrichment (concurrency-limited) ───────────────
     sem = asyncio.Semaphore(BULK_CONCURRENCY)
+    reports: list = []              # one Detailed-report entry per checked indicator, remembered per user below
     memo: dict = {}                 # per-request: the same mail domain is looked up once, however many addresses use it
     deadline = asyncio.get_running_loop().time() + BULK_DEADLINE_SECONDS
 
@@ -3629,14 +3683,19 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
                 cur.execute("SELECT * FROM iocs WHERE value = %s", (refanged,))
                 existing = cur.fetchone()
 
-            enrichment = await enrich(ioc_type, refanged, 50, conn,
-                force=False, existing=existing.get("enrichment") if existing else None, user=user, memo=memo)
+            sink: dict = {}
+            sink_token = _DETAIL_SINK.set(sink)
+            try:
+                enrichment = await enrich(ioc_type, refanged, 50, conn,
+                    force=force_fresh, existing=existing.get("enrichment") if existing else None, user=user, memo=memo)
+            finally:
+                _DETAIL_SINK.reset(sink_token)
             verdict_info = compute_verdict(enrichment)
             geo = geoloc.cross_check(geo, enrichment)        # IPs: does AbuseIPDB / VirusTotal agree on the country?
             if ioc_type != "Email":
                 geo = geoloc.add_registration(geo, enrichment, ioc_type)  # domains: who registered it, and when
 
-            return {
+            row = {
                 "input": raw, "refanged": refanged,
                 "defanged": defang(refanged, ioc_type),
                 "type": ioc_type,
@@ -3648,8 +3707,13 @@ async def run_bulk_lookup(raw_text: str, user: dict, conn) -> dict:
                 "already_tracked": bool(existing),
                 "existing_id": existing["id"] if existing else None,
             }
+            reports.append(details.build_report_item(refanged, ioc_type, row, sink))
+            return row
 
     results = await asyncio.gather(*[process_one(p) for p in parsed])
+    store_detail_reports(conn, user["id"], reports)
+    if collect is not None:
+        collect.update({r["value"]: r for r in reports})
 
     summary = {
         "total":      len(results),
@@ -3711,6 +3775,46 @@ async def domain_address_history(request: Request, domain: str, user=Depends(get
 @limiter.limit("10/minute")
 async def bulk_ioc_lookup(request: Request, body: BulkLookupRequest, user=Depends(get_current_user), conn=Depends(get_db)):
     return await run_bulk_lookup(body.input, user, conn)
+
+class DetailReportRequest(BaseModel):
+    items: list
+    refresh: bool = False
+
+MAX_REPORT_ITEMS = 25
+MAX_REPORT_FRESH = 10
+
+@app.post("/iocs/detail-report")
+@limiter.limit("10/minute")
+async def detail_report(request: Request, body: DetailReportRequest, user=Depends(get_current_user), conn=Depends(get_db)):
+    """Everything each provider said about up to 25 indicators, as display sections. Served from what this user's earlier
+    lookups remembered; an indicator not remembered (or refresh=true) is looked up now, at most 10 fresh ones per call."""
+    values = []
+    for raw in body.items:
+        v = refang(str(raw or "")).strip()
+        if v and len(v) <= 2048 and v not in values:
+            values.append(v)
+    if not values:
+        raise HTTPException(status_code=400, detail="Choose at least one indicator.")
+    if len(values) > MAX_REPORT_ITEMS:
+        raise HTTPException(status_code=400, detail=f"Too many indicators ({len(values)}). Max {MAX_REPORT_ITEMS} per report.")
+    found, missing = {}, []
+    for v in values:
+        hit = None if body.refresh else load_detail_report(conn, user["id"], v)
+        if hit: found[v] = {**hit, "cached": True}
+        else: missing.append(v)
+    skipped = missing[MAX_REPORT_FRESH:]
+    missing = missing[:MAX_REPORT_FRESH]
+    if missing:
+        collected: dict = {}
+        await run_bulk_lookup("\n".join(missing), user, conn, force_fresh=True, collect=collected)
+        for v in missing:
+            found[v] = {**collected[v], "cached": False} if v in collected else {
+                "value": v, "type": detect_type(v), "defanged": v, "verdict": "unrecognized", "reason": "No provider checks this kind of value.",
+                "providers": [], "tfii": [], "has_detail": True, "cached": False}
+    for v in skipped:
+        found[v] = {"value": v, "type": detect_type(v), "defanged": v, "verdict": "unknown", "providers": [], "tfii": [], "has_detail": False,
+                    "cached": False, "reason": f"Not fetched: at most {MAX_REPORT_FRESH} new lookups per report. Open fewer at a time, or look them up in bulk first."}
+    return {"items": [found[v] for v in values]}
 
 @app.post("/iocs/bulk-lookup/file")
 @limiter.limit("10/minute")

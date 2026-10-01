@@ -146,6 +146,14 @@ MIGRATIONS = [
         R("""CREATE TABLE IF NOT EXISTS dns_intel_cache (
             domain VARCHAR(253) PRIMARY KEY, data JSONB NOT NULL, fetched_at TIMESTAMP DEFAULT NOW())"""),
     ]),
+    (4, "lookup_detail_cache", [
+        # What each provider said about an indicator a user looked up, kept per user (the answers come from that user's
+        # keys and quota) so the Detailed report can be opened without asking the providers again.
+        R("""CREATE TABLE IF NOT EXISTS lookup_detail_cache (
+            user_id VARCHAR(100) NOT NULL, value TEXT NOT NULL, ioc_type VARCHAR(20) NOT NULL, data JSONB NOT NULL,
+            fetched_at TIMESTAMP DEFAULT NOW(), PRIMARY KEY (user_id, value))"""),
+        O("CREATE INDEX IF NOT EXISTS idx_lookup_detail_fetched ON lookup_detail_cache (fetched_at)"),
+    ]),
 ]
 
 
