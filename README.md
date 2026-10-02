@@ -116,13 +116,13 @@ export DB_HOST=localhost DB_NAME=threatfeeddb DB_USER=threatfeed DB_PASS=… SEC
 cd backend && uvicorn main:app --port 8000
 
 # frontend (config.js falls back to the page origin; point it at the API for dev)
-cd frontend && npm ci --legacy-peer-deps
+cd frontend && npm ci
 sed -i 's|https://YOUR_DOMAIN|http://localhost:8000|' src/config.js   # don't commit this
-CI=true GENERATE_SOURCEMAP=false npm run build
+npm run build
 
 # tests (backend creates/drops its own database; frontend: lint + unit)
 cd backend && pip install -r requirements-dev.txt && python -m pytest
-cd frontend && npx eslint src --ext .js --max-warnings 0 && CI=true npm test
+cd frontend && npm run lint && npm test
 ```
 
 ## Cost
@@ -199,10 +199,10 @@ sudo systemctl enable --now threatfeed
 
 ### 4. Frontend
 ```bash
-cd /opt/tfii/frontend-ui    # or wherever your CRA project lives
-# Substitute domain into App.js
-sed "s|YOUR_DOMAIN|your-domain.com|g" /opt/tfii/frontend/src/App.js > src/App.js
-npm install && npm run build
+cd /opt/tfii/frontend
+# Substitute your domain into the API address (it falls back to the page origin if you skip this)
+sed -i "s|YOUR_DOMAIN|your-domain.com|g" src/config.js
+npm ci && npm run build      # output: build/
 ```
 
 ### 5. Nginx + HTTPS

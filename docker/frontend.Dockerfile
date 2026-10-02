@@ -1,21 +1,23 @@
 # ── Stage 1: Build React app ──────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# package.json is tracked in the repo (react, react-dom, react-scripts only)
-COPY frontend/package.json ./package.json
+# Build inputs, with the lockfile so the build uses the exact versions that were tested
+COPY frontend/package.json frontend/package-lock.json ./
+COPY frontend/vite.config.js frontend/index.html ./
 COPY frontend/public ./public
 COPY frontend/src    ./src
 
-RUN npm install --legacy-peer-deps
+RUN npm ci
 
 # Inject the API domain at build time
 ARG DOMAIN=localhost
 # (config.js falls back to the page origin if this is ever skipped)
 RUN sed -i "s|YOUR_DOMAIN|${DOMAIN}|g" src/config.js
 
-RUN GENERATE_SOURCEMAP=false npm run build
+# (source maps are off in vite.config.js)
+RUN npm run build
 
 # ── Stage 2: Serve with nginx ─────────────────────────────────────────────────
 FROM nginx:1.25-alpine

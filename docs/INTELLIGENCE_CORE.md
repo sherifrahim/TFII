@@ -181,9 +181,9 @@ ADMIN_INITIAL_PASSWORD='choose-one' SECRET_KEY=$(openssl rand -hex 32) uvicorn m
 python -m pytest              # creates and drops its own throwaway database (role needs CREATEDB)
 
 # frontend
-cd frontend && npm ci --legacy-peer-deps
-npm start                     # dev server; set the API origin in src/config.js
-npx eslint src --ext .js --max-warnings 0 && CI=true npm test
+cd frontend && npm ci
+npm start                     # Vite dev server; set the API origin in src/config.js
+npm run lint && npm test
 ```
 
 The UI ships with a strict CSP (`connect-src 'self'`): it expects to be served from the same origin as the API, as nginx/Caddy do

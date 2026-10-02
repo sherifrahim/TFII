@@ -114,7 +114,7 @@
 
 - **Server**: Oracle Cloud Free Tier ARM VM, Ubuntu 22.04, IP: YOUR_SERVER_IP
 - **Domain**: YOUR_DOMAIN
-- **Stack**: FastAPI + PostgreSQL + Nginx + Certbot + React (CRA)
+- **Stack**: FastAPI + PostgreSQL + Nginx + Certbot + React (Vite)
 - **Venv**: /home/ubuntu/threatfeed/venv
 - **Backend service**: threatfeed.service (systemd)
 - **Frontend build**: /home/ubuntu/threatfeed-ui/build/

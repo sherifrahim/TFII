@@ -3,7 +3,7 @@
 // serves now, and offer a reload when they differ.
 import { useEffect, useState } from "react";
 
-const MAIN = /static\/js\/(main\.[0-9a-f]+\.js)/;
+const MAIN = /static\/js\/(main\.[\w-]+\.js)/;
 
 // The main bundle this page was loaded with (null in dev, or if it cannot be told).
 export function runningBundle(scripts) {

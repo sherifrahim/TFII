@@ -39,15 +39,15 @@ jobs:
           python -m pytest
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Frontend lint and unit tests
         working-directory: frontend
         run: |
-          npm ci --legacy-peer-deps
-          npx eslint src --ext .js --max-warnings 0
-          CI=true npm test
+          npm ci
+          npm run lint
+          npm test
 
   deploy:
     needs: test
@@ -68,14 +68,12 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Build frontend
         working-directory: frontend
-        env:
-          GENERATE_SOURCEMAP: "false"   # never publish source maps
         run: |
-          npm ci --legacy-peer-deps
+          npm ci
           # config.js falls back to the page origin, which is where the API is
           # served, so no domain substitution is needed for this deployment.
           npm run build

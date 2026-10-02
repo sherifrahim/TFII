@@ -26,7 +26,8 @@ import entities
 import psycopg2, psycopg2.extras
 from dotenv import load_dotenv
 from passlib.context import CryptContext
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 
 load_dotenv()
 
@@ -880,7 +881,7 @@ def get_current_user(token: str = Depends(oauth2), conn=Depends(get_db)):
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         uid = payload.get("sub")
         if not uid: raise exc
-    except JWTError: raise exc
+    except PyJWTError: raise exc
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM users WHERE id = %s AND active = TRUE", (uid,))
     user = cur.fetchone()

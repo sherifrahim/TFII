@@ -17,8 +17,8 @@ pip install -r backend/requirements-dev.txt
 cd backend && python -m pytest
 
 # frontend
-cd frontend && npm ci --legacy-peer-deps
-npx eslint src --ext .js --max-warnings 0 && CI=true npm test
+cd frontend && npm ci
+npm run lint && npm test
 ```
 
 A local PostgreSQL is needed for the backend tests (`DB_HOST`, `DB_USER`, `DB_PASS`). The architecture, the data

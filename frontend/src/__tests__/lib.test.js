@@ -103,6 +103,9 @@ describe("stale tab detection", () => {
     expect(runningBundle(["/other.js", null, undefined])).toBeNull();
     expect(servedBundle(html)).toBe("main.7678bbfb.js");
     expect(servedBundle("<html></html>")).toBeNull();
+    // Vite names bundles with URL-safe base64 hashes, which can contain "-" and "_"
+    expect(servedBundle('<script type="module" src="/ui/static/js/main.CzfmmHWo.js"></script>')).toBe("main.CzfmmHWo.js");
+    expect(runningBundle(["/ui/static/js/main.B-x_9Qa2.js"])).toBe("main.B-x_9Qa2.js");
   });
   test("only a different bundle counts as stale; unknowns never do", () => {
     expect(isStale("main.aaaa1111.js", "main.7678bbfb.js")).toBe(true);

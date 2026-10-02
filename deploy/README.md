@@ -20,7 +20,7 @@ the server, copy it back.
 | Piece | Source in repo | Notes |
 |---|---|---|
 | Backend | `backend/*.py` | `main.py` imports `intel_api.py` (the `/v2/*` API). Always deploy every `*.py` together. |
-| Frontend | `frontend/src/**` | Entry `App.js` → `Root.js`; pages in `pages/`, shell in `shell/`, the original tools in `legacy/`. Only `react`/`react-dom`/`react-scripts` are required. |
+| Frontend | `frontend/src/**` | Entry `App.js` → `Root.js`; pages in `pages/`, shell in `shell/`, the original tools in `legacy/`. Built with Vite; `react` and `react-dom` are the only runtime dependencies. |
 
 Schema changes are additive and applied automatically at startup
 (`intel_api.ensure_schema`): new tables `investigations`, `investigation_items`,
@@ -40,21 +40,21 @@ automatic rollback if `/health` fails after restart) and swaps the UI build
 
 The host has **~956MB RAM**. `npm run build` exhausts it and wedges the whole
 machine — TCP keeps accepting while userspace stops responding, and it does not
-self-recover. `react-scripts` also empties `build/` *before* compiling, so a
+self-recover. The build also empties `build/` *before* compiling, so a
 killed build leaves no site at all.
 
 Build locally and ship the artifact:
 
 ```bash
 # 1. build locally (frontend/package.json + package-lock.json are tracked)
-cd frontend && npm ci --legacy-peer-deps
+cd frontend && npm ci
 sed -i "s|YOUR_DOMAIN|threatintel.mooo.com|" src/config.js   # optional: config.js
                                                                 # falls back to the page origin
-GENERATE_SOURCEMAP=false npm run build
+npm run build
 git checkout src/config.js
 ```
 
-`GENERATE_SOURCEMAP=false` matters — production has never shipped `.map` files
+Source maps are switched off in `vite.config.js` — production has never shipped `.map` files
 and they would expose the full frontend source on a public site.
 
 ```bash
