@@ -4,6 +4,7 @@ import { detectType, refang } from "../lib/format";
 import { geoFacts, regionName } from "../lib/geo";
 import { openReport, MAX_REPORT_ITEMS, VERDICT_TONE, VERDICT_LABEL } from "../lib/report";
 import { Badge, Button, Callout, Check, CopyButton, Menu, SearchInput, SkeletonRows, TypeBadge, useToast } from "../components/ui";
+import AiPanel from "../components/AiPanel";
 
 const MAX = 150;
 const EXAMPLE = `8.8.8.8
@@ -22,6 +23,13 @@ export function previewTokens(text) {
   const counts = {};
   toks.forEach(t => { const w = TYPE_WORD[detectType(refang(t))] || "other"; counts[w] = (counts[w] || 0) + 1; });
   return { total: toks.length, counts };
+}
+
+// What the AI digest is given: one compact line per result, nothing else.
+export function digestRows(results) {
+  return (results || []).slice(0, 150).map(r => ({ value: String(r.defanged || r.refanged || r.input || "").slice(0, 300), type: r.type || null, verdict: r.verdict || null,
+    score: Number.isFinite(r.score) ? Math.round(r.score) : null, reason: r.reason ? String(r.reason).slice(0, 400) : null,
+    country: (r.geo && (r.geo.country || r.geo.edge_country)) || null, owner: (r.geo && r.geo.org) || null }));
 }
 
 export function csvCell(cell) {
@@ -219,6 +227,8 @@ export default function BulkLookup() {
 
       {summary && results && (
         <>
+          {results.length > 1 && <AiPanel title="AI digest" cta="Digest this batch" hint="Groups the results into themes and points out the few worth attention first."
+            path="/v2/ai/bulk-digest" body={{ rows: digestRows(results) }} />}
           <div className="row between wrap" style={{ gap: 12 }}>
             <div className="row wrap" style={{ gap: 8 }}>
               {[["all", "All", summary.total], ["malicious", "Malicious", summary.malicious], ["suspicious", "Suspicious", summary.suspicious], ["clean", "Clean", summary.clean], ["unknown", "Unknown", summary.unknown]].map(([id, label, n]) => (

@@ -12,6 +12,7 @@ import {
 } from "../../components/ui";
 import InvestigationPicker from "../../components/InvestigationPicker";
 import CveLookup from "../CveLookup";
+import AiPanel from "../../components/AiPanel";
 
 // ── Indicator ───────────────────────────────────────────────────────────────
 export function IndicatorOverview({ env, canEdit, reload }) {
@@ -47,6 +48,8 @@ export function IndicatorOverview({ env, canEdit, reload }) {
   return (
     <div className="grid g-main-side">
       <div className="stack">
+        <AiPanel title="AI triage" cta="Assess" hint="Why it has this score, whether it looks like a false positive, and what to do next."
+          path="/v2/ai/triage" body={{ ioc: ioc.id }} />
         <Panel title="Context" actions={canEdit && !editing && <Button size="xs" variant="ghost" icon="edit" onClick={() => setEditing(true)}>Edit</Button>}>
           {editing ? (
             <>

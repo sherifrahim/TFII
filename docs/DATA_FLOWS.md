@@ -25,7 +25,8 @@ TFII is self-hosted and has **no telemetry**. It never sends anything to the pro
 | **AbuseIPDB** | The IP | Enrichment of IPs | Same key handling. |
 | **URLhaus (abuse.ch)** | The URL / host / hash | Enrichment | Auth-Key. |
 | **Shodan** | The IP or domain | OSINT lookup, if a key is set | Optional. |
-| **Groq** | The text of a query-builder or report prompt | Only when someone uses the KQL/SPL builder or AI features | Optional; no key, no call. Do not paste sensitive data into it. |
+| **Groq** | The text of a query-builder or report prompt; for the AI assistants, a compact summary of what is on screen (see below) | Only when someone uses the KQL/SPL builder or an AI button | Optional; no key, no call. Do not paste sensitive data into it. |
+| **CodeCraft** (codecraftapi.com) | The same compact summaries as Groq, when the person has saved their own CodeCraft key and no Groq key | Only when someone presses an AI button | Optional. Third-party gateway: check its terms before sending it anything sensitive. |
 | **dns.google** (Google Public DNS over HTTPS) | Domain name being looked up (for an email address: its domain) | Resolving domains to addresses for location context; MX, SPF and DMARC of an email's domain | Also used as a fallback to the OS resolver. |
 | **MxToolbox** | The mail domain (for the SMTP test, also its primary mail server's name) | Only when someone presses "Run MxToolbox tests" on an email indicator, with their own MxToolbox key | Optional. A free MxToolbox account allows 64 DNS lookups a day and no network lookups; one report uses about 6 DNS lookups, so reports are cached for 6 hours. Blocklist and SMTP tests need a paid plan and are an explicit option. Check their terms for your use. |
 | **IPQualityScore** | The full email address (the key travels in the URL path, which TFII never logs) | Only when someone presses "Check address risk" on an email indicator, with their own IPQualityScore key | Optional. Their free plan is about 1,000 checks a month, so it is never run in bulk; answers are cached for a day. Check their terms for your use. |
@@ -66,3 +67,21 @@ These are honest caveats from the maintainers, not legal advice. Provider terms 
 8. **NSLookup.io** public API is offered with a shared rate limit; be a good neighbour and do not run bulk automated lookups through it.
 
 If any of these do not fit your situation, the fix is normally to turn the feature off (feeds can be disabled individually) or swap the source. Issues and pull requests that add permissively licensed alternatives are very welcome.
+
+## AI assistants
+
+Buttons marked **AI** (report summary, indicator triage, bulk digest, investigation write-up, plain-English IOC search, mail explanation) send a
+compact, text-only summary of what is on that screen to the AI provider, and nothing else:
+
+* **Report summary**: the indicator, TFII's verdict and reason, and each provider's headline and first few detail rows.
+* **Indicator triage**: the indicator, its score and reasoning, tags, campaign and actor, a subset of enrichment fields, up to 10 related
+  indicators, 5 analyst notes and the last score changes.
+* **Bulk digest**: for each result (up to 150), the value, type, verdict, score, reason, country and network owner.
+* **Investigation write-up**: the investigation's name, description, up to 60 items, 25 timeline events and 8 notes.
+* **Plain-English search**: only the sentence the person typed.
+* **Mail explanation**: the address and the domain checks shown on the page.
+
+Which key pays: the person's own Groq key, then their own CodeCraft key, then the platform's Groq key (limited to 40 answers per person per day).
+Indicators, notes and descriptions can contain text written by third parties, so the model is told to treat everything as untrusted data; its answer is
+shown as plain text only, labelled AI-generated, and the underlying data stays on the page. An AI answer is never saved as a fact. Without any key the
+buttons are replaced by a prompt to add one, and nothing is sent. The "AI tools" permission (analyst and admin by default) controls who can use them.

@@ -18,6 +18,7 @@ Most small teams cannot run a full threat-intel platform, and most free feeds ar
 - **Corroborated confidence, not a single score from a single feed.** Each source has a reliability. Independent sources combine, and an aggregator (IPsum) is never double-counted against the lists it aggregates. Every indicator page shows the reasoning.
 - **Honest location.** A domain behind a CDN does not get a country pinned on it. TFII labels what each fact is: *IP location*, *hosted in*, *CDN edge node* (follows the asker, says nothing about the origin), *TLD registry*, *registrant country*, plus VirusTotal's *past addresses* to see behind a CDN.
 - **Bring your own keys, per user.** API keys are encrypted at rest, only visible to the account that saved them, and have a **Test** button so you know a key works before you rely on it.
+- **AI where it helps, never as a source of truth.** One click summarises a Detailed report, assesses an indicator, digests a bulk batch, drafts an investigation write-up, turns plain English into IOC filters and explains an email domain. Answers are labelled AI-generated, shown as plain text, and sit next to the data they came from. Works with Groq or your own CodeCraft key; no key, no call.
 - **Triage in bulk.** Paste up to 150 IOCs (defanged `hxxp://evil[.]com` is fine), get enrichment, location and DNS context, export CSV.
 - **No telemetry, no cloud dependency.** It runs on your box. See exactly what leaves it in [docs/DATA_FLOWS.md](docs/DATA_FLOWS.md).
 
@@ -228,7 +229,8 @@ sudo certbot --nginx -d your-domain.com
 | `ADMIN_INITIAL_PASSWORD` | Optional | Password of the first admin. Blank = a random one is generated and printed once in the backend log (see [First login](#first-login)) |
 | `IPQS_API_KEY` | Optional | IPQualityScore email address risk (on request) |
 | `MXTOOLBOX_API_KEY` | Optional | MxToolbox deep mail-domain analysis (on request) |
-| `GROQ_API_KEY` | Optional | KQL/SPL query builder ([console.groq.com](https://console.groq.com)) |
+| `GROQ_API_KEY` | Optional | KQL/SPL query builder and the AI assistants ([console.groq.com](https://console.groq.com)) |
+| `CODECRAFT_MODEL` | Optional | Model used when someone saves their own [CodeCraft](https://www.codecraftapi.com/) key (default `deepseek-v4-flash-0731`) |
 | `VT_API_KEY` | Optional | VirusTotal enrichment |
 | `OTX_API_KEY` | Optional | AlienVault OTX pulses feed |
 | `URLHAUS_AUTH_KEY` | Optional | abuse.ch Auth-Key (URLhaus, ThreatFox, MalwareBazaar) — free from [auth.abuse.ch](https://auth.abuse.ch/) |

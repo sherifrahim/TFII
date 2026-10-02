@@ -12,6 +12,7 @@ import Graph from "../components/Graph";
 import Icon from "../components/Icon";
 import { SEV_COLOR, LEGACY_C } from "../design/tokens";
 import { LegacyNotes } from "../legacy/lazy";
+import AiPanel from "../components/AiPanel";
 
 const STATUSES = [["open", "Open"], ["active", "Active"], ["monitoring", "Monitoring"], ["closed", "Closed"]];
 const SEVS = [["critical", "Critical"], ["high", "High"], ["medium", "Medium"], ["low", "Low"]];
@@ -154,6 +155,8 @@ export function InvestigationPage({ id, tab = "overview" }) {
       {tab === "overview" && (
         <div className="grid g-main-side">
           <div className="stack">
+            <AiPanel title="AI write-up" cta="Draft write-up" hint="An executive summary, findings and next steps drawn from this investigation's items, timeline and notes."
+              path="/v2/ai/investigation" body={{ id }} />
             <Panel title="Scope">
               <div className="small" style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, color: inv.description ? "var(--text-2)" : "var(--text-4)" }}>{inv.description || "No scope written yet — use Edit to describe the hypothesis and what's in and out of scope."}</div>
             </Panel>

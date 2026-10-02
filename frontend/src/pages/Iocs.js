@@ -10,6 +10,7 @@ import {
 import InvestigationPicker from "../components/InvestigationPicker";
 import Icon from "../components/Icon";
 import { API_BASE } from "../config";
+import { useAiStatus } from "../components/AiPanel";
 
 const TYPE_CHIPS = [["", "All"], ["ip", "IPs"], ["domain", "Domains"], ["url", "URLs"], ["hash", "Hashes"], ["email", "Emails"]];
 const STATUS_OPTS = [["live", "Live (all but expired / FP)"], ["active", "Active"], ["suspicious", "Suspicious"], ["confirmed", "Confirmed"], ["unknown", "Unknown"],
@@ -24,6 +25,42 @@ function FilterField({ label, children }) {
 
 const FILTER_LABEL = { tlp: v => `TLP:${v}`, source: v => `Source: ${v}`, tag: v => `#${v}`, campaign_id: () => "Campaign", min_conf: v => `Confidence ≥ ${v}`, since_days: v => `First seen ≤ ${v}d`,
   severity: v => `Severity: ${v}`, enrichment: v => ENRICH_LABEL[v] || v, last_seen_days: v => `Seen ≤ ${v}d`, expiring_days: v => `Expires ≤ ${v}d`, analyst: v => `Analyst: ${v}` };
+
+
+const AI_CLEAR = { type: "", tlp: "", source: "", tag: "", campaign_id: "", min_conf: "", status: "", severity: "", enrichment: "", since_days: "", last_seen_days: "", expiring_days: "", analyst: "", q: "" };
+const FILTER_WORD = { type: "type", tlp: "TLP", severity: "severity", min_conf: "confidence ≥", status: "status", enrichment: "enrichment", since_days: "first seen (days)", last_seen_days: "last seen (days)", expiring_days: "expires (days)", tag: "tag", source: "source", q: "text" };
+
+// "Show high-severity IPs from ThreatFox this week" becomes ordinary filters. The AI only ever returns values the table
+// already understands, they are applied as normal filters, and the chips below show exactly what was applied.
+export function filtersSummary(f) {
+  return Object.entries(f || {}).filter(([k]) => FILTER_WORD[k]).map(([k, v]) => `${FILTER_WORD[k]}: ${v}`).join(" · ");
+}
+
+function AskAi({ onApply, onClose }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  async function go() {
+    if (text.trim().length < 2 || busy) return;
+    setBusy(true); setErr(null);
+    try { const out = await apiJSON("/v2/ai/search", { method: "POST", body: { q: text.trim() } }); onApply(out.result); }
+    catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div className="ask-ai">
+        <Icon name="sparkle" size={16} />
+        <input className="input" autoFocus value={text} onChange={e => setText(e.target.value)} aria-label="Describe the indicators you want"
+          onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") onClose(); }}
+          placeholder="e.g. high severity IPs from ThreatFox in the last week, not yet enriched" />
+        <Button variant="primary" size="sm" loading={busy} disabled={text.trim().length < 2} onClick={go}>Filter</Button>
+        <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
+      </div>
+      {err && <div className="small" style={{ color: "var(--critical)", marginTop: -4, marginBottom: 4 }} role="alert">{err}</div>}
+    </div>
+  );
+}
 
 export function IocIntel({ query }) {
   const { me, can } = useSession();
@@ -46,12 +83,20 @@ export function IocIntel({ query }) {
   const options = useApi("/v2/iocs/filter-options");
   const campaigns = useApi("/campaigns");
   const [sel, setSel] = useState(new Set());
+  const [askAi, setAskAi] = useState(false);
+  const ai = useAiStatus();
   const [picker, setPicker] = useState(null);
   const [tagModal, setTagModal] = useState(false);
   useEffect(() => { setSel(new Set()); }, [data]);
 
   const items = data?.items || [];
   const set = patch => setQuery({ ...patch, offset: "" });
+  function applyAi(r) {
+    setQuery({ ...AI_CLEAR, ...r.filters, offset: "" });
+    setText(r.filters.q || "");
+    toast(r.explanation ? `${r.explanation} (${filtersSummary(r.filters)})` : `Applied: ${filtersSummary(r.filters)}`, "ok");
+    setAskAi(false);
+  }
   const onSort = id => set({ sort: id, dir: params.sort === id && params.dir === "desc" ? "asc" : "desc" });
   const allSel = items.length > 0 && items.every(i => sel.has(i.id));
   const typeFacet = useMemo(() => {
@@ -102,8 +147,10 @@ export function IocIntel({ query }) {
         <Button icon="filter" className={showFilters ? "on-filter" : ""} aria-expanded={showFilters} onClick={() => setShowFilters(v => !v)}>
           Filters{advanced.length > 0 && <span className="filter-count">{advanced.length}</span>}
         </Button>
+        {ai && ai.available && <Button icon="sparkle" className={askAi ? "on-filter" : ""} aria-expanded={askAi} onClick={() => setAskAi(v => !v)}>Ask AI</Button>}
         {activeFilters.length > 0 && <Button size="sm" variant="ghost" icon="x" onClick={() => set(Object.fromEntries(activeFilters.map(k => [k, ""])))}>Clear all</Button>}
       </div>
+      {askAi && <AskAi onApply={applyAi} onClose={() => setAskAi(false)} />}
 
       {showFilters && (
         <div className="panel filter-panel">

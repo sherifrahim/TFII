@@ -65,6 +65,9 @@ GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
 # report). Keep this in one place so the next retirement is a config change,
 # and check https://api.groq.com/openai/v1/models when AI features start 502ing.
 GROQ_MODEL         = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+# CodeCraft (https://www.codecraftapi.com) is an OpenAI-compatible gateway that people use with their own key. The
+# model must be one the person's plan offers (the list is at https://www.codecraftapi.com/models).
+CODECRAFT_MODEL    = os.getenv("CODECRAFT_MODEL", "deepseek-v4-flash-0731")
 URLHAUS_AUTH_KEY   = os.getenv("URLHAUS_AUTH_KEY", "")  # required since abuse.ch mandated auth (30 Jun 2025) — free at https://auth.abuse.ch/
 ENCRYPTION_KEY     = os.getenv("ENCRYPTION_KEY", "")  # generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 DAILY_FREE_QUOTA   = 10   # free platform-key checks per user per day (no personal key)
@@ -115,6 +118,13 @@ def mask_key(key: str) -> str:
     return "••••••••" + key[-4:]
 
 # ── KEY RESOLUTION + QUOTA ────────────────────────────────────────────────────
+def get_own_key(conn, user_id: str, service: str) -> str:
+    """The key this user saved for a service, or "" (never a platform or pooled key)."""
+    cur = conn.cursor()
+    cur.execute("SELECT api_key_encrypted FROM user_api_keys WHERE user_id=%s AND service=%s", (user_id, service))
+    row = cur.fetchone()
+    return (decrypt_key(row[0]) if row and row[0] else "") or ""
+
 def get_user_daily_usage(conn, user_id: str, service: str) -> int:
     """How many platform-key calls has this user made today for this service."""
     cur = conn.cursor()
@@ -3062,7 +3072,7 @@ def change_password(body: PasswordChange, user=Depends(get_current_user), conn=D
 
 # ── USER API KEYS ─────────────────────────────────────────────────────────────
 
-ALLOWED_SERVICES = {"virustotal","abuseipdb","shodan","groq","nvd","urlhaus","otx","ipqs","mxtoolbox"}
+ALLOWED_SERVICES = {"virustotal","abuseipdb","shodan","groq","nvd","urlhaus","otx","ipqs","mxtoolbox","codecraft"}
 SERVICE_LABELS = {
     "virustotal": {"name":"VirusTotal",   "url":"https://www.virustotal.com/gui/my-apikey",    "placeholder":"Enter your VirusTotal API key"},
     "abuseipdb":  {"name":"AbuseIPDB",    "url":"https://www.abuseipdb.com/account/api",        "placeholder":"Enter your AbuseIPDB API key"},
@@ -3073,6 +3083,7 @@ SERVICE_LABELS = {
     "otx":        {"name":"AlienVault OTX","url":"https://otx.alienvault.com/settings",         "placeholder":"Enter your OTX API key"},
     "ipqs":       {"name":"IPQualityScore","url":"https://www.ipqualityscore.com/create-account", "placeholder":"Enter your IPQualityScore key"},
     "mxtoolbox":  {"name":"MxToolbox",     "url":"https://mxtoolbox.com/user/api",                "placeholder":"Enter your MxToolbox API key"},
+    "codecraft":  {"name":"CodeCraft",     "url":"https://www.codecraftapi.com/",                 "placeholder":"cc_xxxxxxxxxxxx"},
 }
 
 def _safe_mask(encrypted) -> Optional[str]:
@@ -7445,6 +7456,10 @@ INTEL_DEPS = _NS(   # module-level so tests can substitute the network fetchers
     fetch_rss=fetch_rss, fetch_cve_rss=fetch_cve_rss, RSS_FEEDS=RSS_FEEDS, CVE_FEEDS=CVE_FEEDS,
     mitre_lookup=mitre_lookup,
     resolve_api_key=resolve_api_key, log_api_call=log_api_call, DAILY_FREE_QUOTA=DAILY_FREE_QUOTA,
+    get_own_key=get_own_key, PLATFORM_KEYS=PLATFORM_KEYS, GROQ_MODEL=GROQ_MODEL, CODECRAFT_MODEL=CODECRAFT_MODEL,
+    get_user_daily_usage=get_user_daily_usage, load_detail_report=load_detail_report,
 )
 _intel_api.register(app, INTEL_DEPS)
+import ai_api as _ai_api
+_ai_api.register(app, INTEL_DEPS)
 

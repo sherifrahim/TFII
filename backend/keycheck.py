@@ -60,10 +60,12 @@ PROBES: Dict[str, Probe] = {
     # The usage endpoint does not count against the lookup quota.
     "mxtoolbox":  Probe("GET", "https://api.mxtoolbox.com/api/v1/Usage", _h("Authorization"), _NONE),
     "ipqs":       Probe("GET", "https://www.ipqualityscore.com/api/json/account/{key}", _NONE, _NONE, judge=_ipqs_judge),
+    # OpenAI-compatible gateway: an unknown key gets 401 invalid_api_key.
+    "codecraft":  Probe("GET", "https://www.codecraftapi.com/v1/models", _h("Authorization", "Bearer "), _NONE),
 }
 
 NAMES = {"virustotal": "VirusTotal", "abuseipdb": "AbuseIPDB", "shodan": "Shodan", "groq": "Groq", "nvd": "NVD",
-         "urlhaus": "abuse.ch", "otx": "AlienVault OTX", "ipqs": "IPQualityScore", "mxtoolbox": "MxToolbox"}
+         "urlhaus": "abuse.ch", "otx": "AlienVault OTX", "ipqs": "IPQualityScore", "mxtoolbox": "MxToolbox", "codecraft": "CodeCraft"}
 
 
 def _result(status: str, message: str) -> dict:

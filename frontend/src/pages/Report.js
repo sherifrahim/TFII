@@ -6,6 +6,7 @@ import { readReportItems, reportToMarkdown, VERDICT_TONE, VERDICT_LABEL } from "
 import { safeUrl } from "../lib/safe";
 import { Badge, Button, Callout, CopyButton, EmptyState, ErrorState, PageHeader, Panel, SkeletonRows, Tabs, TypeBadge, useToast } from "../components/ui";
 import Icon from "../components/Icon";
+import AiPanel from "../components/AiPanel";
 
 // One display section from the server: key/value list, table, tag cloud or text block. All values are text.
 export function Section({ s }) {
@@ -161,6 +162,7 @@ export default function ReportPage({ query }) {
 
   const one = items && items.length === 1;
   const sel = items && (one ? items[0] : items.find(i => i.value === cur));
+  const aiValues = items ? (sel ? [sel.value] : items.slice(0, 10).map(i => i.value)) : [];
 
   return (
     <div className="page">
@@ -192,6 +194,9 @@ export default function ReportPage({ query }) {
             </nav>
           )}
           <div style={{ minWidth: 0 }}>
+            <AiPanel className="mb" title={aiValues.length > 1 ? "AI summary of these indicators" : "AI summary"} cta="Summarize"
+              hint={aiValues.length > 1 ? "What the providers agree on, where they disagree, and what to do next." : "What each provider said, how much to trust it, and what to do next."}
+              path="/v2/ai/report-summary" body={{ values: aiValues }} ready={items.some(i => i.has_detail || i.providers.length)} />
             {!one && cur === "__overview" ? <Overview items={items} onOpen={setCur} />
               : sel && <ItemDetail item={sel} onRefresh={() => load(true)} refreshing={busy} />}
           </div>

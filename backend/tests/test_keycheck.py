@@ -20,7 +20,7 @@ def _check(service, key, handler):
     ("shodan", 401, "invalid"), ("groq", 403, "invalid"), ("otx", 403, "invalid"), ("urlhaus", 401, "invalid"),
     ("nvd", 404, "invalid"),                                         # NVD's way of saying "bad apiKey"
     ("virustotal", 404, "unexpected"),                               # a 404 elsewhere is not a verdict on the key
-    ("virustotal", 429, "rate_limited"), ("nvd", 503, "unreachable"), ("groq", 302, "unexpected"),
+    ("codecraft", 401, "invalid"), ("codecraft", 200, "valid"), ("virustotal", 429, "rate_limited"), ("nvd", 503, "unreachable"), ("groq", 302, "unexpected"),
 ])
 def test_provider_answers_are_interpreted(service, status, expect):
     r = _check(service, "k" * 24, lambda req: httpx.Response(status))

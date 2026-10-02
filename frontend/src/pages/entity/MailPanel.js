@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { apiJSON } from "../../lib/api";
 import { timeAgo } from "../../lib/format";
 import { Panel, Button, Badge, Callout, useToast } from "../../components/ui";
+import AiPanel from "../../components/AiPanel";
 
 const TONE = { warn: "high", info: "low", ok: "success" };
 const LABEL = { warn: "Check", info: "Note", ok: "Good" };
@@ -201,6 +202,14 @@ function Exposure({ address }) {
   );
 }
 
+// What the explanation is given: the domain checks already shown on the page, without bulky raw records.
+export function mailForAi(mail) {
+  if (!mail) return {};
+  const { signals, posture, registration, provider_kind, domain, verdict } = mail;
+  return { domain, provider_kind, verdict, registration, signals: (signals || []).map(s => ({ level: s.level, text: s.text })),
+    spf: posture?.spf?.record, dmarc: posture?.dmarc?.record, mail_servers: (posture?.mx || []).slice(0, 5).map(m => m.host) };
+}
+
 export default function MailPanel({ address, mail }) {
   if (!address) return null;
   return (
@@ -208,6 +217,8 @@ export default function MailPanel({ address, mail }) {
       {!mail
         ? <Callout tone="info">Run Re-enrich (or a lookup) to check this address's domain: reputation, age and how it is set up to send mail. TFII judges the domain, not the person: no free source rates an individual mailbox.</Callout>
         : <MailSignals mail={mail} />}
+      {mail && <AiPanel className="mb" title="AI explanation" cta="Explain" hint="What this address and its domain's mail setup do and do not tell you."
+        path="/v2/ai/mail" body={{ address, analysis: mailForAi(mail) }} />}
       <Deep address={address} />
       <Risk address={address} />
       <Exposure address={address} />
