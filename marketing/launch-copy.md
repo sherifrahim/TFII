@@ -126,17 +126,25 @@ TFII is a self-hosted threat intelligence platform for small teams.
 - Multi-source IOC feeds (Feodo Tracker, OpenPhish, Phishing.Database, IPsum, CINS, Emerging Threats, blocklist.de, AlienVault OTX, abuse.ch) with per-source reliability and corroborated confidence.
 - Honest location: IP location, hosted-in, CDN edge, TLD registry, registrant country, and past addresses.
 - Bulk lookup (up to 150), CSV export, DNS records with SPF/DMARC.
+- **Detailed report**: pick indicators from a lookup and get one tab per provider (detections, engines, registration, DNS, reports, payloads), side by side, as Markdown or JSON.
+- **Email indicators** judged through their domain (SPF, DMARC, age, free or disposable provider), with optional breach-exposure (XposedOrNot), address-risk (IPQualityScore) and deep mail-domain tests (MxToolbox).
+- **AI assistants** (Groq, or your own CodeCraft key): summarise a report, assess an indicator, digest a bulk batch, draft an investigation write-up, turn plain English into IOC filters, explain an email domain. Answers are labelled AI-generated and shown as plain text beside the data. No key, no call.
 - CVE monitoring with KEV, EPSS and "affects my software".
 - Per-user encrypted API keys with a Test button.
 - STIX 2.1 export and TAXII 2.1 server.
+- A redesigned interface that works on phones and passes an automated WCAG 2 A/AA audit (axe-core) on every page.
 
 **Security and setup**
 - No default password: the setup script generates one, or the backend prints a random one on first start.
-- See `SECURITY.md` for reporting and `docs/DATA_FLOWS.md` for every outbound call.
+- Docker quick start is built and started in CI on every change to the Docker files, UI or backend.
+- See `SECURITY.md` for reporting and `docs/DATA_FLOWS.md` for every outbound call, including exactly what each AI button sends.
 
 **Known limitations**
 - No independent security audit.
 - GeoIP uses ip-api's free tier (non-commercial); an offline source is planned.
 - Public feeds are noisy; scores are a triage aid.
+- AI answers can be wrong. They summarise the data on screen and never replace it.
+- The XposedOrNot, IPQualityScore and MxToolbox integrations have been tested against recorded responses, not yet at scale against the live services. (CodeCraft as an AI provider has been confirmed with a real key.)
+- Automated accessibility checks do not replace testing with a screen reader.
 
 Thanks to the maintainers of the public feeds this depends on.
