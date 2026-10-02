@@ -261,7 +261,7 @@ function IocsTab({ id, items, reload, remove, editReason }) {
     <div className="grid g-main-side">
       <Panel tight bodyStyle={{ padding: 0 }} title="Indicators" actions={<SearchInput value={filter} onChange={setFilter} placeholder="Filter" style={{ width: 200 }} />}>
         {rows.length === 0 ? <EmptyState icon="crosshair" title="No indicators yet" desc="Paste values on the right, or use “Add to investigation” from the IOC table and entity pages." /> : (
-          <div className="tbl-wrap"><table className="tbl"><thead><tr><th>Indicator</th><th>Type</th><th>Confidence</th><th>Status</th><th>Relevant because</th><th>Added</th><th /></tr></thead>
+          <div className="tbl-wrap" tabIndex={0}><table className="tbl"><thead><tr><th>Indicator</th><th>Type</th><th>Confidence</th><th>Status</th><th>Relevant because</th><th>Added</th><th><span className="sr-only">Actions</span></th></tr></thead>
             <tbody>{rows.map(it => {
               const tracked = it.item_type === "ioc";
               const type = it.ioc_type || it.data?.type || it.label;

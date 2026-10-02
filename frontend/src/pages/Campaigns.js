@@ -99,7 +99,7 @@ export function CampaignOverview({ kd }) {
         <Panel tight bodyStyle={{ padding: 0 }} title="Indicators" sub={`${fmtNum(stats.total)} assigned`}
           footer={stats.total > data.iocs.length && <span>Showing latest {data.iocs.length} — <a className="link" href={`#/iocs?campaign_id=${enc(c.id)}&status=all`}>open all in IOC table</a></span>}>
           {data.iocs.length === 0 ? <EmptyState icon="crosshair" title="No indicators" desc="Assign indicators from the IOC table using bulk actions." /> : (
-            <div className="tbl-wrap"><table className="tbl"><thead><tr><th>Indicator</th><th>Type</th><th>Confidence</th><th>Source</th><th>Status</th><th>First seen</th></tr></thead>
+            <div className="tbl-wrap" tabIndex={0}><table className="tbl"><thead><tr><th>Indicator</th><th>Type</th><th>Confidence</th><th>Source</th><th>Status</th><th>First seen</th></tr></thead>
               <tbody>{data.iocs.map(i => (
                 <tr key={i.id} className="clickable" {...rowAction(() => navigate(entityRoute("ioc", i.id)))}>
                   <td className="cellmono trunc" style={{ maxWidth: 440 }}>{i.value}</td><td><TypeBadge type={i.type} /></td><td><Conf value={i.confidence} /></td>

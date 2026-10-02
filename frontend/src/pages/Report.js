@@ -22,7 +22,7 @@ export function Section({ s }) {
   if (s.type === "table") {
     return (
       <Panel title={s.title} tight>
-        <div className="tbl-wrap" style={{ maxHeight: 360 }}>
+        <div className="tbl-wrap" tabIndex={0} style={{ maxHeight: 360 }}>
           <table className="tbl compact">
             <thead><tr>{s.cols.map(c => <th key={c}>{c}</th>)}</tr></thead>
             <tbody>{s.rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className="wrapcell" style={{ maxWidth: 420, overflowWrap: "anywhere" }}>{c}</td>)}</tr>)}</tbody>
@@ -118,7 +118,7 @@ function Overview({ items, onOpen }) {
   const cellFor = (it, id) => { const p = it.providers.find(x => x.id === id); return p ? (p.status === "ok" || p.status === "not_found" ? p.headline || "Checked" : "Not scanned") : "—"; };
   return (
     <Panel title="Side by side" sub={`${items.length} indicators`} tight>
-      <div className="tbl-wrap">
+      <div className="tbl-wrap" tabIndex={0}>
         <table className="tbl">
           <thead><tr><th>Indicator</th><th>Type</th><th>Verdict</th><th>VirusTotal</th><th className="opt-lg">AbuseIPDB</th><th className="opt-lg">URLhaus</th><th>Location</th></tr></thead>
           <tbody>

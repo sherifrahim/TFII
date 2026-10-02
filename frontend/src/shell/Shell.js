@@ -10,9 +10,33 @@ import { api, apiJSON } from "../lib/api";
 import { timeAgo } from "../lib/format";
 import CommandPalette from "./CommandPalette";
 
+// True while the viewport matches a media query (kept live, so rotating a phone or resizing a window updates the layout).
+function useMedia(query) {
+  const get = () => typeof window !== "undefined" && window.matchMedia ? window.matchMedia(query).matches : false;
+  const [on, setOn] = useState(get);
+  useEffect(() => {
+    if (!window.matchMedia) return undefined;
+    const m = window.matchMedia(query), h = () => setOn(m.matches);
+    h(); m.addEventListener("change", h);
+    return () => m.removeEventListener("change", h);
+  }, [query]);
+  return on;
+}
+
 export default function Shell({ route, crumbs, children }) {
   const { me, can, logout } = useSession();
-  const [collapsed, setCollapsed] = useLocal("tf_sidebar_collapsed", typeof window !== "undefined" && window.innerWidth < 900);
+  const [collapsedPref, setCollapsed] = useLocal("tf_sidebar_collapsed", typeof window !== "undefined" && window.innerWidth < 900);
+  // On a phone the sidebar is an off-canvas menu (opened from the top bar), always shown with labels.
+  const phone = useMedia("(max-width: 760px)");
+  const [drawer, setDrawer] = useState(false);
+  const collapsed = collapsedPref && !phone;
+  useEffect(() => { setDrawer(false); }, [route.path]);
+  useEffect(() => {
+    if (!drawer) return undefined;
+    const h = e => { if (e.key === "Escape") setDrawer(false); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [drawer]);
   const [closed, setClosed] = useLocal("tf_nav_closed", { Platform: true });
   const [palette, setPalette] = useState(false);
   const openPalette = useCallback(() => setPalette(true), []);
@@ -52,7 +76,8 @@ export default function Shell({ route, crumbs, children }) {
     <div className="app">
       <div key={bar} className="route-bar" aria-hidden />
       <Eggs />
-      <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
+      {phone && drawer && <div className="drawer-backdrop" onClick={() => setDrawer(false)} aria-hidden />}
+      <aside className={`sidebar ${collapsed ? "collapsed" : ""} ${drawer ? "drawer-open" : ""}`} id="tf-sidebar">
         <div className="sb-brand">
           <span className="logo-hit" onClick={() => { if (logoClicked()) setLogoSpin(n => n + 1); }} role="presentation">
             <Logo key={logoSpin} size={32} animate spin={logoSpin > 0} title="TFII" />
@@ -79,7 +104,7 @@ export default function Shell({ route, crumbs, children }) {
                   const active = it.match(route.path);
                   const locked = isExplorer && it.data;
                   return (
-                    <a key={it.id} href={href(it.to)} className={`sb-item ${active ? "active" : ""} ${locked ? "locked" : ""}`}
+                    <a key={it.id} href={href(it.to)} className={`sb-item ${active ? "active" : ""} ${locked ? "locked" : ""}`} aria-label={it.label}
                       data-tip={collapsed ? it.label : locked ? "Requires full access" : undefined} aria-current={active ? "page" : undefined}>
                       <Icon name={it.icon} size={16} />
                       <span className="sb-label">{it.label}</span>
@@ -92,7 +117,7 @@ export default function Shell({ route, crumbs, children }) {
           })}
         </nav>
         <div className="sb-foot">
-          <button className="sb-item" onClick={() => setCollapsed(c => !c)} data-tip={collapsed ? `Expand sidebar (${mod} B)` : undefined}>
+          <button className="sb-item" onClick={() => setCollapsed(c => !c)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} data-tip={collapsed ? `Expand sidebar (${mod} B)` : undefined}>
             <Icon name="panel" size={16} /><span className="sb-label">Collapse</span><span className="sb-count"><kbd>{mod} B</kbd></span>
           </button>
           <Menu align="left" width={216} trigger={(toggle) => (
@@ -115,6 +140,7 @@ export default function Shell({ route, crumbs, children }) {
 
       <div className="main">
         <header className="topbar">
+          {phone && <IconButton icon="menu" title="Menu" className="menu-btn" aria-expanded={drawer} aria-controls="tf-sidebar" onClick={() => setDrawer(d => !d)} />}
           <div className="crumbs">
             {crumbs.map((c, i) => (
               <React.Fragment key={i}>
@@ -133,7 +159,7 @@ export default function Shell({ route, crumbs, children }) {
           )} items={newItems} />
           <NotificationCenter />
         </header>
-        <main className="content" id="tf-content">{children}</main>
+        <main className="content" id="tf-content" tabIndex={0} aria-label="Content">{children}</main>
       </div>
       {palette && <CommandPalette onClose={() => setPalette(false)} />}
     </div>

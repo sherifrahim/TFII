@@ -171,7 +171,7 @@ export function MalwareOverview({ name, kd }) {
       <div className="stack">
         <Panel title="Latest indicators" tight actions={<><Button size="xs" variant="ghost" onClick={() => navigate("/iocs", { q: name, status: "all" })}>Open in IOC table</Button>
           <a className="btn xs" href={`https://malpedia.caad.fkie.fraunhofer.de/search?q=${enc(name)}`} target="_blank" rel="noreferrer">Malpedia ↗</a></>}>
-          <div className="tbl-wrap"><table className="tbl compact"><thead><tr><th>Indicator</th><th>Type</th><th>Confidence</th><th>Status</th><th>Seen</th></tr></thead>
+          <div className="tbl-wrap" tabIndex={0}><table className="tbl compact"><thead><tr><th>Indicator</th><th>Type</th><th>Confidence</th><th>Status</th><th>Seen</th></tr></thead>
             <tbody>{data.iocs.slice(0, 100).map(i => (
               <tr key={i.id} className="clickable" {...rowAction(() => navigate(entityRoute("ioc", i.id)))}>
                 <td className="cellmono trunc" style={{ maxWidth: 420 }}>{i.value}</td><td><TypeBadge type={i.type} /></td>

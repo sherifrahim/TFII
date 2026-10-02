@@ -49,6 +49,7 @@ const P = {
   lock: ["M5 11h14v10H5z", "M8 11V7a4 4 0 0 1 8 0v4"],
   logout: ["M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4", "M16 17l5-5-5-5", "M21 12H9"],
   panel: ["M3 3h18v18H3z", "M9 3v18"],
+  menu: ["M4 6h16", "M4 12h16", "M4 18h16"],
   arrowRight: ["M5 12h14", "M12 5l7 7-7 7"],
   arrowUp: ["M12 19V5", "M5 12l7-7 7 7"],
   arrowDown: ["M12 5v14", "M19 12l-7 7-7-7"],

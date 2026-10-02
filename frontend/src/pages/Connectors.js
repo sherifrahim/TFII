@@ -76,9 +76,9 @@ export function ConnectorsPage() {
         if (!rows.length) return null;
         return (
           <Panel key={gid} title={title} sub={desc} tight style={{ marginBottom: 14 }}>
-            <div className="tbl-wrap">
+            <div className="tbl-wrap" tabIndex={0}>
               <table className="tbl">
-                <thead><tr><th>Feed</th><th className="r">Reliability</th><th className="r">In TFII</th><th className="r">≥ 80 conf.</th><th>Last run</th><th>Auto-run</th><th style={{ width: 110 }} /></tr></thead>
+                <thead><tr><th>Feed</th><th className="r">Reliability</th><th className="r">In TFII</th><th className="r">≥ 80 conf.</th><th>Last run</th><th>Auto-run</th><th style={{ width: 110 }}><span className="sr-only">Actions</span></th></tr></thead>
                 <tbody>
                   {rows.map(f => (
                     <tr key={f.id}>

@@ -223,7 +223,7 @@ export function SourceHistoryTab({ env }) {
         </Panel>
       )}
       <Panel title="Sources" sub={`${sources.length} source${sources.length === 1 ? "" : "s"}`} tight>
-        <div className="tbl-wrap">
+        <div className="tbl-wrap" tabIndex={0}>
           <table className="tbl compact">
             <thead><tr><th>Source</th><th>Type</th><th className="r">Reports</th><th>First</th><th>Last</th><th>Confidence</th><th>Latest</th></tr></thead>
             <tbody>
@@ -254,7 +254,7 @@ export function ObservationsTab({ env, children }) {
       {children}
       {env.observations.length > 0 && (
         <Panel title="Observation ledger" sub="what each source told TFII, when it was observed and when TFII ingested it" tight>
-          <div className="tbl-wrap">
+          <div className="tbl-wrap" tabIndex={0}>
             <table className="tbl compact">
               <thead><tr><th>Observed</th><th>Ingested</th><th>Source</th><th>Type</th><th>Confidence</th><th>By</th><th>Detail</th></tr></thead>
               <tbody>

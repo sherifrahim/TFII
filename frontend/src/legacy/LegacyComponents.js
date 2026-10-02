@@ -2366,7 +2366,7 @@ function URLDecoder({C}){
         <div style={{flexShrink:0}}>
           <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>Iterations</div>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <input type="number" min={1} max={10} value={iterations}
+            <input type="number" aria-label="Decode iterations" min={1} max={10} value={iterations}
               onChange={e=>setIterations(Math.max(1,Math.min(10,parseInt(e.target.value)||1)))}
               style={{width:64,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
                 color:C.inputText,padding:"10px 10px",borderRadius:8,fontSize:14,
@@ -2910,7 +2910,7 @@ function RedirectTracer({token,C}){
         </div>
         <div>
           <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:4}}>Max hops</div>
-          <input type="number" min={1} max={20} value={maxHops}
+          <input type="number" aria-label="Maximum hops" min={1} max={20} value={maxHops}
             onChange={e=>setMaxHops(Math.max(1,Math.min(20,parseInt(e.target.value)||1)))}
             style={{width:64,background:C.inputBg,border:`1px solid ${C.inputBorder}`,
               color:C.inputText,padding:"10px",borderRadius:8,fontSize:14,

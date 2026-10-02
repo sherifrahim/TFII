@@ -295,7 +295,7 @@ export function CveOverview({ env }) {
         </Panel>
 
         <Panel title="Affected software" sub="software you monitor that NVD lists for this CVE" tight>
-          <div className="tbl-wrap"><table className="tbl compact">
+          <div className="tbl-wrap" tabIndex={0}><table className="tbl compact">
             <thead><tr><th>Software</th><th>Affected versions</th><th>Monitored version</th><th>Patch</th></tr></thead>
             <tbody>{o.software.map((s, k) => (
               <tr key={k} className="clickable" {...(s.asset_id ? rowAction(() => navigate(`/software/${enc(s.asset_id)}`)) : {})}>

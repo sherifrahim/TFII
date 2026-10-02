@@ -66,7 +66,7 @@ export function ApiUsagePage() {
   return (
     <div className="page">
       <PageHeader title="API Usage" sub="Upstream enrichment calls (cache misses) per day. Enrichments are cached for 24 hours to protect quotas."
-        actions={<select className="select" value={days} onChange={e => setDays(Number(e.target.value))}>{[7, 14, 30, 60].map(d => <option key={d} value={d}>Last {d} days</option>)}</select>} />
+        actions={<select className="select" aria-label="Time range" value={days} onChange={e => setDays(Number(e.target.value))}>{[7, 14, 30, 60].map(d => <option key={d} value={d}>Last {d} days</option>)}</select>} />
       {error && <ErrorState error={error} onRetry={reload} />}
       <div className="grid g-main-side">
         <Panel title="Calls per day" sub="stacked by service">
@@ -127,7 +127,7 @@ export function UsersPage() {
           <div className="stack">
             <Panel tight bodyStyle={{ padding: 0 }}>
               {users.error ? <ErrorState error={users.error} onRetry={users.reload} /> : !users.data ? <div style={{ padding: 16 }}><Skeleton h={120} /></div> : (
-                <table className="tbl"><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Created</th><th /></tr></thead>
+                <table className="tbl"><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Created</th><th><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>{users.data.map(u => (
                     <tr key={u.id} className={perm?.id === u.id ? "selected" : ""}>
                       <td className="primary"><div className="row" style={{ gap: 8 }}><span className="avatar">{u.username[0].toUpperCase()}</span>{u.username}{u.id === me?.id && <span className="faint xs">(you)</span>}</div></td>

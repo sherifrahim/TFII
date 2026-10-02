@@ -201,7 +201,7 @@ export function IocIntel({ query }) {
             onChange={o => setQuery({ offset: o || "" })} onLimit={l => set({ limit: l })} />
         </>}>
         {error ? <ErrorState error={error} onRetry={reload} /> : (
-          <div className="tbl-wrap" style={{ maxHeight: "calc(100vh - 300px)", minHeight: 320 }}>
+          <div className="tbl-wrap" tabIndex={0} style={{ maxHeight: "calc(100vh - 300px)", minHeight: 320 }}>
             <table className="tbl">
               <thead><tr>
                 <th style={{ width: 34 }}><input type="checkbox" checked={allSel} onChange={() => setSel(allSel ? new Set() : new Set(items.map(i => i.id)))} aria-label="Select all" /></th>
@@ -218,7 +218,7 @@ export function IocIntel({ query }) {
                 <Th id="tlp" label="TLP" sort={params.sort} dir={params.dir} onSort={onSort} />
                 <Th id="status" label="Status" sort={params.sort} dir={params.dir} onSort={onSort} />
                 <th className="opt-xl">Analyst</th>
-                <th style={{ width: 40 }} />
+                <th style={{ width: 40 }}><span className="sr-only">Select</span></th>
               </tr></thead>
               <tbody>
                 {loading && !data && <tr><td colSpan={15} style={{ padding: 0 }}><SkeletonRows rows={12} cols={7} /></td></tr>}

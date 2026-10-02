@@ -66,7 +66,7 @@ export default function CommandCenter() {
             </>}
         </Panel>
 
-        <Panel title={<><span className="live-dot" /> Threat Pulse</>} sub="derived from your data" tight bodyStyle={{ maxHeight: 330, overflowY: "auto" }}>
+        <Panel title={<><span className="live-dot" /> Threat Pulse</>} sub="derived from your data" tight bodyStyle={{ maxHeight: 330, overflowY: "auto" }} bodyProps={{ tabIndex: 0, "aria-label": "Threat pulse items" }}>
           {!data ? <div style={{ padding: 16 }}><Skeleton h={160} /></div>
             : data.pulse.length === 0
               ? <EmptyState icon="zap" title="Quiet" desc="No actively exploited CVEs, fresh malware activity or campaign movement right now." />

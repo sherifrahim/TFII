@@ -20,7 +20,7 @@ function Check({ title, icon, c }) {
       <div className="row" style={{ gap: 12, alignItems: "flex-start" }}>
         <div className="health-ico" style={{ color: ok ? "var(--success)" : "var(--critical)" }}><Icon name={icon} size={16} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="row between"><span className="strong">{title}</span><span className={`status-dot ${ok ? "ok" : "bad"}`} aria-label={ok ? "OK" : "Problem"} /></div>
+          <div className="row between"><span className="strong">{title}</span><span className={`status-dot ${ok ? "ok" : "bad"}`} role="img" aria-label={ok ? "OK" : "Problem"} /></div>
           <div className="small" style={{ color: ok ? "var(--text-3)" : "#FFA3AC", marginTop: 2 }}>{c.status || ""}</div>
         </div>
       </div>

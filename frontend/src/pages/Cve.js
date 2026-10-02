@@ -122,7 +122,7 @@ function SoftwareView({ year }) {
         <Segmented value={String(year || "")} onChange={v => setQuery({ year: v })} options={[["", "All time"], [String(thisYear), String(thisYear)], [String(thisYear - 1), String(thisYear - 1)], [String(thisYear - 2), String(thisYear - 2)]]} />
       </div>
       <Panel tight bodyStyle={{ padding: 0 }} footer={data && <span>{rows.length} software monitored · click a row for software intelligence</span>}>
-        <div className="tbl-wrap">
+        <div className="tbl-wrap" tabIndex={0}>
           <table className="tbl tall">
             <thead><tr>
               <Th id="name" label="Software" sort={sort} dir={dir} onSort={onSort} />
@@ -192,7 +192,7 @@ function CveView({ query }) {
       <Panel tight bodyStyle={{ padding: 0 }}
         footer={data && <><span>Sorted by KEV, then CVSS</span><Pagination total={data.total} limit={params.limit} offset={params.offset} onChange={o => setQuery({ offset: o || "" })} onLimit={l => set({ limit: l })} /></>}>
         {error ? <ErrorState error={error} onRetry={reload} /> : (
-          <div className="tbl-wrap" style={{ maxHeight: "calc(100vh - 360px)", minHeight: 300 }}>
+          <div className="tbl-wrap" tabIndex={0} style={{ maxHeight: "calc(100vh - 360px)", minHeight: 300 }}>
             <table className="tbl">
               <thead><tr><th>CVE</th><th>Severity</th><th>EPSS</th><th>Vulnerability</th><th>Software</th><th>Published</th><th>Patch</th></tr></thead>
               <tbody>

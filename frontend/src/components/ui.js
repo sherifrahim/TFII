@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import Icon from "./Icon";
 import { copy as copyText, confBand, fmtNum, normSev } from "../lib/format";
 import { SEV_COLOR, TYPE_COLOR } from "../design/tokens";
@@ -187,7 +187,7 @@ export function PageHeader({ title, sub, eyebrow, actions, children }) {
   );
 }
 
-export function Panel({ title, sub, actions, children, footer, tight, bordered, className = "", style, bodyStyle, id }) {
+export function Panel({ title, sub, actions, children, footer, tight, bordered, className = "", style, bodyStyle, bodyProps, id }) {
   return (
     <section className={`panel ${className}`} style={style} id={id}>
       {(title || actions) && (
@@ -196,7 +196,7 @@ export function Panel({ title, sub, actions, children, footer, tight, bordered, 
           {actions && <div className="row">{actions}</div>}
         </div>
       )}
-      <div className={`panel-b ${tight ? "tight" : ""}`} style={bodyStyle}>{children}</div>
+      <div className={`panel-b ${tight ? "tight" : ""}`} style={bodyStyle} {...bodyProps}>{children}</div>
       {footer && <div className="panel-f">{footer}</div>}
     </section>
   );
@@ -216,9 +216,9 @@ export function Tabs({ tabs, value, onChange, style }) {
   );
 }
 
-export function Segmented({ options, value, onChange }) {
+export function Segmented({ options, value, onChange, ...aria }) {
   return (
-    <div className="seg" role="radiogroup">
+    <div className="seg" role="radiogroup" {...aria}>
       {options.map(o => {
         const [id, label] = Array.isArray(o) ? o : [o, o];
         return <button key={id} role="radio" aria-checked={value === id} className={value === id ? "on" : ""} onClick={() => onChange(id)}>{label}</button>;
@@ -238,18 +238,26 @@ export function SearchInput({ value, onChange, placeholder, autoFocus, style, on
 }
 
 export function Field({ label, hint, children, style }) {
+  // A label has to be tied to its control or screen readers announce an unnamed field: give a single child an id and point the label at it.
+  const auto = useId();
+  const only = React.Children.count(children) === 1 && React.isValidElement(children) ? children : null;
+  const id = (only && only.props.id) || auto;
+  const control = only && !only.props.id ? React.cloneElement(only, { id }) : children;
   return (
     <div className="field" style={style}>
-      {label && <label>{label}</label>}
-      {children}
+      {label && <label htmlFor={only ? id : undefined}>{label}</label>}
+      {control}
       {hint && <div className="hint">{hint}</div>}
     </div>
   );
 }
 
-export function Select({ value, onChange, options, style, className = "" }) {
+export function Select({ value, onChange, options, style, className = "", id, ...aria }) {
+  // Without an explicit name (aria-label, or a label tied through `id`), the first option's text ("Any severity", "All types") names it.
+  const first = options[0];
+  const fallback = !id && !aria["aria-label"] && !aria["aria-labelledby"] ? (Array.isArray(first) ? first[1] : first) : undefined;
   return (
-    <select className={`select ${className}`} value={value} onChange={e => onChange(e.target.value)} style={style}>
+    <select id={id} aria-label={fallback} {...aria} className={`select ${className}`} value={value} onChange={e => onChange(e.target.value)} style={style}>
       {options.map(o => {
         const [v, l] = Array.isArray(o) ? o : [o, o];
         return <option key={v} value={v}>{l}</option>;
@@ -383,7 +391,7 @@ export function Pagination({ total, limit, offset, onChange, onLimit }) {
   return (
     <div className="row" style={{ gap: 10 }}>
       <span className="num">{total ? `${fmtNum(offset + 1)}–${fmtNum(Math.min(offset + limit, total))} of ${fmtNum(total)}` : "0 results"}</span>
-      {onLimit && <Select value={String(limit)} onChange={v => onLimit(Number(v))} options={[["25", "25 / page"], ["50", "50 / page"], ["100", "100 / page"], ["200", "200 / page"]]} style={{ height: 24, fontSize: 11.5 }} />}
+      {onLimit && <Select value={String(limit)} onChange={v => onLimit(Number(v))} aria-label="Rows per page" options={[["25", "25 / page"], ["50", "50 / page"], ["100", "100 / page"], ["200", "200 / page"]]} style={{ height: 24, fontSize: 11.5 }} />}
       <div className="row" style={{ gap: 2 }}>
         <IconButton icon="chevronLeft" size="sm" title="Previous page" disabled={page <= 1} onClick={() => onChange(Math.max(0, offset - limit))} />
         <span className="num" style={{ minWidth: 56, textAlign: "center" }}>{page} / {pages}</span>
@@ -499,9 +507,9 @@ function SparkInline({ data, color = "#8C95A8", w = 84, h = 30 }) {
 // ── Controls: clear on/off, grouped settings, progressive disclosure ──────────
 // Switch: a labelled on/off control that says what it does and what it will do. Prefer it over a bare
 // checkbox for anything that changes behaviour. `hint` is one calm line of help under the label.
-export function Switch({ checked, onChange, label, hint, disabled, id }) {
+export function Switch({ checked, onChange, label, hint, disabled, id, ...aria }) {
   return (
-    <button type="button" id={id} role="switch" aria-checked={!!checked} disabled={disabled} className={`switch ${checked ? "on" : ""}`}
+    <button type="button" id={id} role="switch" aria-checked={!!checked} disabled={disabled} className={`switch ${checked ? "on" : ""}`} {...aria}
       onClick={() => onChange(!checked)}>
       <span className="switch-track"><i /></span>
       {(label || hint) && <span className="switch-text">{label && <b>{label}</b>}{hint && <small>{hint}</small>}</span>}
@@ -523,10 +531,15 @@ export function Check({ checked, onChange, children, disabled, indeterminate }) 
 // A settings list: each row has a title and help on the left and its control on the right.
 export function Settings({ children }) { return <div className="settings">{children}</div>; }
 export function Setting({ title, hint, children }) {
+  // The title names the control beside it (a bare switch has no text of its own).
+  const id = useId();
+  const only = React.Children.count(children) === 1 && React.isValidElement(children) ? children : null;
+  const control = only && typeof only.type !== "string" && !only.props["aria-labelledby"] && !only.props.label
+    ? React.cloneElement(only, { "aria-labelledby": `${id}-t`, ...(hint ? { "aria-describedby": `${id}-h` } : {}) }) : children;
   return (
     <div className="setting">
-      <div className="setting-main"><b>{title}</b>{hint && <small>{hint}</small>}</div>
-      <div className="setting-ctl">{children}</div>
+      <div className="setting-main"><b id={`${id}-t`}>{title}</b>{hint && <small id={`${id}-h`}>{hint}</small>}</div>
+      <div className="setting-ctl">{control}</div>
     </div>
   );
 }
