@@ -50,6 +50,10 @@ class SearchBody(BaseModel):
     q: str = Field(..., min_length=2, max_length=300)
 
 
+class ModelBody(BaseModel):
+    model: str = Field(..., min_length=1, max_length=100)
+
+
 class MailBody(BaseModel):
     address: str = Field(..., min_length=3, max_length=320)
     analysis: dict = Field(default_factory=dict)
@@ -64,10 +68,6 @@ def register(app, d):
             raise HTTPException(status_code=403, detail="This needs full workspace access.")
         return user
 
-    def _provider(conn, user):
-        return ai.choose_provider(d.get_own_key(conn, user["id"], "groq"), d.get_own_key(conn, user["id"], "codecraft"),
-                                  d.PLATFORM_KEYS.get("groq", ""), d.GROQ_MODEL, d.CODECRAFT_MODEL)
-
     def _rows(conn, sql, params=()):
         try:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -76,6 +76,14 @@ def register(app, d):
         except Exception:                                   # a missing optional table must not break the answer
             conn.rollback()
             return []
+
+    def _chosen_model(conn, user):
+        rows = _rows(conn, "SELECT codecraft_model FROM user_ai_prefs WHERE user_id=%s", (user["id"],))
+        return (rows[0]["codecraft_model"] if rows and rows[0].get("codecraft_model") else None) or d.CODECRAFT_MODEL
+
+    def _provider(conn, user):
+        return ai.choose_provider(d.get_own_key(conn, user["id"], "groq"), d.get_own_key(conn, user["id"], "codecraft"),
+                                  d.PLATFORM_KEYS.get("groq", ""), d.GROQ_MODEL, _chosen_model(conn, user))
 
     async def _run(task, user, conn, context, ask="", system=None, max_tokens=900, clean=ai.clean_answer):
         if not AI_LIMIT.allow(user["id"]):
@@ -87,9 +95,10 @@ def register(app, d):
             if d.get_user_daily_usage(conn, user["id"], "groq") >= PLATFORM_DAILY:
                 raise HTTPException(status_code=429, detail=f"Daily limit of {PLATFORM_DAILY} AI answers on the shared key reached. "
                                                             "Add your own Groq or CodeCraft key in Settings to continue.")
+        info = {}
         try:
             async with httpx.AsyncClient(timeout=60) as client:
-                text = await ai.complete(client, prov, system or ai.system_prompt(task), ai.user_prompt(context, ask), max_tokens)
+                text = await ai.complete(client, prov, system or ai.system_prompt(task), ai.user_prompt(context, ask), max_tokens, info=info)
             result = clean(ai.parse_json(text))
         except ai.AiError as e:
             raise HTTPException(status_code=e.status, detail=e.message)
@@ -97,7 +106,7 @@ def register(app, d):
             d.log_api_call(conn, "groq", f"ai:{task}", False, user["id"])
             conn.commit()
         return {"kind": task, "result": result, "ai_generated": True, "provider": prov.label, "model": prov.model,
-                "generated_at": datetime.now(timezone.utc).isoformat()}
+                "usage": info.get("usage"), "generated_at": datetime.now(timezone.utc).isoformat()}
 
     @app.get("/v2/ai/status")
     def ai_status(user=Depends(current), conn=Depends(get_db)):
@@ -189,3 +198,74 @@ def register(app, d):
     async def ai_mail(body: MailBody, user=Depends(ai_cap), conn=Depends(get_db)):
         ctx = {"address": ai.clip(body.address, 200), "analysis": body.analysis}
         return await _run("mail", user, conn, ctx, max_tokens=900)
+
+
+    # ── CodeCraft: is the key working, which models does it offer, how much room is left ──────────────────
+    QUOTA_NOTE = ("CodeCraft does not report your remaining monthly tokens through its API, so TFII cannot show that number. "
+                  "The limits above are your per-minute allowance; the monthly balance is on your CodeCraft dashboard. "
+                  "When it runs out, AI buttons say the account is out of balance.")
+
+    def _codecraft(conn, user):
+        key = d.get_own_key(conn, user["id"], "codecraft")
+        if not key:
+            raise HTTPException(status_code=404, detail="Save your CodeCraft key first (Settings → API keys).")
+        return ai.Provider("codecraft", key, ai.CODECRAFT_BASE, _chosen_model(conn, user), True, False)
+
+    @app.get("/v2/ai/codecraft")
+    async def codecraft_models(user=Depends(current), conn=Depends(get_db)):
+        """The models this person's key can use, the one their AI buttons use, and the per-minute limits."""
+        if not d.get_own_key(conn, user["id"], "codecraft"):
+            return {"has_key": False}
+        prov = _codecraft(conn, user)
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                models, rate = await ai.list_models(client, prov)
+        except ai.AiError as e:
+            return {"has_key": True, "ok": False, "message": e.message, "selected": prov.model, "default": d.CODECRAFT_MODEL}
+        ids = {m["id"] for m in models}
+        return {"has_key": True, "ok": True, "models": models, "selected": prov.model, "selected_available": prov.model in ids if ids else None,
+                "default": d.CODECRAFT_MODEL, "rate": rate, "quota_note": QUOTA_NOTE}
+
+    @app.put("/v2/ai/codecraft/model")
+    async def codecraft_choose_model(body: ModelBody, user=Depends(current), conn=Depends(get_db)):
+        model = body.model.strip()
+        if not ai.MODEL_ID.match(model):
+            raise HTTPException(status_code=422, detail="That is not a valid model name.")
+        prov = _codecraft(conn, user)
+        try:                                                # only a model the key can actually use may be chosen
+            async with httpx.AsyncClient(timeout=20) as client:
+                models, _ = await ai.list_models(client, prov)
+        except ai.AiError as e:
+            raise HTTPException(status_code=e.status, detail=e.message)
+        if models and model not in {m["id"] for m in models}:
+            raise HTTPException(status_code=422, detail="Your key does not offer that model.")
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO user_ai_prefs (user_id, codecraft_model, updated_at) VALUES (%s,%s,NOW())
+                       ON CONFLICT (user_id) DO UPDATE SET codecraft_model=EXCLUDED.codecraft_model, updated_at=NOW()""", (user["id"], model))
+        conn.commit()
+        return {"selected": model}
+
+    @app.post("/v2/ai/codecraft/test")
+    async def codecraft_test(user=Depends(current), conn=Depends(get_db)):
+        """One tiny real request with the chosen model: proves the key, the model and the account all work, and reports
+        what it cost in tokens and what is left of the per-minute limits."""
+        import time
+        if not AI_LIMIT.allow(user["id"]):
+            raise HTTPException(status_code=429, detail="Too many AI requests. Wait a minute.")
+        prov = _codecraft(conn, user)
+        model_row, listed = None, True
+        async with httpx.AsyncClient(timeout=60) as client:
+            try:
+                models, _ = await ai.list_models(client, prov)
+                model_row = next((m for m in models if m["id"] == prov.model), None)
+            except ai.AiError:
+                listed = False                              # a key without the models:read scope can still chat
+            info, started = {}, time.monotonic()
+            try:
+                text = await ai.complete(client, prov, "Reply with exactly one word.", "Say: ok", 16, info=info)
+            except ai.AiError as e:
+                return {"ok": False, "model": prov.model, "message": e.message, "rate": info.get("rate")}
+        usage = info.get("usage") or {}
+        return {"ok": True, "model": prov.model, "model_name": model_row["name"] if model_row else None, "listed": listed and model_row is not None,
+                "reply": ai.clip(text, 60), "latency_ms": int((time.monotonic() - started) * 1000), "usage": usage, "rate": info.get("rate"),
+                "cost_usd": ai.estimate_cost(model_row, usage), "quota_note": QUOTA_NOTE}

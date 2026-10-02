@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "../lib/api";
+import { api, apiJSON } from "../lib/api";
 import Icon from "./Icon";
-import { Badge, Button, Callout, Modal } from "./ui";
+import { Badge, Button, Callout, Modal, Select, useToast } from "./ui";
 
 // Every provider TFII can use, grouped by what it is for. Keys are optional; each one unlocks more detail.
 export const KEY_SERVICES = [
@@ -26,6 +26,95 @@ export function useKeys() {
   }, []);
   useEffect(() => { load(); }, [load]);
   return { rows, quota, reload: load };
+}
+
+
+// Under a saved CodeCraft key: which models the key offers, which one the AI buttons use, and a real test request that
+// shows what it cost and how much of the per-minute allowance is left.
+const fmtN = n => (typeof n === "number" ? n.toLocaleString() : "?");
+const perMillion = v => (typeof v === "number" ? `$${(v * 1000).toFixed(v * 1000 < 1 ? 3 : 2)}` : "n/a");
+
+export function CodeCraftPanel() {
+  const toast = useToast();
+  const [info, setInfo] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [result, setResult] = useState(null);
+
+  const load = useCallback(async () => {
+    setBusy("load"); setErr(null);
+    try { setInfo(await apiJSON("/v2/ai/codecraft")); } catch (e) { setErr(e.message); }
+    setBusy("");
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function choose(model) {
+    setBusy("choose");
+    try { await apiJSON("/v2/ai/codecraft/model", { method: "PUT", body: { model } }); setInfo(i => ({ ...i, selected: model, selected_available: true })); setResult(null); toast(`AI buttons will use ${model}`, "ok"); }
+    catch (e) { toast(e.message, "error"); }
+    setBusy("");
+  }
+  async function test() {
+    setBusy("test"); setResult(null);
+    try { setResult(await apiJSON("/v2/ai/codecraft/test", { method: "POST" })); } catch (e) { setResult({ ok: false, message: e.message }); }
+    setBusy("");
+  }
+
+  if (!info && !err) return <div className="faint small" style={{ marginTop: 10 }}><span className="spinner" /> Checking your CodeCraft key…</div>;
+  if (err) return <div className="small" style={{ marginTop: 10, color: "var(--critical)" }}>{err}</div>;
+  if (!info.has_key) return null;
+  const cur = (info.models || []).find(m => m.id === info.selected);
+  return (
+    <div className="cc-panel" data-testid="codecraft-panel">
+      {!info.ok ? (
+        <div className="small" style={{ color: "var(--critical)" }} role="alert">✕ {info.message}</div>
+      ) : (
+        <>
+          <div className="row between wrap" style={{ gap: 10 }}>
+            <div className="strong small">Models your key offers <span className="faint" style={{ fontWeight: 400 }}>· {info.models.length}</span></div>
+            <Button size="sm" variant="ghost" icon="refresh" loading={busy === "load"} onClick={load}>Refresh</Button>
+          </div>
+          <div className="row" style={{ gap: 8, marginTop: 8 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Select value={info.selected} onChange={choose} style={{ width: "100%" }}
+                options={[...(info.selected_available === false ? [[info.selected, `${info.selected} (not offered by your key)`]] : []),
+                  ...info.models.map(m => [m.id, `${m.name}${m.context_window ? ` · ${Math.round(m.context_window / 1000)}k context` : ""}${m.input_per_1k != null ? ` · ${perMillion(m.input_per_1k)}/M in` : ""}`])]} />
+            </div>
+            <Button size="sm" variant="primary" icon="zap" loading={busy === "test"} onClick={test} data-testid="codecraft-test">Run live test</Button>
+          </div>
+          {info.selected_available === false && <div className="small" style={{ color: "var(--high)", marginTop: 6 }}>The model currently chosen is not in your key's list. Pick one above.</div>}
+          {cur && (
+            <div className="small faint" style={{ marginTop: 8 }}>
+              {cur.description || cur.name}
+              {cur.capabilities.length > 0 && <span className="row wrap" style={{ gap: 4, marginTop: 6 }}>{cur.capabilities.map(c => <span key={c} className="tag">{c}</span>)}</span>}
+              <div style={{ marginTop: 6 }}>Price per million tokens: {perMillion(cur.output_per_1k)} out, {perMillion(cur.input_per_1k)} in.</div>
+            </div>
+          )}
+          {info.rate && (info.rate.requests_limit != null || info.rate.tokens_limit != null) && (
+            <div className="small" style={{ marginTop: 8 }}>
+              Per-minute allowance: {info.rate.requests_limit != null && <>{fmtN(info.rate.requests_limit)} requests</>}{info.rate.tokens_limit != null && <> · {fmtN(info.rate.tokens_limit)} tokens</>}
+            </div>
+          )}
+        </>
+      )}
+      {result && (
+        <div className="cc-result" role="status" data-testid="codecraft-result" style={{ borderColor: result.ok ? "var(--success)" : "var(--critical)" }}>
+          {result.ok ? (
+            <>
+              <div className="strong" style={{ color: "var(--success)" }}>✓ Working. {result.model_name || result.model} answered “{result.reply}” in {fmtN(result.latency_ms)} ms.</div>
+              <div className="small faint" style={{ marginTop: 4 }}>
+                {result.usage?.total_tokens != null && <>This test used {fmtN(result.usage.total_tokens)} tokens ({fmtN(result.usage.prompt_tokens)} in, {fmtN(result.usage.completion_tokens)} out)</>}
+                {result.cost_usd != null && <>, {result.cost_usd < 0.000001 ? "under $0.000001" : `about $${result.cost_usd.toFixed(6)}`}</>}.
+                {result.rate && (result.rate.requests_remaining != null || result.rate.tokens_remaining != null) && <> Left this minute: {result.rate.requests_remaining != null && <>{fmtN(result.rate.requests_remaining)}/{fmtN(result.rate.requests_limit)} requests</>}{result.rate.tokens_remaining != null && <> · {fmtN(result.rate.tokens_remaining)}/{fmtN(result.rate.tokens_limit)} tokens</>}.</>}
+                {result.listed === false && <> The model is not in your key's list, but it answered.</>}
+              </div>
+            </>
+          ) : <div style={{ color: "var(--critical)" }}>✕ {result.message}</div>}
+        </div>
+      )}
+      <div className="xs faint" style={{ marginTop: 8, maxWidth: 620 }}>{(info && info.quota_note) || "CodeCraft does not report your remaining monthly tokens through its API; check your CodeCraft dashboard for that. If it runs out, AI buttons say the account is out of balance."}</div>
+    </div>
+  );
 }
 
 function KeyRow({ svc, st, onChanged }) {
@@ -84,6 +173,7 @@ function KeyRow({ svc, st, onChanged }) {
             {editing && <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setVal(""); setCheck(null); }}>Cancel</Button>}
           </div>
         )}
+        {svc.id === "codecraft" && own && !editing && <CodeCraftPanel />}
         {check && !busy && (
           <div role="status" data-testid={`key-check-${svc.id}`} className="small" style={{ marginTop: 8, fontWeight: 550, color: check.status === "valid" ? "var(--success)" : check.status === "invalid" ? "var(--critical)" : "var(--high)" }}>
             {check.status === "valid" ? "✓ Key works" : check.status === "invalid" ? "✕ Key rejected" : "! Could not confirm"}

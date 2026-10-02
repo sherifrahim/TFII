@@ -154,6 +154,11 @@ MIGRATIONS = [
             fetched_at TIMESTAMP DEFAULT NOW(), PRIMARY KEY (user_id, value))"""),
         O("CREATE INDEX IF NOT EXISTS idx_lookup_detail_fetched ON lookup_detail_cache (fetched_at)"),
     ]),
+    (5, "user_ai_prefs", [
+        # Which CodeCraft model a person's AI buttons use. Their plan decides which models exist, so it is theirs to pick.
+        R("""CREATE TABLE IF NOT EXISTS user_ai_prefs (
+            user_id VARCHAR(100) PRIMARY KEY, codecraft_model VARCHAR(100), updated_at TIMESTAMP DEFAULT NOW())"""),
+    ]),
 ]
 
 

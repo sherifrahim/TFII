@@ -82,7 +82,10 @@ def fake_ai(monkeypatch, client):
     import main
     seen = {}
 
-    async def fake(client_, provider, system, prompt, max_tokens=900):
+    async def fake(client_, provider, system, prompt, max_tokens=900, info=None):
+        if info is not None:
+            info["usage"] = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+            info["rate"] = {"requests_limit": 60, "requests_remaining": 57, "tokens_limit": 200000, "tokens_remaining": 195000, "resets_at": 1}
         seen.update(provider=provider, system=system, prompt=prompt)
         return json.dumps(seen.get("answer") or {"headline": "Looks bad", "summary": "Two providers flag it.", "points": ["p1"],
                                                   "next_steps": ["block it"], "caveats": ["VT only"]})
@@ -200,3 +203,105 @@ def test_a_personal_key_is_used_before_the_shared_one_and_is_not_capped(client, 
         assert "cc_personal_test_key_123" not in out.text
     finally:
         client.delete("/users/me/api-keys/codecraft", headers=analyst)
+
+
+# ── CodeCraft: models, model choice, live test ────────────────────────────────
+MODELS_BODY = {"object": "list", "data": [
+    {"id": "claude-opus-4.8", "name": "Claude Opus 4.8", "description": "General-purpose chat model", "type": "chat", "context_window": 128000,
+     "capabilities": {"reasoning": True, "json_mode": True, "vision": False}, "pricing": {"input_per_1k": 0.000115, "output_per_1k": 0.00023}},
+    {"id": "gemma-2-2b", "name": "Gemma 2 2B", "type": "chat", "context_window": 8000, "capabilities": ["streaming"], "pricing": {}},
+    {"id": "bad id with spaces", "name": "junk"}, {"no_id": True}, "not a dict"]}
+
+
+def test_model_list_is_cleaned():
+    models = ai.parse_models(MODELS_BODY)
+    assert [m["id"] for m in models] == ["claude-opus-4.8", "gemma-2-2b"]
+    assert models[0]["capabilities"] == ["reasoning", "json_mode"] and models[0]["input_per_1k"] == 0.000115
+    assert models[1]["input_per_1k"] is None and ai.parse_models("garbage") == [] and ai.parse_models({"data": None}) == []
+
+
+def test_rate_limit_headers_are_read_and_missing_ones_stay_empty():
+    r = ai.rate_info({"x-ratelimit-limit": "60", "x-ratelimit-remaining": "58", "x-ratelimit-remaining-tokens": "195000", "x-ratelimit-reset": "1790000000"})
+    assert r == {"requests_limit": 60, "requests_remaining": 58, "tokens_limit": None, "tokens_remaining": 195000, "resets_at": 1790000000}
+
+
+@pytest.mark.parametrize("status,body,expect", [
+    (402, {"error": {"type": "insufficient_funds"}}, "out of balance"),
+    (403, {"error": {"code": "insufficient_scope"}}, "scope"),
+    (401, {"error": {"code": "invalid_api_key"}}, "rejected the key"),
+    (404, {"error": {"code": "model_not_found"}}, "did not accept model"),
+])
+def test_codecraft_errors_are_explained(status, body, expect):
+    p = ai.Provider("codecraft", "cc_k", ai.CODECRAFT_BASE, "m", True, False)
+    err = ai.explain_status(p, httpx.Response(status, json=body))
+    assert err and expect in err.message
+
+
+def test_a_codecraft_call_asks_for_at_least_the_documented_minimum_tokens():
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6}},
+                              headers={"x-ratelimit-remaining": "59", "x-ratelimit-limit": "60"})
+
+    async def go():
+        info = {}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            await ai.complete(c, ai.Provider("codecraft", "cc_k", ai.CODECRAFT_BASE, "m", True, False), "s", "p", 300, info=info)
+        return info
+    info = asyncio.run(go())
+    assert sent["max_tokens"] == 2048 and "response_format" not in sent
+    assert info["usage"]["total_tokens"] == 6 and info["rate"]["requests_remaining"] == 59
+
+
+@pytest.fixture
+def codecraft(monkeypatch, client, analyst, fake_ai):
+    async def fake_list(client_, provider):
+        return ai.parse_models(MODELS_BODY), {"requests_limit": 60, "requests_remaining": 59, "tokens_limit": 200000, "tokens_remaining": 199000, "resets_at": 1}
+    monkeypatch.setattr(ai, "list_models", fake_list)
+    r = client.post("/users/me/api-keys/codecraft", json={"api_key": "cc_personal_test_key_123"}, headers=analyst)
+    assert r.status_code in (200, 201), r.text
+    yield analyst
+    client.delete("/users/me/api-keys/codecraft", headers=analyst)
+
+
+def test_without_a_saved_key_there_is_nothing_to_list(client, analyst, fake_ai):
+    assert client.get("/v2/ai/codecraft", headers=analyst).json() == {"has_key": False}
+    assert client.post("/v2/ai/codecraft/test", headers=analyst).status_code == 404
+
+
+def test_the_key_lists_its_models_and_limits_without_echoing_the_key(client, codecraft):
+    r = client.get("/v2/ai/codecraft", headers=codecraft)
+    body = r.json()
+    assert body["ok"] is True and [m["id"] for m in body["models"]] == ["claude-opus-4.8", "gemma-2-2b"]
+    assert body["rate"]["requests_remaining"] == 59 and "monthly" in body["quota_note"] and "cc_personal_test_key_123" not in r.text
+
+
+def test_a_model_can_be_chosen_only_from_what_the_key_offers_and_is_then_used(client, codecraft, fake_ai):
+    assert client.put("/v2/ai/codecraft/model", json={"model": "gpt-not-offered"}, headers=codecraft).status_code == 422
+    assert client.put("/v2/ai/codecraft/model", json={"model": "bad model!"}, headers=codecraft).status_code == 422
+    ok = client.put("/v2/ai/codecraft/model", json={"model": "gemma-2-2b"}, headers=codecraft)
+    assert ok.status_code == 200 and ok.json()["selected"] == "gemma-2-2b"
+    assert client.get("/v2/ai/codecraft", headers=codecraft).json()["selected"] == "gemma-2-2b"
+    out = client.post("/v2/ai/bulk-digest", json={"rows": [{"value": "x.example"}]}, headers=codecraft).json()
+    assert out["model"] == "gemma-2-2b" and out["usage"]["total_tokens"] == 120 and fake_ai["provider"].model == "gemma-2-2b"
+
+
+def test_the_live_test_reports_tokens_cost_and_limits(client, codecraft, fake_ai):
+    client.put("/v2/ai/codecraft/model", json={"model": "claude-opus-4.8"}, headers=codecraft)
+    fake_ai["answer"] = None
+    r = client.post("/v2/ai/codecraft/test", headers=codecraft)
+    body = r.json()
+    assert r.status_code == 200 and body["ok"] is True and body["model"] == "claude-opus-4.8" and body["listed"] is True
+    assert body["usage"]["total_tokens"] == 120 and body["cost_usd"] == round((100 * 0.000115 + 20 * 0.00023) / 1000, 6)
+    assert body["rate"]["requests_remaining"] == 57 and body["rate"]["tokens_remaining"] == 195000 and "monthly" in body["quota_note"]
+    assert "cc_personal_test_key_123" not in r.text
+
+
+def test_the_live_test_reports_a_provider_failure_instead_of_raising(client, codecraft, monkeypatch):
+    async def boom(client_, provider, system, prompt, max_tokens=900, info=None):
+        raise ai.AiError(402, "CodeCraft says the account is out of balance.")
+    monkeypatch.setattr(ai, "complete", boom)
+    body = client.post("/v2/ai/codecraft/test", headers=codecraft).json()
+    assert body["ok"] is False and "out of balance" in body["message"]

@@ -230,7 +230,7 @@ sudo certbot --nginx -d your-domain.com
 | `IPQS_API_KEY` | Optional | IPQualityScore email address risk (on request) |
 | `MXTOOLBOX_API_KEY` | Optional | MxToolbox deep mail-domain analysis (on request) |
 | `GROQ_API_KEY` | Optional | KQL/SPL query builder and the AI assistants ([console.groq.com](https://console.groq.com)) |
-| `CODECRAFT_MODEL` | Optional | Model used when someone saves their own [CodeCraft](https://www.codecraftapi.com/) key (default `deepseek-v4-flash-0731`) |
+| `CODECRAFT_MODEL` | Optional | Default model for people who save their own [CodeCraft](https://www.codecraftapi.com/) key (default `deepseek-v4-flash-0731`). Each person can pick another from the list their key offers in Settings → API keys |
 | `VT_API_KEY` | Optional | VirusTotal enrichment |
 | `OTX_API_KEY` | Optional | AlienVault OTX pulses feed |
 | `URLHAUS_AUTH_KEY` | Optional | abuse.ch Auth-Key (URLhaus, ThreatFox, MalwareBazaar) — free from [auth.abuse.ch](https://auth.abuse.ch/) |

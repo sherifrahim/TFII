@@ -245,8 +245,51 @@ def clean_filters(obj: dict) -> dict:
 
 
 # ── The call ──────────────────────────────────────────────────────────────────
-async def complete(client: httpx.AsyncClient, p: Provider, system: str, prompt: str, max_tokens: int = 900) -> str:
-    body = {"model": p.model, "temperature": 0.2, "max_tokens": max_tokens,
+def _int_header(headers, name) -> Optional[int]:
+    try:
+        return int(float(headers.get(name)))
+    except (TypeError, ValueError):
+        return None
+
+
+def rate_info(headers) -> dict:
+    """Per-minute limits a provider reports on every response (CodeCraft: X-RateLimit-*). Missing ones stay None."""
+    return {"requests_limit": _int_header(headers, "x-ratelimit-limit"), "requests_remaining": _int_header(headers, "x-ratelimit-remaining"),
+            "tokens_limit": _int_header(headers, "x-ratelimit-limit-tokens"), "tokens_remaining": _int_header(headers, "x-ratelimit-remaining-tokens"),
+            "resets_at": _int_header(headers, "x-ratelimit-reset")}
+
+
+def _error_code(r) -> str:
+    try:
+        return str((r.json().get("error") or {}).get("code") or "")
+    except (ValueError, AttributeError):
+        return ""
+
+
+def explain_status(p: Provider, r) -> Optional["AiError"]:
+    """The same plain-language errors for a chat call and for a model-list call. None means the status is fine."""
+    code = _error_code(r)
+    if r.status_code == 401:
+        return AiError(502, f"{p.label} rejected the key. " + ("Check it in Settings → API keys." if p.personal else "The platform key needs attention."))
+    if r.status_code == 402:
+        return AiError(402, f"{p.label} says the account is out of balance. Top it up or wait for the monthly allowance to renew.")
+    if r.status_code == 403:
+        what = "The key does not have the permission this needs (CodeCraft keys have separate scopes: inference, models:read)." if code == "insufficient_scope" else "The key was refused."
+        return AiError(502, f"{p.label}: {what}")
+    if r.status_code == 429:
+        wait = r.headers.get("retry-after")
+        return AiError(429, f"{p.label} is rate limiting requests. Wait {wait + ' seconds' if wait else 'a minute'} and retry.")
+    if r.status_code in (400, 404, 422) and (r.status_code != 422 or code):
+        hint = " Pick a model your plan offers in Settings → API keys." if p.name == "codecraft" else " The model may have been retired; set GROQ_MODEL."
+        return AiError(502, f"{p.label} did not accept model '{p.model}'.{hint}")
+    if r.status_code != 200:
+        return AiError(502, f"{p.label} returned an error ({r.status_code}).")
+    return None
+
+
+async def complete(client: httpx.AsyncClient, p: Provider, system: str, prompt: str, max_tokens: int = 900, info: Optional[dict] = None) -> str:
+    # CodeCraft documents a 2048-token minimum for max_tokens; ask for it rather than depend on how it handles less.
+    body = {"model": p.model, "temperature": 0.2, "max_tokens": max(max_tokens, 2048) if p.name == "codecraft" else max_tokens,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]}
     if p.json_mode:
         body["response_format"] = {"type": "json_object"}
@@ -256,19 +299,63 @@ async def complete(client: httpx.AsyncClient, p: Provider, system: str, prompt: 
         raise AiError(504, f"{p.label} took too long to answer. Try again.")
     except httpx.HTTPError:
         raise AiError(502, f"{p.label} could not be reached.")
-    if r.status_code in (401, 403):
-        raise AiError(502, f"{p.label} rejected the key. " + ("Check it in Settings → API keys." if p.personal else "The platform key needs attention."))
-    if r.status_code == 429:
-        raise AiError(429, f"{p.label} is rate limiting requests. Wait a minute and retry.")
-    if r.status_code in (400, 404):
-        hint = " Set CODECRAFT_MODEL to a model your plan offers." if p.name == "codecraft" else " The model may have been retired; set GROQ_MODEL."
-        raise AiError(502, f"{p.label} did not accept model '{p.model}'.{hint}")
-    if r.status_code != 200:
-        raise AiError(502, f"{p.label} returned an error ({r.status_code}).")
+    if info is not None:
+        info["rate"] = rate_info(r.headers)
+    err = explain_status(p, r)
+    if err:
+        raise err
     try:
-        content = r.json()["choices"][0]["message"]["content"]
+        data = r.json()
+        content = data["choices"][0]["message"]["content"]
     except (ValueError, KeyError, IndexError, TypeError):
         raise AiError(502, f"{p.label} sent an answer TFII could not read.")
+    if info is not None:
+        u = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        info["usage"] = {k: u.get(k) for k in ("prompt_tokens", "completion_tokens", "total_tokens") if isinstance(u.get(k), int)}
+        info["finish_reason"] = (data["choices"][0].get("finish_reason") or "")[:20]
     if not content:
         raise AiError(502, f"{p.label} sent an empty answer. Try again.")
     return content
+
+
+# ── CodeCraft: which models this key can use ──────────────────────────────────
+MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\-]{0,99}$")
+
+
+def parse_models(body) -> list:
+    out = []
+    for m in (body.get("data") if isinstance(body, dict) else None) or []:
+        if not isinstance(m, dict) or not isinstance(m.get("id"), str) or not MODEL_ID.match(m["id"]):
+            continue
+        caps = m.get("capabilities") if isinstance(m.get("capabilities"), (list, dict)) else []
+        caps = [k for k, v in caps.items() if v] if isinstance(caps, dict) else [c for c in caps if isinstance(c, str)]
+        pr = m.get("pricing") if isinstance(m.get("pricing"), dict) else {}
+        num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # noqa: E731
+        out.append({"id": m["id"], "name": clip(m.get("name") or m["id"], 80), "description": clip(m.get("description"), 160),
+                    "type": clip(m.get("type"), 20), "context_window": m.get("context_window") if isinstance(m.get("context_window"), int) else None,
+                    "capabilities": [clip(c, 20) for c in caps][:8], "input_per_1k": num(pr.get("input_per_1k")), "output_per_1k": num(pr.get("output_per_1k"))})
+    return sorted(out, key=lambda m: (m["type"] != "chat", m["id"]))[:200]
+
+
+async def list_models(client: httpx.AsyncClient, p: Provider) -> tuple:
+    """(models, rate limits) for the key. Raises AiError with a plain message when the key cannot list models."""
+    try:
+        r = await client.get(p.base + "/models", headers={"Authorization": f"Bearer {p.key}"})
+    except httpx.TimeoutException:
+        raise AiError(504, f"{p.label} took too long to answer.")
+    except httpx.HTTPError:
+        raise AiError(502, f"{p.label} could not be reached.")
+    err = explain_status(p, r) if r.status_code != 404 else AiError(502, f"{p.label} has no model list for this key.")
+    if err:
+        raise err
+    try:
+        return parse_models(r.json()), rate_info(r.headers)
+    except ValueError:
+        raise AiError(502, f"{p.label} sent a model list TFII could not read.")
+
+
+def estimate_cost(model: Optional[dict], usage: dict) -> Optional[float]:
+    """Dollars for this call at the listed per-1k-token prices, or None when the model's prices are not known."""
+    if not model or model.get("input_per_1k") is None or model.get("output_per_1k") is None:
+        return None
+    return round((usage.get("prompt_tokens", 0) * model["input_per_1k"] + usage.get("completion_tokens", 0) * model["output_per_1k"]) / 1000, 6)

@@ -780,3 +780,7 @@ html.no-motion *, html.no-motion *::before, html.no-motion *::after { animation:
 .ask-ai { display: flex; gap: 8px; align-items: center; padding: 10px; border: 1px solid var(--accent-line); border-radius: 12px; background: var(--accent-dim); margin-bottom: 12px; }
 .ask-ai .input { flex: 1; }
 .ai-panel.mb { margin-bottom: 16px; }
+
+/* ── CodeCraft panel (Settings → API keys) ───────────────────────────────────── */
+.cc-panel { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: rgba(255, 255, 255, .02); }
+.cc-result { margin-top: 10px; padding: 10px 12px; border: 1px solid; border-radius: 10px; background: rgba(255, 255, 255, .02); font-size: 13px; }
