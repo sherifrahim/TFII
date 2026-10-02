@@ -1,0 +1,63 @@
+name: Docker quick start
+
+# Builds the images the README's Docker quick start builds, starts the stack, and checks what a first-time user
+# needs: the UI's scripts load, the API answers through nginx, the generated admin password logs in, and an API key
+# can be saved. These are the things that were once broken without any other check noticing.
+on:
+  pull_request:
+    paths: ["docker/**", "docker-compose*.yml", "scripts/docker-setup.sh", "frontend/**", "backend/**", ".github/workflows/docker.yml"]
+  push:
+    branches: [master]
+    paths: ["docker/**", "docker-compose*.yml", "scripts/docker-setup.sh", "frontend/**", "backend/**", ".github/workflows/docker.yml"]
+  workflow_dispatch:
+
+jobs:
+  quickstart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the setup script (HTTP mode, localhost)
+        run: |
+          # The script pauses so you can edit DOMAIN in .env; do that edit for it, then answer "HTTP only".
+          ( while [ ! -f .env ]; do sleep 0.2; done; sleep 1; sed -i 's|^DOMAIN=.*|DOMAIN=localhost|; s|^ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=http://localhost|' .env ) &
+          ( sleep 3; printf '\n1\n' ) | timeout 900 bash scripts/docker-setup.sh
+
+      - name: Check what a first-time user needs
+        run: |
+          set -e
+          for i in $(seq 1 30); do curl -fs http://localhost/health >/dev/null && break; sleep 2; done
+          curl -fs http://localhost/health
+
+          # The page's script and stylesheet must actually load (a bad nginx path once made them redirect: blank page).
+          page=$(curl -fs http://localhost/ui/)
+          js=$(echo "$page" | grep -o '/ui/static/js/main[^"]*' | head -1)
+          css=$(echo "$page" | grep -o '/ui/static/css/[^"]*' | head -1)
+          test -n "$js" && test -n "$css"
+          out=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "http://localhost$js"); echo "script: $out"
+          echo "$out" | grep -q '^200 .*javascript'
+          out=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "http://localhost$css"); echo "stylesheet: $out"
+          echo "$out" | grep -q '^200 text/css'
+          curl -sI "http://localhost$js" | grep -qi '^x-content-type-options: nosniff'
+          curl -sI http://localhost/ui/ | grep -qi '^cache-control: no-cache'
+
+          # The API address must not be baked in as https://localhost (the setup's DOMAIN): the UI uses the page's own origin.
+          if docker compose exec -T frontend sh -c 'grep -rl "https://localhost" /usr/share/nginx/html/ui/static/js' | grep -q .; then
+            echo "the UI has a hard-coded API address"; exit 1
+          fi
+
+          # The generated admin password logs in, and saving an API key works (needs a valid ENCRYPTION_KEY or a safe fallback).
+          pw=$(grep '^ADMIN_INITIAL_PASSWORD=' .env | cut -d= -f2-)
+          token=$(curl -fs -X POST http://localhost/auth/login -d username=admin --data-urlencode "password=$pw" | python3 -c 'import sys, json; print(json.load(sys.stdin)["access_token"])')
+          test -n "$token"
+          curl -fs -X POST http://localhost/users/me/api-keys/groq -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -d '{"api_key":"gsk_ci_test_key_value"}'
+          echo; echo "quick start OK"
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=80
+
+      - name: Stop
+        if: always()
+        run: docker compose down -v

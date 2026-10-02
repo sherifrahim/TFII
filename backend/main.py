@@ -92,10 +92,21 @@ _PLATFORM_GLOBALS = {"virustotal": "VT_API_KEY", "abuseipdb": "ABUSEIPDB_API_KEY
                      "nvd": "NVD_API_KEY", "groq": "GROQ_API_KEY", "urlhaus": "URLHAUS_AUTH_KEY"}
 
 # ── ENCRYPTION ────────────────────────────────────────────────────────────────
+_warned_bad_encryption_key = False
+
 def _get_fernet():
+    global _warned_bad_encryption_key
     from cryptography.fernet import Fernet
     if ENCRYPTION_KEY:
-        return Fernet(ENCRYPTION_KEY.encode())
+        try:
+            return Fernet(ENCRYPTION_KEY.encode())
+        except ValueError:
+            # An invalid value (typically the "replace_with_fernet_key" placeholder from .env.example) used to make
+            # every attempt to save an API key fail with a 500. Treat it as unset and say so, once.
+            if not _warned_bad_encryption_key:
+                _warned_bad_encryption_key = True
+                print("[security] ENCRYPTION_KEY is not a valid Fernet key; stored API keys are protected with a key derived "
+                      "from SECRET_KEY instead. Generate one with: python3 -c \"import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())\"")
     # Derive a key from SECRET_KEY as fallback (less secure but functional)
     import base64, hashlib
     key = base64.urlsafe_b64encode(hashlib.sha256(SECRET_KEY.encode()).digest())

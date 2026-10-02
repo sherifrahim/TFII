@@ -46,8 +46,6 @@ services:
     build:
       context: .
       dockerfile: docker/frontend.Dockerfile
-      args:
-        DOMAIN: ${DOMAIN:-localhost}   # Injected into React at build time
     restart: unless-stopped
     ports:
       - "80:80"

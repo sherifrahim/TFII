@@ -39,15 +39,15 @@ if [ ! -f .env ]; then
     # Generate secrets automatically
     SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     DB_PASS=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
-    ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || echo "")
+    # A Fernet key is 32 random bytes, URL-safe base64 encoded. Built from the standard library so it does not
+    # depend on the host having the `cryptography` package installed.
+    ENCRYPTION_KEY=$(python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())")
     ADMIN_PW=$(python3 -c "import secrets; print(secrets.token_urlsafe(14))")
 
     sed -i "s|replace_with_64_char_hex_string|${SECRET_KEY}|g" .env
     sed -i "s|change_this_strong_password|${DB_PASS}|g" .env
     sed -i "s|^ADMIN_INITIAL_PASSWORD=.*|ADMIN_INITIAL_PASSWORD=${ADMIN_PW}|" .env
-    if [ -n "$ENCRYPTION_KEY" ]; then
-        sed -i "s|replace_with_fernet_key|${ENCRYPTION_KEY}|g" .env
-    fi
+    sed -i "s|replace_with_fernet_key|${ENCRYPTION_KEY}|g" .env
 
     echo -e "${GREEN}✓ .env created with auto-generated secrets${NC}"
     echo ""
@@ -56,6 +56,13 @@ if [ ! -f .env ]; then
     echo ""
     read -p "Press Enter when you've set DOMAIN in .env, or Ctrl+C to exit..."
     echo ""
+fi
+
+# A placeholder left in .env (for example from an older run of this script) would be used as a real secret.
+if grep -q -E "replace_with_|change_this_strong_password" .env; then
+    echo -e "${RED}✗ .env still contains a placeholder (replace_with_… or change_this_strong_password).${NC}"
+    echo "  Fill it in, or delete .env and run this script again to generate fresh secrets."
+    exit 1
 fi
 
 # ── Read DOMAIN from .env ─────────────────────────────────────────────────────
@@ -93,7 +100,7 @@ echo -e "${BOLD}Building and starting TFII...${NC}"
 echo "(First build takes 3-5 minutes — subsequent starts are fast)"
 echo ""
 
-docker compose $COMPOSE_FILES build --build-arg DOMAIN="${DOMAIN}"
+docker compose $COMPOSE_FILES build
 docker compose $COMPOSE_FILES up -d
 
 # ── Wait for backend to be ready ─────────────────────────────────────────────
