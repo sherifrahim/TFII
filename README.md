@@ -28,6 +28,7 @@ Most small teams cannot run a full threat-intel platform, and most free feeds ar
 | ![IOC Intelligence](docs/screenshots/02-ioc-intelligence.png) **IOC Intelligence** — filter, facet, bulk-act | ![Indicator and DNS](docs/screenshots/03-indicator-and-dns.png) **One page per indicator** — reasoning, enrichment, DNS records |
 | ![Relationship graph](docs/screenshots/04-relationship-graph.png) **Relationship graph** | ![Bulk lookup](docs/screenshots/05-bulk-lookup.png) **Bulk lookup** — 150 at a time, CSV export |
 | ![CVE Intelligence](docs/screenshots/06-cve-intelligence.png) **CVE Intelligence** — KEV, EPSS, your software | ![Global search](docs/screenshots/07-global-search.png) **Ctrl+K** — search everything |
+| ![Detailed report](docs/screenshots/08-detailed-report.png) **Detailed report** — every provider's answer, side by side | ![Geo intelligence](docs/screenshots/09-geo-intelligence.png) **Geo intelligence** — where your IP indicators sit |
 
 ## Quick Start
 

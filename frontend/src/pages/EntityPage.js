@@ -203,7 +203,7 @@ export default function EntityPage({ kind: rawKind, refv, tab = "overview", inv 
             {kind === "cve" && tracked && hd.severity && hd.severity !== "none" && <Badge tone={hd.severity} dot>{hd.severity}</Badge>}
             {hd.tlp && <TLPBadge tlp={hd.tlp} />}
             {hd.status && <StatusBadge status={hd.status} />}
-            {hd.malware_family && <a className="badge violet" title={hd.malware_family} style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block" }} href={`#/malware/${enc(hd.malware_family)}`}>{hd.malware_family}</a>}
+            {hd.malware_family && <a className="badge violet" title={hd.malware_family} style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "middle", }} href={`#/malware/${enc(hd.malware_family)}`}>{hd.malware_family}</a>}
           </div>
           <div className="row" style={{ gap: 6, alignItems: "flex-start" }}>
             {["indicator", "cve"].includes(kind) ? <LongValue value={hd.title} /> : <h1 className="page-title" style={{ fontSize: 24, overflowWrap: "anywhere" }}>{hd.title}</h1>}
