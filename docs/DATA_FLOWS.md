@@ -44,7 +44,7 @@ TFII is self-hosted and has **no telemetry**. It never sends anything to the pro
 
 ## The browser
 
-The web app loads the **Inter** and **JetBrains Mono** fonts from Google Fonts. That means a visitor's browser contacts `fonts.googleapis.com` / `fonts.gstatic.com` when the page loads. If that matters to you (privacy rules, air-gapped networks), self-host the fonts by replacing the `@import` at the top of `frontend/src/design/tfii.css` and tightening the Content-Security-Policy in `frontend/public/index.html`.
+The web app self-hosts the **Inter** and **JetBrains Mono** fonts via the `@fontsource-variable/inter` and `@fontsource-variable/jetbrains-mono` packages (imported from `frontend/src/Root.js`). No `@import` or link reaches `fonts.googleapis.com` or `fonts.gstatic.com` — both `@font-face` rules ship from the app bundle under `font-src 'self' data:` in the Content-Security-Policy meta tag in `frontend/index.html`, and `style-src`/`connect-src` allow only `'self'`. The page is safe for air-gapped deployments and environments that block third-party connections.
 
 ## What is stored, and where
 
