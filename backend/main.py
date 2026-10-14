@@ -5648,7 +5648,7 @@ async def cve_multi_lookup(request: Request, id: str, user=Depends(get_current_u
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/cve/report")
-async def cve_report(id: str, format: str = "email", user=Depends(get_current_user)):
+async def cve_report(id: str, format: str = "email", user=Depends(get_current_user), conn=Depends(get_db)):
     """
     Generate a professional CVE advisory report or email.
     Fetches CVE data, checks for PoC exploits, and uses Groq to structure output.
@@ -5657,9 +5657,6 @@ async def cve_report(id: str, format: str = "email", user=Depends(get_current_us
     cve_id = id.upper().strip()
     if not CVE_ID_RE.match(cve_id):
         raise HTTPException(status_code=400, detail=f"Invalid CVE ID: {id}")
-
-    if not GROQ_API_KEY:
-        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured.")
 
     year = cve_id.split("-")[1]
     nvd_headers = {"User-Agent":"ThreatFeed-CTI/1.0"}
@@ -6077,36 +6074,7 @@ Be factual. Use the provided data only. Do not invent version numbers or links."
 
         user_msg = f"Write a CVE summary brief for:\n\n{context}"
 
-    try:
-        async with httpx.AsyncClient(timeout=45) as c:
-            r = await c.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}",
-                         "Content-Type": "application/json"},
-                json={
-                    "model": GROQ_MODEL,
-                    "messages": [{"role":"system","content":system},
-                                 {"role":"user",  "content":user_msg}],
-                    "temperature": 0.15,
-                    "max_tokens": 1800,
-                }
-            )
-        # Check the status before indexing the body. Without this an error
-        # response (429 rate limit, 404 retired model) surfaced as a bare
-        # KeyError — "LLM error: 'choices'" — which says nothing about the
-        # actual cause and sent us looking in the wrong place.
-        if r.status_code == 429:
-            raise HTTPException(status_code=429,
-                detail="AI rate limit reached on Groq. Wait a minute and retry.")
-        if r.status_code != 200:
-            raise HTTPException(status_code=502,
-                detail=f"Groq API error: {r.status_code} {r.text[:180]}")
-        content = r.json()["choices"][0]["message"]["content"]
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[llm] {type(e).__name__}: {str(e)[:200]}")
-        raise HTTPException(status_code=502, detail=f"The AI service failed ({type(e).__name__}). Try again shortly.")
+    content, ai_meta = await ai_complete(conn, user, system, user_msg, max_tokens=1800, task="cve-report", want_json=False, temperature=0.15)
 
     # Extract subject line for emails
     subject = ""
@@ -6130,6 +6098,7 @@ Be factual. Use the provided data only. Do not invent version numbers or links."
         },
         "severity":   severity,
         "score":      score,
+        "ai":         ai_meta,
     }
 
 # The ATT&CK dataset is tens of MB and this host has <1GB of RAM, so parsing it
@@ -6627,33 +6596,15 @@ RESPOND WITH VALID JSON ONLY (no markdown, no backticks around JSON):
   "estimated_fidelity": "Medium — catches common techniques, misses advanced evasion"
 }"""
 
-async def call_groq(system: str, user: str, max_tokens: int = 2500) -> str:
-    async with httpx.AsyncClient(timeout=45) as c:
-        r = await c.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": GROQ_MODEL,
-                "messages": [{"role":"system","content":system},{"role":"user","content":user}],
-                "temperature": 0.2,
-                "max_tokens": max_tokens,
-                "response_format": {"type": "json_object"},
-            }
-        )
-    # 429 is the common failure on the free tier and needs to read as a rate
-    # limit, not a generic upstream fault. 404 almost always means the model
-    # in GROQ_MODEL has been retired.
-    if r.status_code == 429:
-        raise HTTPException(status_code=429,
-            detail="AI rate limit reached on Groq. Wait a minute and retry.")
-    if r.status_code == 404:
-        raise HTTPException(status_code=502,
-            detail=f"Groq rejected model '{GROQ_MODEL}' (404). It may have been retired — "
-                   f"check https://api.groq.com/openai/v1/models and set GROQ_MODEL.")
-    if r.status_code != 200:
-        raise HTTPException(status_code=502,
-            detail=f"Groq API error: {r.status_code} {r.text[:180]}")
-    return r.json()["choices"][0]["message"]["content"]
+async def ai_complete(conn, user, system: str, prompt: str, max_tokens: int = 2500, *, task: str = "tool", want_json: bool = True,
+                      temperature: float = 0.2) -> tuple:
+    """Every AI feature goes through here: the person's CodeCraft key first, then their Groq key, then the shared Groq key
+    (see ai_api.complete_for_user). Returns (text, {provider, model, fallback}); `fallback` lists providers that were
+    skipped and why. A JSON answer must be readable, or the next provider is tried."""
+    import ai as _ai
+    text, prov, failures, _ = await _ai_api.complete_for_user(INTEL_DEPS, conn, user, task, system, prompt, max_tokens, temperature=temperature,
+                                                              want_json=want_json, accept=_ai.parse_json if want_json else None)
+    return text, {"provider": prov.label, "model": prov.model, "fallback": failures}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CLIENT ADVISORY BUILDER
@@ -6959,8 +6910,6 @@ class AdvisoryRequest(BaseModel):
 
 @app.post("/advisory/generate")
 async def generate_advisory(body: AdvisoryRequest, user=Depends(get_current_user), conn=Depends(get_db)):
-    if not GROQ_API_KEY:
-        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured.")
     if not body.ioc_ids and not body.cve_ids:
         raise HTTPException(status_code=400, detail="Select at least one IOC or CVE.")
 
@@ -7062,57 +7011,21 @@ Structure:
 
 Return as JSON: {{"subject": "TLP:{body.tlp} // Threat Advisory — {body.client_name} // {today}", "html": "<full html>", "plain_text": "<plain text version>"}}"""
 
-    try:
-        raw = await call_groq(system_prompt, user_msg, max_tokens=4000)
-        import json as _j
-        # strip markdown fences if present
-        clean = raw.strip()
-        if clean.startswith("```"): clean = re.sub(r"^```[a-z]*\n?","",clean).rstrip("`").strip()
-        data = _j.loads(clean)
-        return {
-            "subject":    data.get("subject",""),
-            "html":       data.get("html",""),
-            "plain_text": data.get("plain_text",""),
-            "iocs":       iocs,
-            "cves":       cves,
-        }
-    except Exception as e:
-        print(f"[advisory] {type(e).__name__}: {str(e)[:200]}")
-        raise HTTPException(status_code=502, detail="Advisory generation failed. Check the server log for details.")
+    raw, meta = await ai_complete(conn, user, system_prompt, user_msg, max_tokens=4000, task="advisory")
+    import ai as _ai
+    data = _ai.parse_json(raw)
+    return {
+        "subject":    data.get("subject",""),
+        "html":       data.get("html",""),
+        "plain_text": data.get("plain_text",""),
+        "iocs":       iocs,
+        "cves":       cves,
+        "ai":         meta,
+    }
 
-
-    async with httpx.AsyncClient(timeout=45) as c:
-        r = await c.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": GROQ_MODEL,
-                "messages": [{"role":"system","content":system},{"role":"user","content":user}],
-                "temperature": 0.2,
-                "max_tokens": max_tokens,
-                "response_format": {"type": "json_object"},
-            }
-        )
-    # 429 is the common failure on the free tier and needs to read as a rate
-    # limit, not a generic upstream fault. 404 almost always means the model
-    # in GROQ_MODEL has been retired.
-    if r.status_code == 429:
-        raise HTTPException(status_code=429,
-            detail="AI rate limit reached on Groq. Wait a minute and retry.")
-    if r.status_code == 404:
-        raise HTTPException(status_code=502,
-            detail=f"Groq rejected model '{GROQ_MODEL}' (404). It may have been retired — "
-                   f"check https://api.groq.com/openai/v1/models and set GROQ_MODEL.")
-    if r.status_code != 200:
-        raise HTTPException(status_code=502,
-            detail=f"Groq API error: {r.status_code} {r.text[:180]}")
-    return r.json()["choices"][0]["message"]["content"]
 
 @app.post("/query-gen/generate")
-async def generate_query(body: QueryGenRequest, user=Depends(require_cap("tools.ai"))):
-    if not GROQ_API_KEY:
-        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured. Add it to .env and restart.")
-
+async def generate_query(body: QueryGenRequest, user=Depends(require_cap("tools.ai")), conn=Depends(get_db)):
     system = SYSTEM_PROMPT_KQL_BUILDER if body.query_type == "kql" else SYSTEM_PROMPT_SPL_BUILDER
     user_msg = body.use_case
     if body.tactic_hint:
@@ -7120,26 +7033,20 @@ async def generate_query(body: QueryGenRequest, user=Depends(require_cap("tools.
     if body.context:
         user_msg += f"\n\nEnvironment context: {body.context}"
 
-    try:
-        raw = await call_groq(system, user_msg, max_tokens=3000)
-        import json as _json
-        data = _json.loads(raw)
-        return data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
+    raw, meta = await ai_complete(conn, user, system, user_msg, max_tokens=3000, task="query-gen")
+    import ai as _ai
+    data = _ai.parse_json(raw)
+    data["ai"] = meta
+    return data
 
 @app.post("/query-gen/explain")
-async def explain_query(body: QueryExplainRequest, user=Depends(require_cap("tools.ai"))):
-    if not GROQ_API_KEY:
-        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured. Add it to .env and restart.")
-
+async def explain_query(body: QueryExplainRequest, user=Depends(require_cap("tools.ai")), conn=Depends(get_db)):
     user_msg = f"Explain this {'KQL' if body.query_type == 'kql' else 'SPL'} query:\n\n{body.query}"
-    try:
-        raw = await call_groq(SYSTEM_PROMPT_KQL_EXPLAIN, user_msg, max_tokens=2500)
-        import json as _json
-        return _json.loads(raw)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
+    raw, meta = await ai_complete(conn, user, SYSTEM_PROMPT_KQL_EXPLAIN, user_msg, max_tokens=2500, task="query-explain")
+    import ai as _ai
+    data = _ai.parse_json(raw)
+    data["ai"] = meta
+    return data
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FILE STORE
@@ -7409,11 +7316,7 @@ class DiffExplainRequest(BaseModel):
 @app.post("/diff/explain")
 @limiter.limit("15/minute")
 async def explain_diff(request: Request, body: DiffExplainRequest,
-                       user=Depends(require_cap("tools.ai"))):
-    if not GROQ_API_KEY:
-        raise HTTPException(status_code=503,
-            detail="GROQ_API_KEY not configured. Add it in Settings → API Keys.")
-
+                       user=Depends(require_cap("tools.ai")), conn=Depends(get_db)):
     diff = (body.diff or "").strip()
     if not diff:
         raise HTTPException(status_code=400, detail="No diff supplied")
@@ -7437,16 +7340,12 @@ async def explain_diff(request: Request, body: DiffExplainRequest,
                      "summary and scope your conclusions to what you can see.\n\n")
     user_msg += f"Unified diff (- removed, + added):\n\n{diff}"
 
-    try:
-        raw = await call_groq(SYSTEM_PROMPT_DIFF_EXPLAIN, user_msg, max_tokens=2500)
-        import json as _json
-        data = _json.loads(raw)
-        data["truncated"] = truncated
-        return data
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
+    raw, meta = await ai_complete(conn, user, SYSTEM_PROMPT_DIFF_EXPLAIN, user_msg, max_tokens=2500, task="diff-explain")
+    import ai as _ai
+    data = _ai.parse_json(raw)
+    data["truncated"] = truncated
+    data["ai"] = meta
+    return data
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

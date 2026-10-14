@@ -11,8 +11,8 @@ export const KEY_SERVICES = [
   { group: "Reputation", id: "otx", name: "AlienVault OTX", url: "https://otx.alienvault.com/settings", desc: "Community threat pulses with adversary and malware context", placeholder: "Your OTX key", icon: "radar" },
   { group: "Email", id: "ipqs", name: "IPQualityScore", url: "https://www.ipqualityscore.com/create-account", desc: "Email address risk: fraud score, disposable, recent abuse (on request)", placeholder: "Your IPQualityScore key", icon: "mail" },
   { group: "Email", id: "mxtoolbox", name: "MxToolbox", url: "https://mxtoolbox.com/user/api", desc: "Deep mail-domain tests: MX, SPF, DMARC, MTA-STS, BIMI (on request)", placeholder: "Your MxToolbox API key", icon: "server" },
-  { group: "AI", id: "groq", name: "Groq", url: "https://console.groq.com/keys", desc: "Fast AI for summaries, triage, query building and explanations", placeholder: "gsk_…", icon: "sparkle" },
-  { group: "AI", id: "codecraft", name: "CodeCraft", url: "https://www.codecraftapi.com/", desc: "An OpenAI-compatible gateway; used for the same AI features if you have no Groq key", placeholder: "cc_…", icon: "zap" },
+  { group: "AI", id: "groq", name: "Groq", url: "https://console.groq.com/keys", desc: "AI fallback: used when CodeCraft is unavailable, and on its own if you have no CodeCraft key", placeholder: "gsk_…", icon: "sparkle" },
+  { group: "AI", id: "codecraft", name: "CodeCraft", url: "https://www.codecraftapi.com/", desc: "Tried first for every AI feature (summaries, triage, query builder and explainer); Groq takes over if it fails", placeholder: "cc_…", icon: "zap" },
   { group: "Other", id: "shodan", name: "Shodan", url: "https://account.shodan.io/", desc: "Open ports and services for a host", placeholder: "Your Shodan key", icon: "globe" },
   { group: "Other", id: "nvd", name: "NVD", url: "https://nvd.nist.gov/developers/request-an-api-key", desc: "A higher request limit for CVE data", placeholder: "Your NVD key", icon: "shieldAlert" },
 ];

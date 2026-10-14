@@ -59,6 +59,54 @@ class MailBody(BaseModel):
     analysis: dict = Field(default_factory=dict)
 
 
+def _rows(conn, sql, params=()):
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+        return cur.fetchall()
+    except Exception:                                       # a missing optional table must not break the answer
+        conn.rollback()
+        return []
+
+
+def chosen_model(d, conn, user):
+    rows = _rows(conn, "SELECT codecraft_model FROM user_ai_prefs WHERE user_id=%s", (user["id"],))
+    return (rows[0]["codecraft_model"] if rows and rows[0].get("codecraft_model") else None) or d.CODECRAFT_MODEL
+
+
+def chain_for(d, conn, user) -> list:
+    return ai.provider_chain(d.get_own_key(conn, user["id"], "groq"), d.get_own_key(conn, user["id"], "codecraft"),
+                             d.PLATFORM_KEYS.get("groq", ""), d.GROQ_MODEL, chosen_model(d, conn, user))
+
+
+async def complete_for_user(d, conn, user, task, system, prompt, max_tokens=900, *, temperature=0.2, want_json=True, accept=None):
+    """The one way every AI feature gets an answer: the caller's CodeCraft key, then their Groq key, then the shared
+    Groq key (capped per person per day). Returns (text, provider used, providers skipped, usage info)."""
+    if not AI_LIMIT.allow(user["id"]):
+        raise HTTPException(status_code=429, detail="Too many AI requests. Wait a minute.")
+    chain = chain_for(d, conn, user)
+    capped = False
+    if user.get("role") != "admin" and any(not p.personal for p in chain) and d.get_user_daily_usage(conn, user["id"], "groq") >= PLATFORM_DAILY:
+        chain = [p for p in chain if p.personal]            # the shared key is used up for today
+        capped = True
+    if not chain:
+        if capped:
+            raise HTTPException(status_code=429, detail=f"Daily limit of {PLATFORM_DAILY} AI answers on the shared key reached. "
+                                                        "Add your own CodeCraft or Groq key in Settings to continue.")
+        raise HTTPException(status_code=503, detail="No AI key is available. Add a CodeCraft or Groq key in Settings → API keys.")
+    info: dict = {}
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            text, prov, failures = await ai.complete_chain(client, chain, system, prompt, max_tokens, temperature=temperature,
+                                                           want_json=want_json, accept=accept, info=info)
+    except ai.AiError as e:
+        raise HTTPException(status_code=e.status, detail=e.message)
+    if not prov.personal:
+        d.log_api_call(conn, "groq", f"ai:{task}", False, user["id"])
+        conn.commit()
+    return text, prov, failures, info
+
+
 def register(app, d):
     get_db, full, current = d.get_db, d.require_full_access, d.get_current_user
     ai_cap = d.require_cap("tools.ai")
@@ -68,52 +116,31 @@ def register(app, d):
             raise HTTPException(status_code=403, detail="This needs full workspace access.")
         return user
 
-    def _rows(conn, sql, params=()):
-        try:
-            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute(sql, params)
-            return cur.fetchall()
-        except Exception:                                   # a missing optional table must not break the answer
-            conn.rollback()
-            return []
-
     def _chosen_model(conn, user):
-        rows = _rows(conn, "SELECT codecraft_model FROM user_ai_prefs WHERE user_id=%s", (user["id"],))
-        return (rows[0]["codecraft_model"] if rows and rows[0].get("codecraft_model") else None) or d.CODECRAFT_MODEL
+        return chosen_model(d, conn, user)
 
     def _provider(conn, user):
-        return ai.choose_provider(d.get_own_key(conn, user["id"], "groq"), d.get_own_key(conn, user["id"], "codecraft"),
-                                  d.PLATFORM_KEYS.get("groq", ""), d.GROQ_MODEL, _chosen_model(conn, user))
+        chain = chain_for(d, conn, user)
+        return chain[0] if chain else None
 
     async def _run(task, user, conn, context, ask="", system=None, max_tokens=900, clean=ai.clean_answer):
-        if not AI_LIMIT.allow(user["id"]):
-            raise HTTPException(status_code=429, detail="Too many AI requests. Wait a minute.")
-        prov = _provider(conn, user)
-        if not prov:
-            raise HTTPException(status_code=503, detail="No AI key is available. Add a Groq or CodeCraft key in Settings → API keys.")
-        if not prov.personal and user.get("role") != "admin":
-            if d.get_user_daily_usage(conn, user["id"], "groq") >= PLATFORM_DAILY:
-                raise HTTPException(status_code=429, detail=f"Daily limit of {PLATFORM_DAILY} AI answers on the shared key reached. "
-                                                            "Add your own Groq or CodeCraft key in Settings to continue.")
-        info = {}
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                text = await ai.complete(client, prov, system or ai.system_prompt(task), ai.user_prompt(context, ask), max_tokens, info=info)
-            result = clean(ai.parse_json(text))
-        except ai.AiError as e:
-            raise HTTPException(status_code=e.status, detail=e.message)
-        if not prov.personal:
-            d.log_api_call(conn, "groq", f"ai:{task}", False, user["id"])
-            conn.commit()
-        return {"kind": task, "result": result, "ai_generated": True, "provider": prov.label, "model": prov.model,
-                "usage": info.get("usage"), "generated_at": datetime.now(timezone.utc).isoformat()}
+        holder = {}
+
+        def accept(text):                                   # an unreadable answer counts as a failure, so the next provider is tried
+            holder["result"] = clean(ai.parse_json(text))
+
+        _, prov, failures, info = await complete_for_user(d, conn, user, task, system or ai.system_prompt(task), ai.user_prompt(context, ask),
+                                                          max_tokens, accept=accept)
+        return {"kind": task, "result": holder["result"], "ai_generated": True, "provider": prov.label, "model": prov.model,
+                "usage": info.get("usage"), "fallback": failures, "generated_at": datetime.now(timezone.utc).isoformat()}
 
     @app.get("/v2/ai/status")
     def ai_status(user=Depends(current), conn=Depends(get_db)):
         caps = d.effective_caps(user, conn)
         prov = _provider(conn, user)
-        return {"allowed": "tools.ai" in caps, "available": bool(prov) and "tools.ai" in caps,
-                "provider": prov.label if prov else None, "personal": bool(prov and prov.personal)}
+        chain = chain_for(d, conn, user)
+        return {"allowed": "tools.ai" in caps, "available": bool(chain) and "tools.ai" in caps,
+                "provider": prov.label if prov else None, "personal": bool(prov and prov.personal), "order": [p.label for p in chain]}
 
     @app.post("/v2/ai/report-summary")
     async def ai_report(body: ReportBody, user=Depends(ai_cap), conn=Depends(get_db)):

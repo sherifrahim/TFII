@@ -42,16 +42,24 @@ class Provider:
         return {"groq": "Groq", "codecraft": "CodeCraft"}.get(self.name, self.name)
 
 
+def provider_chain(own_groq: str, own_codecraft: str, platform_groq: str, groq_model: str, codecraft_model: str) -> list:
+    """Who to ask, in order: the caller's own CodeCraft key, then their own Groq key, then the platform's Groq key.
+    If one fails (rate limit, no balance, outage, a rejected key, an unreadable answer) the next is tried."""
+    chain = []
+    if own_codecraft:
+        chain.append(Provider("codecraft", own_codecraft, CODECRAFT_BASE, codecraft_model, True, False))
+    if own_groq:
+        chain.append(Provider("groq", own_groq, GROQ_BASE, groq_model, True, True))
+    if platform_groq and platform_groq != own_groq:
+        chain.append(Provider("groq", platform_groq, GROQ_BASE, groq_model, False, True))
+    return chain
+
+
 def choose_provider(own_groq: str, own_codecraft: str, platform_groq: str, groq_model: str,
                     codecraft_model: str) -> Optional[Provider]:
-    """The caller's own keys first (Groq, then CodeCraft), then the platform's Groq key."""
-    if own_groq:
-        return Provider("groq", own_groq, GROQ_BASE, groq_model, True, True)
-    if own_codecraft:
-        return Provider("codecraft", own_codecraft, CODECRAFT_BASE, codecraft_model, True, False)
-    if platform_groq:
-        return Provider("groq", platform_groq, GROQ_BASE, groq_model, False, True)
-    return None
+    """The first provider in the chain (the one a request tries first), or None when there is no key at all."""
+    chain = provider_chain(own_groq, own_codecraft, platform_groq, groq_model, codecraft_model)
+    return chain[0] if chain else None
 
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
@@ -287,11 +295,12 @@ def explain_status(p: Provider, r) -> Optional["AiError"]:
     return None
 
 
-async def complete(client: httpx.AsyncClient, p: Provider, system: str, prompt: str, max_tokens: int = 900, info: Optional[dict] = None) -> str:
+async def complete(client: httpx.AsyncClient, p: Provider, system: str, prompt: str, max_tokens: int = 900, info: Optional[dict] = None,
+                   temperature: float = 0.2, want_json: bool = True) -> str:
     # CodeCraft documents a 2048-token minimum for max_tokens; ask for it rather than depend on how it handles less.
-    body = {"model": p.model, "temperature": 0.2, "max_tokens": max(max_tokens, 2048) if p.name == "codecraft" else max_tokens,
+    body = {"model": p.model, "temperature": temperature, "max_tokens": max(max_tokens, 2048) if p.name == "codecraft" else max_tokens,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]}
-    if p.json_mode:
+    if p.json_mode and want_json:
         body["response_format"] = {"type": "json_object"}
     try:
         r = await client.post(p.base + "/chat/completions", headers={"Authorization": f"Bearer {p.key}"}, json=body)
@@ -359,3 +368,25 @@ def estimate_cost(model: Optional[dict], usage: dict) -> Optional[float]:
     if not model or model.get("input_per_1k") is None or model.get("output_per_1k") is None:
         return None
     return round((usage.get("prompt_tokens", 0) * model["input_per_1k"] + usage.get("completion_tokens", 0) * model["output_per_1k"]) / 1000, 6)
+
+
+async def complete_chain(client: httpx.AsyncClient, chain: list, system: str, prompt: str, max_tokens: int = 900, *, temperature: float = 0.2,
+                         want_json: bool = True, accept=None, info: Optional[dict] = None) -> tuple:
+    """Ask each provider in turn until one gives an answer `accept` is happy with (it raises AiError when it is not,
+    for example when the JSON is unreadable). Returns (text, provider used, failures of the ones skipped)."""
+    failures = []
+    for p in chain:
+        got: dict = {}
+        try:
+            text = await complete(client, p, system, prompt, max_tokens, info=got, temperature=temperature, want_json=want_json)
+            if accept is not None:
+                accept(text)
+        except AiError as e:
+            failures.append({"provider": p.label, "status": e.status, "message": e.message})
+            continue
+        if info is not None:
+            info.update(got)
+        return text, p, failures
+    if not failures:
+        raise AiError(503, "No AI key is available. Add a CodeCraft or Groq key in Settings → API keys.")
+    raise AiError(failures[-1]["status"], " ".join(f["message"] for f in failures))

@@ -3,6 +3,7 @@ import { apiJSON } from "../lib/api";
 import { safeUrl } from "../lib/safe";
 import { Badge, Button, Callout, CopyButton, Field, PageHeader, Panel, Segmented, Select, Tabs } from "../components/ui";
 import Icon from "../components/Icon";
+import { AiSource } from "../components/AiPanel";
 
 const TACTICS = ["", "Initial Access", "Execution", "Persistence", "Privilege Escalation", "Defense Evasion", "Credential Access", "Discovery", "Lateral Movement", "Collection", "Exfiltration", "Command & Control", "Impact"];
 const EXAMPLES = {
@@ -65,6 +66,7 @@ function Builder({ qt }) {
 
       {res && (
         <div className="stack" style={{ gap: 16 }}>
+          <AiSource meta={res.ai} note="Check a query against your own data before relying on it." />
           <Tabs value={String(v)} onChange={x => setV(Number(x))} tabs={(res.queries || []).map((q, i) => ({ id: String(i), label: q.label }))} style={{ marginBottom: 0 }} />
           {variant && (
             <div className="query-grid">
@@ -128,6 +130,7 @@ function Explainer({ qt }) {
       {busy && <Panel><div className="state"><span className="spinner" /><div className="t">Reading the query…</div><div className="d">Breaking down each clause and checking it for improvements.</div></div></Panel>}
       {res && (
         <div className="stack" style={{ gap: 16 }}>
+          <AiSource meta={res.ai} />
           <Panel>
             <div className="row wrap" style={{ gap: 8, marginBottom: 10 }}>
               {res.severity && <Badge tone={SEV_TONE[res.severity] || "low"} dot>{res.severity}</Badge>}

@@ -10,13 +10,15 @@ import ai_api
 
 
 # ── Pure parts ────────────────────────────────────────────────────────────────
-def test_the_callers_own_keys_come_before_the_platform_key():
-    pick = lambda g, c, p: ai.choose_provider(g, c, p, "gm", "cm")  # noqa: E731
-    assert (pick("own-g", "own-c", "plat").name, pick("own-g", "own-c", "plat").personal) == ("groq", True)
-    assert (pick("", "own-c", "plat").name, pick("", "own-c", "plat").json_mode) == ("codecraft", False)
-    p = pick("", "", "plat")
-    assert (p.name, p.personal, p.key) == ("groq", False, "plat")
-    assert pick("", "", "") is None
+def test_the_chain_is_codecraft_then_groq_then_the_shared_key():
+    chain = ai.provider_chain("own-g", "own-c", "plat", "gm", "cm")
+    assert [(p.name, p.personal) for p in chain] == [("codecraft", True), ("groq", True), ("groq", False)]
+    assert chain[0].json_mode is False and chain[1].json_mode is True and chain[1].key == "own-g" and chain[2].key == "plat"
+    assert [p.name for p in ai.provider_chain("", "own-c", "plat", "gm", "cm")] == ["codecraft", "groq"]
+    assert [p.personal for p in ai.provider_chain("own-g", "", "plat", "gm", "cm")] == [True, False]
+    assert len(ai.provider_chain("same", "", "same", "gm", "cm")) == 1          # the shared key is not asked twice
+    assert ai.provider_chain("", "", "", "gm", "cm") == [] and ai.choose_provider("", "", "", "gm", "cm") is None
+    assert ai.choose_provider("own-g", "own-c", "plat", "gm", "cm").name == "codecraft"
 
 
 def test_answers_are_cut_to_a_fixed_shape():
@@ -82,7 +84,7 @@ def fake_ai(monkeypatch, client):
     import main
     seen = {}
 
-    async def fake(client_, provider, system, prompt, max_tokens=900, info=None):
+    async def fake(client_, provider, system, prompt, max_tokens=900, info=None, **_):
         if info is not None:
             info["usage"] = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
             info["rate"] = {"requests_limit": 60, "requests_remaining": 57, "tokens_limit": 200000, "tokens_remaining": 195000, "resets_at": 1}
@@ -300,8 +302,131 @@ def test_the_live_test_reports_tokens_cost_and_limits(client, codecraft, fake_ai
 
 
 def test_the_live_test_reports_a_provider_failure_instead_of_raising(client, codecraft, monkeypatch):
-    async def boom(client_, provider, system, prompt, max_tokens=900, info=None):
+    async def boom(client_, provider, system, prompt, max_tokens=900, info=None, **_):
         raise ai.AiError(402, "CodeCraft says the account is out of balance.")
     monkeypatch.setattr(ai, "complete", boom)
     body = client.post("/v2/ai/codecraft/test", headers=codecraft).json()
     assert body["ok"] is False and "out of balance" in body["message"]
+
+
+# ── Fallback: CodeCraft first, then Groq ──────────────────────────────────────
+CC = ai.Provider("codecraft", "cc_key", ai.CODECRAFT_BASE, "cc-model", True, False)
+GQ = ai.Provider("groq", "gsk_key", ai.GROQ_BASE, "gq-model", True, True)
+
+
+def _chain(providers, replies, accept=None, **kw):
+    """Run complete_chain with scripted replies per provider label: a string is the answer, an AiError is raised."""
+    calls = []
+
+    async def fake(client_, p, system, prompt, max_tokens=900, info=None, temperature=0.2, want_json=True):
+        calls.append((p.name, temperature, want_json))
+        r = replies[p.name]
+        if isinstance(r, Exception):
+            raise r
+        if info is not None:
+            info["usage"] = {"total_tokens": 7}
+        return r
+
+    import unittest.mock as m
+    with m.patch.object(ai, "complete", fake):
+        async def go():
+            return await ai.complete_chain(None, providers, "s", "p", 100, accept=accept, **kw)
+        try:
+            return asyncio.run(go()), calls
+        except ai.AiError as e:
+            return e, calls
+
+
+def test_the_first_provider_answers_and_the_second_is_never_asked():
+    (text, prov, failures), calls = _chain([CC, GQ], {"codecraft": "from codecraft", "groq": "from groq"})
+    assert (text, prov.name, failures) == ("from codecraft", "codecraft", []) and [c[0] for c in calls] == ["codecraft"]
+
+
+@pytest.mark.parametrize("error", [ai.AiError(429, "CodeCraft is rate limiting requests."), ai.AiError(402, "CodeCraft says the account is out of balance."),
+                                   ai.AiError(502, "CodeCraft rejected the key."), ai.AiError(504, "CodeCraft took too long to answer.")])
+def test_a_failing_provider_falls_back_to_the_next(error):
+    (text, prov, failures), calls = _chain([CC, GQ], {"codecraft": error, "groq": "from groq"})
+    assert (text, prov.name) == ("from groq", "groq") and [c[0] for c in calls] == ["codecraft", "groq"]
+    assert failures == [{"provider": "CodeCraft", "status": error.status, "message": error.message}]
+
+
+def test_an_unreadable_answer_also_falls_back():
+    (text, prov, failures), _ = _chain([CC, GQ], {"codecraft": "I think the answer is yes", "groq": '{"ok": true}'}, accept=ai.parse_json)
+    assert (text, prov.name) == ('{"ok": true}', "groq") and "could not read" in failures[0]["message"]
+
+
+def test_when_every_provider_fails_the_error_names_each_one():
+    err, calls = _chain([CC, GQ], {"codecraft": ai.AiError(402, "CodeCraft says the account is out of balance."), "groq": ai.AiError(429, "Groq is rate limiting requests.")})
+    assert isinstance(err, ai.AiError) and err.status == 429 and "out of balance" in err.message and "Groq is rate limiting" in err.message and len(calls) == 2
+
+
+def test_an_empty_chain_is_a_clear_503():
+    err, _ = _chain([], {})
+    assert isinstance(err, ai.AiError) and err.status == 503 and "CodeCraft or Groq" in err.message
+
+
+def test_text_answers_do_not_ask_for_json_and_keep_their_temperature():
+    _, calls = _chain([CC], {"codecraft": "plain text"}, want_json=False, temperature=0.15)
+    assert calls == [("codecraft", 0.15, False)]
+
+
+@pytest.fixture
+def cc_and_groq(monkeypatch, client, analyst, fake_ai):
+    """An analyst with their own CodeCraft key; the shared Groq key is set by fake_ai. The fake model answers with JSON."""
+    import main
+    monkeypatch.setattr(main, "SYSTEM_PROMPT_KQL_BUILDER", "x", raising=False)
+    r = client.post("/users/me/api-keys/codecraft", json={"api_key": "cc_personal_test_key_123"}, headers=analyst)
+    assert r.status_code in (200, 201), r.text
+    fake_ai["answer"] = {"query": "DeviceNetworkEvents | take 1", "explanation": "x"}
+    yield analyst
+    client.delete("/users/me/api-keys/codecraft", headers=analyst)
+
+
+def test_the_query_builder_asks_codecraft_first(client, cc_and_groq, fake_ai):
+    r = client.post("/query-gen/generate", json={"use_case": "RDP brute force", "query_type": "kql"}, headers=cc_and_groq)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["query"].startswith("DeviceNetworkEvents") and body["ai"]["provider"] == "CodeCraft" and body["ai"]["fallback"] == []
+    assert fake_ai["provider"].name == "codecraft"
+
+
+def test_the_query_builder_falls_back_to_groq_when_codecraft_fails(client, cc_and_groq, fake_ai, monkeypatch):
+    async def flaky(client_, provider, system, prompt, max_tokens=900, info=None, **kw):
+        if provider.name == "codecraft":
+            raise ai.AiError(402, "CodeCraft says the account is out of balance.")
+        return json.dumps({"query": "SecurityEvent | take 1", "explanation": "y"})
+
+    monkeypatch.setattr(ai, "complete", flaky)
+    r = client.post("/query-gen/generate", json={"use_case": "RDP brute force", "query_type": "kql"}, headers=cc_and_groq)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["query"].startswith("SecurityEvent") and body["ai"]["provider"] == "Groq"
+    assert body["ai"]["fallback"][0]["provider"] == "CodeCraft" and "out of balance" in body["ai"]["fallback"][0]["message"]
+
+
+def test_the_query_explainer_and_diff_explainer_use_the_same_chain(client, cc_and_groq, fake_ai):
+    fake_ai["answer"] = {"summary": "It looks for failed logons.", "steps": [], "changes": [], "watch_for": []}
+    e = client.post("/query-gen/explain", json={"query": "SecurityEvent | take 1", "query_type": "kql"}, headers=cc_and_groq)
+    assert e.status_code == 200 and e.json()["ai"]["provider"] == "CodeCraft"
+    d = client.post("/diff/explain", json={"diff": "- a\n+ b\n- c\n+ d"}, headers=cc_and_groq)
+    assert d.status_code == 200, d.text
+    assert d.json()["ai"]["provider"] == "CodeCraft" and d.json()["truncated"] is False
+
+
+def test_the_new_assistants_follow_the_same_order_and_report_a_fallback(client, cc_and_groq, fake_ai, monkeypatch):
+    async def flaky(client_, provider, system, prompt, max_tokens=900, info=None, **kw):
+        if provider.name == "codecraft":
+            raise ai.AiError(429, "CodeCraft is rate limiting requests.")
+        return json.dumps({"headline": "From Groq", "summary": "ok", "points": [], "next_steps": [], "caveats": []})
+    monkeypatch.setattr(ai, "complete", flaky)
+    out = client.post("/v2/ai/bulk-digest", json={"rows": [{"value": "x.example"}]}, headers=cc_and_groq).json()
+    assert out["provider"] == "Groq" and out["result"]["headline"] == "From Groq" and out["fallback"][0]["provider"] == "CodeCraft"
+    assert client.get("/v2/ai/status", headers=cc_and_groq).json()["order"] == ["CodeCraft", "Groq"]
+
+
+def test_the_query_builder_without_any_key_says_how_to_fix_it(client, analyst, monkeypatch):
+    import main
+    monkeypatch.setitem(main.PLATFORM_KEYS, "groq", "")
+    ai_api.AI_LIMIT._hits.clear()
+    r = client.post("/query-gen/generate", json={"use_case": "RDP brute force", "query_type": "kql"}, headers=analyst)
+    assert r.status_code == 503 and "CodeCraft or Groq" in r.json()["detail"]
