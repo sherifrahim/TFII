@@ -84,6 +84,8 @@ PLATFORM_KEYS = {
     "otx":         os.getenv("OTX_API_KEY", ""),
     "ipqs":        os.getenv("IPQS_API_KEY", ""),
     "mxtoolbox":   os.getenv("MXTOOLBOX_API_KEY", ""),
+    # Shared AI key (optional): a CodeCraft key saved on an admin account is picked up here too, see refresh_platform_keys().
+    "codecraft":   os.getenv("CODECRAFT_API_KEY", ""),
 }
 # What .env provides. Platform-level calls (background feeds and pollers, shared enrichment, quota-based lookups)
 # use the key saved on an admin account first and this second: see refresh_platform_keys().

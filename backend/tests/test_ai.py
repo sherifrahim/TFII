@@ -421,7 +421,7 @@ def test_the_new_assistants_follow_the_same_order_and_report_a_fallback(client, 
     monkeypatch.setattr(ai, "complete", flaky)
     out = client.post("/v2/ai/bulk-digest", json={"rows": [{"value": "x.example"}]}, headers=cc_and_groq).json()
     assert out["provider"] == "Groq" and out["result"]["headline"] == "From Groq" and out["fallback"][0]["provider"] == "CodeCraft"
-    assert client.get("/v2/ai/status", headers=cc_and_groq).json()["order"] == ["CodeCraft", "Groq"]
+    assert client.get("/v2/ai/status", headers=cc_and_groq).json()["order"] == ["CodeCraft", "Groq (shared)"]
 
 
 def test_the_query_builder_without_any_key_says_how_to_fix_it(client, analyst, monkeypatch):
@@ -430,3 +430,73 @@ def test_the_query_builder_without_any_key_says_how_to_fix_it(client, analyst, m
     ai_api.AI_LIMIT._hits.clear()
     r = client.post("/query-gen/generate", json={"use_case": "RDP brute force", "query_type": "kql"}, headers=analyst)
     assert r.status_code == 503 and "CodeCraft or Groq" in r.json()["detail"]
+
+
+# ── A CodeCraft key saved at platform level (an admin's key) is shared ────────
+def test_the_shared_codecraft_key_sits_between_the_callers_codecraft_and_groq_keys():
+    chain = ai.provider_chain("own-g", "own-c", "plat-g", "gm", "cm", "plat-c", "admin-model")
+    assert [(p.name, p.personal, p.key) for p in chain] == [("codecraft", True, "own-c"), ("codecraft", False, "plat-c"), ("groq", True, "own-g"), ("groq", False, "plat-g")]
+    assert [p.model for p in chain] == ["cm", "admin-model", "gm", "gm"]
+    assert [p.display for p in chain] == ["CodeCraft", "CodeCraft (shared)", "Groq", "Groq (shared)"]
+    assert [p.name for p in ai.provider_chain("", "", "plat-g", "gm", "cm", "plat-c", None)] == ["codecraft", "groq"]
+    assert ai.provider_chain("", "", "", "gm", "cm", "plat-c", None)[0].model == "cm"           # no model chosen by the admin: the server default
+    assert len(ai.provider_chain("", "same", "", "gm", "cm", "same", "x")) == 1                 # an admin's own key is not asked twice
+
+
+@pytest.fixture
+def shared_codecraft(monkeypatch, client, admin, db, fake_ai):
+    """The admin saves a CodeCraft key and picks a model; every user then has it as a shared key."""
+    async def fake_list(client_, provider):
+        return ai.parse_models(MODELS_BODY), {}
+    monkeypatch.setattr(ai, "list_models", fake_list)
+    import main
+    db.cursor().execute("DELETE FROM api_usage_log WHERE ioc_value LIKE 'ai:%'")      # today's shared-key usage from earlier tests
+    assert client.post("/users/me/api-keys/codecraft", json={"api_key": "cc_admin_shared_key_123"}, headers=admin).status_code in (200, 201)
+    assert client.put("/v2/ai/codecraft/model", json={"model": "gemma-2-2b"}, headers=admin).status_code == 200
+    # Saving an admin key refreshes every platform key from the admin accounts and the environment, which clears the
+    # tests' stand-in shared Groq key; put it back.
+    assert main.PLATFORM_KEYS["codecraft"] == "cc_admin_shared_key_123"
+    monkeypatch.setitem(main.PLATFORM_KEYS, "groq", "gsk_platform_test_key")
+    fake_ai["answer"] = {"query": "DeviceNetworkEvents | take 1", "explanation": "x"}
+    yield
+    client.delete("/users/me/api-keys/codecraft", headers=admin)
+    db.cursor().execute("DELETE FROM api_usage_log WHERE ioc_value LIKE 'ai:%'")
+    ai_api.AI_LIMIT._hits.clear()
+
+
+def test_a_user_without_their_own_keys_gets_the_shared_codecraft_key_first(client, analyst, shared_codecraft, fake_ai):
+    r = client.post("/query-gen/generate", json={"use_case": "RDP brute force", "query_type": "kql"}, headers=analyst)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ai"]["provider"] == "CodeCraft" and body["ai"]["model"] == "gemma-2-2b" and body["ai"]["fallback"] == []
+    assert fake_ai["provider"].personal is False and fake_ai["provider"].key == "cc_admin_shared_key_123"
+    assert client.get("/v2/ai/status", headers=analyst).json()["order"] == ["CodeCraft (shared)", "Groq (shared)"]
+    assert "cc_admin_shared_key_123" not in r.text
+
+
+def test_the_shared_codecraft_key_falls_back_to_the_shared_groq_key(client, analyst, shared_codecraft, monkeypatch):
+    async def flaky(client_, provider, system, prompt, max_tokens=900, info=None, **kw):
+        if provider.name == "codecraft":
+            raise ai.AiError(402, "CodeCraft says the account is out of balance.")
+        return json.dumps({"query": "SecurityEvent | take 1", "explanation": "y"})
+    monkeypatch.setattr(ai, "complete", flaky)
+    body = client.post("/query-gen/generate", json={"use_case": "RDP brute force", "query_type": "kql"}, headers=analyst).json()
+    assert body["ai"]["provider"] == "Groq" and body["ai"]["fallback"][0]["provider"] == "CodeCraft"
+
+
+def test_the_daily_cap_counts_the_shared_codecraft_key_too(client, analyst, db, shared_codecraft, fake_ai, monkeypatch):
+    fake_ai["answer"] = None                                # the default digest-shaped answer
+    monkeypatch.setattr(ai_api, "PLATFORM_DAILY", 1)
+    payload = {"rows": [{"value": "x.example", "verdict": "unknown"}]}
+    assert client.post("/v2/ai/bulk-digest", json=payload, headers=analyst).status_code == 200
+    r = client.post("/v2/ai/bulk-digest", json=payload, headers=analyst)
+    assert r.status_code == 429 and "own" in r.json()["detail"]
+    db.cursor().execute("DELETE FROM api_usage_log WHERE ioc_value LIKE 'ai:%'")
+
+
+def test_the_admin_using_their_own_shared_key_is_not_capped_or_asked_twice(client, admin, shared_codecraft, fake_ai, monkeypatch):
+    fake_ai["answer"] = None
+    monkeypatch.setattr(ai_api, "PLATFORM_DAILY", 0)
+    out = client.post("/v2/ai/bulk-digest", json={"rows": [{"value": "x.example"}]}, headers=admin)
+    assert out.status_code == 200 and out.json()["provider"] == "CodeCraft"
+    assert client.get("/v2/ai/status", headers=admin).json()["order"].count("CodeCraft") == 1

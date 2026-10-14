@@ -41,13 +41,20 @@ class Provider:
     def label(self) -> str:
         return {"groq": "Groq", "codecraft": "CodeCraft"}.get(self.name, self.name)
 
+    @property
+    def display(self) -> str:
+        return self.label if self.personal else f"{self.label} (shared)"
 
-def provider_chain(own_groq: str, own_codecraft: str, platform_groq: str, groq_model: str, codecraft_model: str) -> list:
-    """Who to ask, in order: the caller's own CodeCraft key, then their own Groq key, then the platform's Groq key.
-    If one fails (rate limit, no balance, outage, a rejected key, an unreadable answer) the next is tried."""
+
+def provider_chain(own_groq: str, own_codecraft: str, platform_groq: str, groq_model: str, codecraft_model: str,
+                   platform_codecraft: str = "", platform_codecraft_model: Optional[str] = None) -> list:
+    """Who to ask, in order: CodeCraft (the caller's own key, then the shared one), then Groq (their own key, then the
+    shared one). If one fails (rate limit, no balance, outage, a rejected key, an unreadable answer) the next is tried."""
     chain = []
     if own_codecraft:
         chain.append(Provider("codecraft", own_codecraft, CODECRAFT_BASE, codecraft_model, True, False))
+    if platform_codecraft and platform_codecraft != own_codecraft:
+        chain.append(Provider("codecraft", platform_codecraft, CODECRAFT_BASE, platform_codecraft_model or codecraft_model, False, False))
     if own_groq:
         chain.append(Provider("groq", own_groq, GROQ_BASE, groq_model, True, True))
     if platform_groq and platform_groq != own_groq:
@@ -55,10 +62,10 @@ def provider_chain(own_groq: str, own_codecraft: str, platform_groq: str, groq_m
     return chain
 
 
-def choose_provider(own_groq: str, own_codecraft: str, platform_groq: str, groq_model: str,
-                    codecraft_model: str) -> Optional[Provider]:
+def choose_provider(own_groq: str, own_codecraft: str, platform_groq: str, groq_model: str, codecraft_model: str,
+                    platform_codecraft: str = "", platform_codecraft_model: Optional[str] = None) -> Optional[Provider]:
     """The first provider in the chain (the one a request tries first), or None when there is no key at all."""
-    chain = provider_chain(own_groq, own_codecraft, platform_groq, groq_model, codecraft_model)
+    chain = provider_chain(own_groq, own_codecraft, platform_groq, groq_model, codecraft_model, platform_codecraft, platform_codecraft_model)
     return chain[0] if chain else None
 
 

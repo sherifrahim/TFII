@@ -17,7 +17,16 @@ import ai
 from dnsintel import UserLimiter
 
 AI_LIMIT = UserLimiter(limit=10)            # per user per minute
-PLATFORM_DAILY = 40                          # platform-key AI answers per non-admin user per day
+import os
+
+def _daily_limit() -> int:
+    try:
+        return max(0, int(os.getenv("AI_SHARED_DAILY_LIMIT", "40")))
+    except ValueError:
+        return 40
+
+
+PLATFORM_DAILY = _daily_limit()              # shared-key AI answers per non-admin user per day (AI_SHARED_DAILY_LIMIT)
 
 
 class ReportBody(BaseModel):
@@ -74,9 +83,21 @@ def chosen_model(d, conn, user):
     return (rows[0]["codecraft_model"] if rows and rows[0].get("codecraft_model") else None) or d.CODECRAFT_MODEL
 
 
+def platform_codecraft_model(d, conn):
+    """The model for the shared CodeCraft key: the one picked by the admin who saved it (the most recent admin key is the shared
+    one, see main.refresh_platform_keys), else the server default."""
+    rows = _rows(conn, """SELECT p.codecraft_model FROM user_api_keys k JOIN users u ON u.id = k.user_id
+                          LEFT JOIN user_ai_prefs p ON p.user_id = k.user_id
+                          WHERE k.service='codecraft' AND u.role='admin' AND u.active = TRUE AND k.api_key_encrypted <> ''
+                          ORDER BY k.updated_at DESC LIMIT 1""")
+    return (rows[0]["codecraft_model"] if rows and rows[0].get("codecraft_model") else None) or d.CODECRAFT_MODEL
+
+
 def chain_for(d, conn, user) -> list:
+    shared_cc = d.PLATFORM_KEYS.get("codecraft", "")
     return ai.provider_chain(d.get_own_key(conn, user["id"], "groq"), d.get_own_key(conn, user["id"], "codecraft"),
-                             d.PLATFORM_KEYS.get("groq", ""), d.GROQ_MODEL, chosen_model(d, conn, user))
+                             d.PLATFORM_KEYS.get("groq", ""), d.GROQ_MODEL, chosen_model(d, conn, user),
+                             shared_cc, platform_codecraft_model(d, conn) if shared_cc else None)
 
 
 async def complete_for_user(d, conn, user, task, system, prompt, max_tokens=900, *, temperature=0.2, want_json=True, accept=None):
@@ -86,7 +107,8 @@ async def complete_for_user(d, conn, user, task, system, prompt, max_tokens=900,
         raise HTTPException(status_code=429, detail="Too many AI requests. Wait a minute.")
     chain = chain_for(d, conn, user)
     capped = False
-    if user.get("role") != "admin" and any(not p.personal for p in chain) and d.get_user_daily_usage(conn, user["id"], "groq") >= PLATFORM_DAILY:
+    if user.get("role") != "admin" and any(not p.personal for p in chain) and \
+            d.get_user_daily_usage(conn, user["id"], "groq") + d.get_user_daily_usage(conn, user["id"], "codecraft") >= PLATFORM_DAILY:
         chain = [p for p in chain if p.personal]            # the shared key is used up for today
         capped = True
     if not chain:
@@ -102,7 +124,7 @@ async def complete_for_user(d, conn, user, task, system, prompt, max_tokens=900,
     except ai.AiError as e:
         raise HTTPException(status_code=e.status, detail=e.message)
     if not prov.personal:
-        d.log_api_call(conn, "groq", f"ai:{task}", False, user["id"])
+        d.log_api_call(conn, prov.name, f"ai:{task}", False, user["id"])      # counted against the shared daily cap
         conn.commit()
     return text, prov, failures, info
 
@@ -140,7 +162,7 @@ def register(app, d):
         prov = _provider(conn, user)
         chain = chain_for(d, conn, user)
         return {"allowed": "tools.ai" in caps, "available": bool(chain) and "tools.ai" in caps,
-                "provider": prov.label if prov else None, "personal": bool(prov and prov.personal), "order": [p.label for p in chain]}
+                "provider": prov.label if prov else None, "personal": bool(prov and prov.personal), "order": [p.display for p in chain]}
 
     @app.post("/v2/ai/report-summary")
     async def ai_report(body: ReportBody, user=Depends(ai_cap), conn=Depends(get_db)):

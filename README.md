@@ -230,6 +230,8 @@ sudo certbot --nginx -d your-domain.com
 | `IPQS_API_KEY` | Optional | IPQualityScore email address risk (on request) |
 | `MXTOOLBOX_API_KEY` | Optional | MxToolbox deep mail-domain analysis (on request) |
 | `GROQ_API_KEY` | Optional | KQL/SPL query builder and the AI assistants ([console.groq.com](https://console.groq.com)) |
+| `CODECRAFT_API_KEY` | Optional | A shared [CodeCraft](https://www.codecraftapi.com/) key for every user (a key saved on an admin account in Settings works the same way). AI features try CodeCraft first, then Groq |
+| `AI_SHARED_DAILY_LIMIT` | Optional | AI answers per non-admin person per day on the shared keys (default 40; personal keys are never limited) |
 | `CODECRAFT_MODEL` | Optional | Default model for people who save their own [CodeCraft](https://www.codecraftapi.com/) key (default `deepseek-v4-flash-0731`). Each person can pick another from the list their key offers in Settings → API keys |
 | `VT_API_KEY` | Optional | VirusTotal enrichment |
 | `OTX_API_KEY` | Optional | AlienVault OTX pulses feed |
