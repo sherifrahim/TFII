@@ -219,8 +219,28 @@ def mail_sections(mail: Optional[dict]) -> List[dict]:
     return _clean(out)
 
 
+def vs_sections(ind: dict) -> List[dict]:
+    """VirusSign's indicator record (any type) as display sections. Only documented fields are read."""
+    if not isinstance(ind, dict):
+        return []
+    an = ind.get("analysis") if isinstance(ind.get("analysis"), dict) else {}
+    out = [kv("Assessment", [("Malicious", {True: "Yes", False: "No"}.get(an.get("malicious"))), ("Severity", an.get("severity")),
+                             ("Confidence", an.get("confidence")), ("Family", an.get("family")), ("Detections", an.get("detections")),
+                             ("First seen", ind.get("first_seen")), ("Last seen", ind.get("last_seen"))]),
+           kv("File", [("MD5", ind.get("md5")), ("SHA-1", ind.get("sha1")), ("SHA-256", ind.get("sha256")), ("Type", ind.get("filetype")),
+                       ("Size", ind.get("filesize"))]),
+           kv("Network", [("Country", ind.get("country")), ("IP version", ind.get("ip_version")), ("TLD", ind.get("tld")), ("Scheme", ind.get("scheme")),
+                          ("Host", ind.get("host")), ("Port", ind.get("port")), ("Path and query", ind.get("path_qs"))])]
+    names = ind.get("filenames")
+    if isinstance(names, list) and names:
+        out.append(tags("File names", names))
+    if isinstance(ind.get("tags"), list) and ind["tags"]:
+        out.append(tags("Tags", ind["tags"]))
+    return _clean(out)
+
+
 # ── assembling one indicator's report ─────────────────────────────────────────
-PROVIDERS = (("virustotal", "VirusTotal"), ("abuseipdb", "AbuseIPDB"), ("urlhaus", "URLhaus"))
+PROVIDERS = (("virustotal", "VirusTotal"), ("abuseipdb", "AbuseIPDB"), ("urlhaus", "URLhaus"), ("virussign", "VirusSign"))
 
 
 def _headline(pid: str, d: dict) -> str:
@@ -232,6 +252,11 @@ def _headline(pid: str, d: dict) -> str:
         return f"{d.get('abuse_score', 0)}% abuse confidence, {d.get('total_reports', 0)} reports"
     if pid == "urlhaus":
         return f"Listed: {d.get('threat') or 'malware distribution'}" if d.get("found") else "Not listed"
+    if pid == "virussign":
+        if d.get("found") is False:
+            return "No record"
+        verdict = {True: "Malicious", False: "Not malicious"}.get(d.get("malicious"), "Known")
+        return verdict + (f", confidence {int(d['confidence'])}%" if isinstance(d.get("confidence"), (int, float)) else "") + (f", {d['family']}" if d.get("family") else "")
     return ""
 
 

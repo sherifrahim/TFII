@@ -120,7 +120,7 @@ function Overview({ items, onOpen }) {
     <Panel title="Side by side" sub={`${items.length} indicators`} tight>
       <div className="tbl-wrap" tabIndex={0}>
         <table className="tbl">
-          <thead><tr><th>Indicator</th><th>Type</th><th>Verdict</th><th>VirusTotal</th><th className="opt-lg">AbuseIPDB</th><th className="opt-lg">URLhaus</th><th>Location</th></tr></thead>
+          <thead><tr><th>Indicator</th><th>Type</th><th>Verdict</th><th>VirusTotal</th><th className="opt-lg">AbuseIPDB</th><th className="opt-lg">URLhaus</th><th className="opt-lg">VirusSign</th><th>Location</th></tr></thead>
           <tbody>
             {items.map(it => {
               const loc = it.tfii.find(s => s.title === "Location");
@@ -130,7 +130,7 @@ function Overview({ items, onOpen }) {
                   <td className="cellmono" style={{ maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }} title={it.value}>{it.defanged || it.value}</td>
                   <td><TypeBadge type={it.type} /></td>
                   <td><Badge tone={VERDICT_TONE[it.verdict] || "low"} dot>{VERDICT_LABEL[it.verdict] || it.verdict}</Badge></td>
-                  <td>{cellFor(it, "virustotal")}</td><td className="opt-lg">{cellFor(it, "abuseipdb")}</td><td className="opt-lg">{cellFor(it, "urlhaus")}</td>
+                  <td>{cellFor(it, "virustotal")}</td><td className="opt-lg">{cellFor(it, "abuseipdb")}</td><td className="opt-lg">{cellFor(it, "urlhaus")}</td><td className="opt-lg">{cellFor(it, "virussign")}</td>
                   <td className="muted">{where || "—"}</td>
                 </tr>
               );

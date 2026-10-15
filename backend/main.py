@@ -20,6 +20,7 @@ import feeds
 import keycheck
 import geo as geoloc
 import mailintel
+import virussign
 import details
 from contextvars import ContextVar
 import entities
@@ -86,6 +87,7 @@ PLATFORM_KEYS = {
     "mxtoolbox":   os.getenv("MXTOOLBOX_API_KEY", ""),
     # Shared AI key (optional): a CodeCraft key saved on an admin account is picked up here too, see refresh_platform_keys().
     "codecraft":   os.getenv("CODECRAFT_API_KEY", ""),
+    "virussign":   os.getenv("VIRUSSIGN_API_KEY", ""),
 }
 # What .env provides. Platform-level calls (background feeds and pollers, shared enrichment, quota-based lookups)
 # use the key saved on an admin account first and this second: see refresh_platform_keys().
@@ -202,7 +204,7 @@ def resolve_api_key(conn, service: str, user: dict) -> tuple:
 
 def get_all_quota_status(conn, user_id: str, is_admin: bool) -> dict:
     """Returns quota info for all services for a user."""
-    services = ["virustotal","abuseipdb","urlhaus","shodan","groq","nvd"]
+    services = ["virustotal","abuseipdb","urlhaus","virussign","shodan","groq","nvd"]
     result = {}
     cur = conn.cursor()
     for svc in services:
@@ -342,6 +344,7 @@ def compute_verdict(enrichment: dict) -> dict:
     vt = enrichment.get("virustotal", {}) or {}
     ab = enrichment.get("abuseipdb", {}) or {}
     uh = enrichment.get("urlhaus", {}) or {}
+    vs = enrichment.get("virussign", {}) or {}
 
     vt_mal   = vt.get("malicious", 0)
     vt_total = vt.get("total", 0)
@@ -355,15 +358,21 @@ def compute_verdict(enrichment: dict) -> dict:
         reasons.append(f"AbuseIPDB: {ab_score}% abuse confidence")
     if uh_found:
         reasons.append(f"URLhaus: listed for {uh.get('threat','malware')} distribution")
+    vs_conf = vs.get("confidence") if isinstance(vs.get("confidence"), (int, float)) else None
+    vs_mal = vs.get("malicious") is True
+    vs_strong = vs_mal and (vs_conf is None or vs_conf >= 70)
+    if vs_mal:
+        reasons.append("VirusSign: classified malicious" + (f" ({int(vs_conf)}% confidence" + (f", {vs.get('family')}" if vs.get("family") else "") + ")" if vs_conf is not None
+                                                           else (f" ({vs.get('family')})" if vs.get("family") else "")))
 
-    if vt_mal >= 3 or ab_score >= 75 or uh_found:
-        return {"verdict":"malicious", "score": max(vt_mal*10, ab_score, 90 if uh_found else 0),
+    if vt_mal >= 3 or ab_score >= 75 or uh_found or vs_strong:
+        return {"verdict":"malicious", "score": max(vt_mal*10, ab_score, 90 if uh_found else 0, int(vs_conf) if vs_strong and vs_conf is not None else (85 if vs_strong else 0)),
                 "reason": " | ".join(reasons) or "Multiple sources flagged as malicious"}
-    if vt_mal >= 1 or ab_score >= 25:
-        return {"verdict":"suspicious", "score": max(vt_mal*10, ab_score),
+    if vt_mal >= 1 or ab_score >= 25 or vs_mal:
+        return {"verdict":"suspicious", "score": max(vt_mal*10, ab_score, int(vs_conf) if vs_mal and vs_conf is not None else 0),
                 "reason": " | ".join(reasons) or "Some indicators of suspicious activity"}
 
-    checked_sources = [v for v in (vt, ab, uh) if v and not v.get("skipped") and not v.get("error")]
+    checked_sources = [v for v in (vt, ab, uh, vs) if v and not v.get("skipped") and not v.get("error") and v.get("found") is not False]
     if checked_sources:
         return {"verdict":"clean", "score": 0, "reason": "No malicious activity found in any checked source"}
 
@@ -1834,7 +1843,7 @@ async def _auto_enrich(conn, created: list, limit: int) -> dict:
             if not ioc:
                 continue
             base = ioc["confidence"]
-            enr = await enrich(ioc["type"], ioc["value"], base, conn, force=True, existing=ioc.get("enrichment"), user=None)
+            enr = await enrich(ioc["type"], ioc["value"], base, conn, force=True, existing=ioc.get("enrichment"), user=None, skip=("virussign",))
             answered = [k for k in ("virustotal", "abuseipdb", "urlhaus") if isinstance(enr.get(k), dict) and not enr[k].get("skipped") and not enr[k].get("error")]
             new_conf = max(base, enr.get("calculated_confidence", base))
             merged = {**(ioc.get("enrichment") or {}), **enr, "calculated_confidence": new_conf}
@@ -1854,6 +1863,43 @@ async def _auto_enrich(conn, created: list, limit: int) -> dict:
             print(f"[enrich] auto-enrichment skipped {row.get('value','?')[:40]}: {type(e).__name__}")
     return {"enriched": done}
 
+def _load_feed_state(conn, feed_id: str) -> dict:
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM system_settings WHERE key = %s", (f"feed_state_{feed_id}",))
+        row = cur.fetchone()
+        data = json.loads(row[0]) if row else {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        conn.rollback()
+        return {}
+
+def _save_feed_state(conn, feed_id: str, state: dict):
+    cur = conn.cursor()
+    cur.execute("""INSERT INTO system_settings (key,value) VALUES (%s,%s)
+        ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value""", (f"feed_state_{feed_id}", json.dumps(state)))
+    conn.commit()
+
+def _revoke_feed_ioc(conn, type_, value, source) -> str:
+    """A feed withdrew an indicator. It is always recorded in the indicator's history. It is also expired when that feed was
+    its only source and nobody has worked on it (no analyst status, no author, not feed-corroborated by anyone else);
+    otherwise it stays, because other evidence still stands. Returns "absent" | "recorded" | "expired"."""
+    cur = conn.cursor()
+    cur.execute("SELECT id, created_by, analyst_status, COALESCE(false_positive, FALSE) FROM iocs WHERE value = %s AND type = %s LIMIT 1", (value, type_))
+    row = cur.fetchone()
+    if not row:
+        return "absent"
+    key = entities.normalize_indicator(value)[0]
+    cur.execute("""SELECT DISTINCT source FROM entity_observations WHERE entity_kind='indicator' AND LOWER(entity_ref)=LOWER(%s)
+                   AND obs_type IN ('ingested','sighting') AND source_type='feed'""", (key,))
+    others = {r[0] for r in cur.fetchall()} - {source}
+    entities.record_observation(conn, "indicator", key, "revocation", source, "feed", source_ref=None,
+                                summary=f"{source} withdrew this indicator from its feed")
+    if not others and not row[1] and not row[2] and not row[3]:
+        cur.execute("UPDATE iocs SET valid_until = NOW() WHERE id = %s", (row[0],))
+        return "expired"
+    return "recorded"
+
 async def _run_feed_job(feed_id: str, user=None):
     FEED_JOBS[feed_id] = {"running": True, "started_at": datetime.now(timezone.utc).isoformat()}
     conn = get_db_direct()
@@ -1867,8 +1913,13 @@ async def _run_feed_job(feed_id: str, user=None):
             if f.key_env and not key:
                 res = {"ok": False, "error": f"{f.name} needs an API key ({f.key_env} in .env, or Settings → API keys)."}
             else:
+                state = _load_feed_state(conn, feed_id) if f.fetch else None
                 res = await feeds.run_feed(conn, feed_id, cfg, ingest=_ingest_feed_ioc, record_score=record_score, defang=defang,
-                                           key=key, trusted_domains=tuple(TRUSTED_DOMAINS))
+                                           key=key, trusted_domains=tuple(TRUSTED_DOMAINS), state=state, revoke=_revoke_feed_ioc)
+                if state is not None and res.get("ok"):
+                    _save_feed_state(conn, feed_id, state)          # where the next run resumes (VirusSign: window and cursor)
+                    if state.get("quota_remaining") is not None:
+                        res["quota_remaining"] = state["quota_remaining"]
                 created = res.pop("created", [])
                 per_run = cfg.get("enrich_per_run", 8)
                 if res.get("ok") and created and per_run:
@@ -2181,6 +2232,18 @@ async def abuseipdb_lookup(ip, conn=None, key: str = None, user_id: str = None):
             "isp":d.get("isp","?"),"link":f"https://www.abuseipdb.com/check/{ip}",
             "_detail":{"sections":details.abuse_sections(d)}}
 
+async def virussign_lookup(ioc_type, value, conn=None, key: str = None, user_id: str = None):
+    """VirusSign threat intelligence for an IP, domain, URL or file hash (404 = no record, never "clean")."""
+    k = key if key is not None else PLATFORM_KEYS.get("virussign", "")
+    if not k: return {"source":"VirusSign","skipped":True}
+    if conn: log_api_call(conn,"virussign",value,False,user_id)
+    async with httpx.AsyncClient(timeout=15) as c:
+        out = await virussign.lookup(c, k, ioc_type, value)
+    raw = out.pop("_raw", None)
+    if raw:
+        out["_detail"] = {"sections": details.vs_sections(raw)}
+    return out
+
 async def urlhaus_url_lookup(url_val, conn=None, key: str = None, user_id: str = None):
     k = key if key is not None else URLHAUS_AUTH_KEY
     if not k: return {"source":"URLhaus","skipped":True}
@@ -2274,6 +2337,13 @@ def calc_confidence(results: dict, base: int) -> tuple:
         elif ab == 0:  score = min(score,35); reasons.append("AbuseIPDB: zero abuse reports (-confidence)")
     if uh.get("found") is True:  score = max(score,85); reasons.append("URLhaus: found in malware URL database (+confidence)")
     if uh.get("found") is False: score = min(score,50); reasons.append("URLhaus: not found (-confidence)")
+    vs = results.get("virussign",{}) or {}
+    if vs.get("found") is True and not vs.get("error"):
+        if vs.get("malicious") is True:
+            c = vs.get("confidence"); score = max(score, min(95, int(c)) if isinstance(c,(int,float)) else 85)
+            reasons.append("VirusSign: classified malicious" + (f", confidence {int(c)}%" if isinstance(c,(int,float)) else "") + " (+confidence)")
+        elif vs.get("malicious") is False:
+            score = min(score, 50); reasons.append("VirusSign: assessed as not malicious (-confidence)")
     if not reasons: reasons.append("No external sources returned data — using base confidence")
     return min(max(score,5),99), reasons
 
@@ -2307,7 +2377,7 @@ _DETAIL_SINK: ContextVar = ContextVar("detail_sink", default=None)
 
 def _strip_details(results: dict) -> None:
     sink = _DETAIL_SINK.get()
-    for key in ("virustotal", "abuseipdb", "urlhaus"):
+    for key in ("virustotal", "abuseipdb", "urlhaus", "virussign"):
         res = results.get(key)
         if isinstance(res, dict) and "_detail" in res:
             res = dict(res)                    # the memoised answer is shared between rows: never mutate it
@@ -2316,8 +2386,10 @@ def _strip_details(results: dict) -> None:
             if sink is not None and det:
                 sink[key] = det
 
+_VS_TYPES = ("IPv4", "IPv6", "Domain", "URL", "MD5", "SHA1", "SHA256")
+
 async def enrich(ioc_type: str, value: str, base: int, conn=None,
-                 force: bool = False, existing: dict = None, user: dict = None, memo: dict = None) -> dict:
+                 force: bool = False, existing: dict = None, user: dict = None, memo: dict = None, skip: tuple = ()) -> dict:
     if not force and existing and is_cache_fresh(existing):
         if conn and user:
             log_api_call(conn, "cache", value, True, user.get("id"))
@@ -2342,6 +2414,15 @@ async def enrich(ioc_type: str, value: str, base: int, conn=None,
 
     def quota_error(svc):
         return {"source": svc, "error": f"Daily quota of {DAILY_FREE_QUOTA} free checks reached. Add your personal {svc} API key in Settings to continue."}
+
+    # VirusSign runs alongside the other providers. With no key available anywhere it is left out entirely (not shown as skipped).
+    vs_future = None
+    if ioc_type in _VS_TYPES and "virussign" not in skip:
+        vs_key, vs_quota = get_key("virussign")
+        if vs_key:
+            vs_future = asyncio.ensure_future(virussign_lookup(ioc_type, value, conn, vs_key, user_id))
+        elif vs_quota is not None:
+            results["virussign"] = quota_error("VirusSign")
 
     try:
         if ioc_type in ("IPv4","IPv6"):
@@ -2409,6 +2490,12 @@ async def enrich(ioc_type: str, value: str, base: int, conn=None,
             results["note"] = f"No enrichment for type {ioc_type}"
     except Exception as e:
         results["error"] = str(e)
+
+    if vs_future is not None:
+        try:
+            results["virussign"] = await vs_future
+        except Exception as e:
+            results["virussign"] = {"source": "VirusSign", "error": f"{type(e).__name__}"}
 
     _strip_details(results)
     final_score, reasons = calc_confidence(results, base)
@@ -3085,7 +3172,7 @@ def change_password(body: PasswordChange, user=Depends(get_current_user), conn=D
 
 # ── USER API KEYS ─────────────────────────────────────────────────────────────
 
-ALLOWED_SERVICES = {"virustotal","abuseipdb","shodan","groq","nvd","urlhaus","otx","ipqs","mxtoolbox","codecraft"}
+ALLOWED_SERVICES = {"virustotal","abuseipdb","shodan","groq","nvd","urlhaus","otx","ipqs","mxtoolbox","codecraft","virussign"}
 SERVICE_LABELS = {
     "virustotal": {"name":"VirusTotal",   "url":"https://www.virustotal.com/gui/my-apikey",    "placeholder":"Enter your VirusTotal API key"},
     "abuseipdb":  {"name":"AbuseIPDB",    "url":"https://www.abuseipdb.com/account/api",        "placeholder":"Enter your AbuseIPDB API key"},
@@ -3097,6 +3184,7 @@ SERVICE_LABELS = {
     "ipqs":       {"name":"IPQualityScore","url":"https://www.ipqualityscore.com/create-account", "placeholder":"Enter your IPQualityScore key"},
     "mxtoolbox":  {"name":"MxToolbox",     "url":"https://mxtoolbox.com/user/api",                "placeholder":"Enter your MxToolbox API key"},
     "codecraft":  {"name":"CodeCraft",     "url":"https://www.codecraftapi.com/",                 "placeholder":"cc_xxxxxxxxxxxx"},
+    "virussign":  {"name":"VirusSign",     "url":"https://intel.virussign.com/api-access",        "placeholder":"Enter your VirusSign API key"},
 }
 
 def _safe_mask(encrypted) -> Optional[str]:
@@ -4565,7 +4653,7 @@ def dashboard(user=Depends(require_full_access), conn=Depends(get_db)):
     cur.execute("SELECT c.name, COUNT(i.id) as count FROM campaigns c LEFT JOIN iocs i ON i.campaign_id = c.id GROUP BY c.name ORDER BY count DESC LIMIT 5")
     top_campaigns = cur.fetchall()
     api_usage = {}
-    for api in ["virustotal","abuseipdb","urlhaus"]:
+    for api in ["virustotal","abuseipdb","urlhaus","virussign"]:
         cur.execute("SELECT COUNT(*) as calls FROM api_usage_log WHERE api_name = %s AND cache_hit = FALSE AND created_at >= CURRENT_DATE", (api,))
         api_usage[api] = cur.fetchone()["calls"]
     cur.execute("SELECT COUNT(*) as hits FROM api_usage_log WHERE cache_hit = TRUE AND created_at >= CURRENT_DATE")

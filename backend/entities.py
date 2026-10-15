@@ -214,7 +214,7 @@ def record_observation(conn, kind, ref, obs_type, source, source_type, *, source
         return False
 
 
-ENRICH_SOURCES = (("virustotal", "VirusTotal"), ("abuseipdb", "AbuseIPDB"), ("urlhaus", "URLhaus"))
+ENRICH_SOURCES = (("virustotal", "VirusTotal"), ("abuseipdb", "AbuseIPDB"), ("urlhaus", "URLhaus"), ("virussign", "VirusSign"))
 
 
 def enrichment_summaries(enrichment: dict):
@@ -222,7 +222,7 @@ def enrichment_summaries(enrichment: dict):
     out = []
     if not isinstance(enrichment, dict):
         return out
-    vt, ab, uh = (enrichment.get(k) or {} for k, _ in ENRICH_SOURCES)
+    vt, ab, uh, vs = (enrichment.get(k) or {} for k, _ in ENRICH_SOURCES)
     if vt and not vt.get("skipped") and not vt.get("error") and vt.get("total") is not None:
         out.append(("VirusTotal", f"{vt.get('malicious', 0)}/{vt.get('total')} engines flagged malicious",
                     vt.get("link"), vt.get("vt_score")))
@@ -233,6 +233,11 @@ def enrichment_summaries(enrichment: dict):
         out.append(("URLhaus", (f"listed: {uh.get('threat') or 'malware distribution'}"
                                 + (f" ({uh.get('url_status')})" if uh.get("url_status") else ""))
                     if uh.get("found") else "not listed", uh.get("link"), None))
+    if vs and not vs.get("skipped") and not vs.get("error") and vs.get("found") is True:
+        conf = vs.get("confidence") if isinstance(vs.get("confidence"), (int, float)) else None
+        out.append(("VirusSign", {True: "classified malicious", False: "assessed as not malicious"}.get(vs.get("malicious"), "known indicator")
+                    + (f", confidence {int(conf)}%" if conf is not None else "") + (f", {vs.get('family')}" if vs.get("family") else ""),
+                    vs.get("link"), int(conf) if conf is not None else None))
     return out
 
 

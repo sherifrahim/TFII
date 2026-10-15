@@ -13,6 +13,7 @@ TFII is self-hosted and has **no telemetry**. It never sends anything to the pro
 | Phishing.Database (GitHub raw) | Active phishing domains | none |
 | IPsum, CINS Army, Emerging Threats, blocklist.de | IP blocklists | none |
 | AlienVault OTX | Subscribed pulses | your OTX key |
+| VirusSign (api.virussign.com) | Indicator events (files, hosts, URLs) with analysis and revocations, up to 500 per run | your VirusSign key; off until enabled on the Connectors page |
 | NVD, CVE.org, CISA KEV, FIRST EPSS, OSV | CVE data | optional NVD key |
 | MITRE ATT&CK (GitHub) | Actor and technique data | none |
 | News and advisory RSS (e.g. CISA, Krebs, BleepingComputer, Talos, Securelist) | Headlines | none |
@@ -24,6 +25,7 @@ TFII is self-hosted and has **no telemetry**. It never sends anything to the pro
 | **VirusTotal** | The indicator (IP, domain, URL, hash; for an email address, only its domain, and not for free-mail or disposable domains) | Enrichment, bulk lookup, "Show past addresses" | Uses the requesting user's key, falling back to a key the admin saved. Query lookups are visible to VirusTotal under that key. |
 | **AbuseIPDB** | The IP | Enrichment of IPs | Same key handling. |
 | **URLhaus (abuse.ch)** | The URL / host / hash | Enrichment | Auth-Key. |
+| **VirusSign** (api.virussign.com) | The indicator (IP, domain, URL, file hash). Only sent when a VirusSign key is set | Enrichment, the Detailed report and its Test button. Background auto-enrichment skips it to protect your quota | Optional. Each lookup costs one quota unit on your plan. A 404 means "no record", never "safe". |
 | **Shodan** | The IP or domain | OSINT lookup, if a key is set | Optional. |
 | **CodeCraft** (codecraftapi.com) | The same text as Groq below, when the person has saved their own CodeCraft key. It is asked first | Only when someone uses an AI feature | Optional. Third-party gateway: check its terms before sending it anything sensitive. |
 | **Groq** | The text of a query-builder, query-explainer, diff, advisory or CVE-report prompt; for the AI assistants, a compact summary of what is on screen (see below) | Only when someone uses an AI feature and CodeCraft is not set up or failed | Optional; no key, no call. Do not paste sensitive data into it. |

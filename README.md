@@ -58,7 +58,7 @@ Change it right away under Settings → Change Password. Free public feeds (Feod
 |------|-------------|
 | **Command Center** | Live metrics and trends (IOCs, high-confidence, new today, CVEs, unpatched, KEV, campaigns), Threat Pulse (actively exploited CVEs in *your* software, malware families with fresh indicators), connector health. Everything drills down. |
 | **IOC Intelligence** | Server-side paginated table (thousands of rows), search, type/source/TLP/confidence/time filters, facets, bulk actions, STIX 2.1 export, TAXII 2.1 server, STIX/TAXII/MISP/CSV import. |
-| **Multi-source feeds** | Feodo Tracker, OpenPhish, Phishing.Database, IPsum, CINS Army, Emerging Threats, blocklist.de, AlienVault OTX, and abuse.ch ThreatFox, MalwareBazaar and URLhaus. Per-source reliability, expiry, and consensus rules. |
+| **Multi-source feeds** | Feodo Tracker, OpenPhish, Phishing.Database, IPsum, CINS Army, Emerging Threats, blocklist.de, AlienVault OTX, and abuse.ch ThreatFox, MalwareBazaar and URLhaus, plus VirusSign with your own key (including revocations). Per-source reliability, expiry, and consensus rules. |
 | **Entity Intelligence** | One page per indicator: reputation, confidence reasoning, VirusTotal / AbuseIPDB / URLhaus enrichment, provenance, related IOCs, linked CVEs, relationship graph, timeline, notes, generated KQL / SPL / YARA hunting queries. |
 | **Email addresses** | Judged through their domain (reputation, age, MX / SPF / DMARC, disposable and free-mail detection), with on-request breach exposure (XposedOrNot) and address risk (IPQualityScore) and deep mail-domain tests (MxToolbox), each with your own key. Works in bulk lookup too. |
 | **DNS records** | Name servers, mail servers, TXT, CAA and SOA for a domain, with SPF and DMARC parsed and flagged — via the public NSLookup.io API, cached, rate-limited. |
@@ -229,6 +229,7 @@ sudo certbot --nginx -d your-domain.com
 | `ADMIN_INITIAL_PASSWORD` | Optional | Password of the first admin. Blank = a random one is generated and printed once in the backend log (see [First login](#first-login)) |
 | `IPQS_API_KEY` | Optional | IPQualityScore email address risk (on request) |
 | `MXTOOLBOX_API_KEY` | Optional | MxToolbox deep mail-domain analysis (on request) |
+| `VIRUSSIGN_API_KEY` | Optional | [VirusSign](https://intel.virussign.com/) lookups and IOC feed. The feed is off until an admin enables it on the Connectors page; it reads at most 500 events per run (one quota token per 50) |
 | `GROQ_API_KEY` | Optional | KQL/SPL query builder and the AI assistants ([console.groq.com](https://console.groq.com)) |
 | `CODECRAFT_API_KEY` | Optional | A shared [CodeCraft](https://www.codecraftapi.com/) key for every user (a key saved on an admin account in Settings works the same way). AI features try CodeCraft first, then Groq |
 | `AI_SHARED_DAILY_LIMIT` | Optional | AI answers per non-admin person per day on the shared keys (default 40; personal keys are never limited) |

@@ -43,7 +43,7 @@ TYPE_GROUPS = {
 
 # An IOC counts as enriched only when an upstream actually answered; connector
 # rows carry an `enriched_at` stamp without ever having been looked up.
-_UPSTREAMS = ("virustotal", "abuseipdb", "urlhaus")
+_UPSTREAMS = ("virustotal", "abuseipdb", "urlhaus", "virussign")
 ENRICHED_SQL = "(" + " OR ".join(
     f"(i.enrichment->'{u}' IS NOT NULL AND i.enrichment->'{u}'->>'skipped' IS NULL AND i.enrichment->'{u}'->>'error' IS NULL)"
     for u in _UPSTREAMS) + ")"

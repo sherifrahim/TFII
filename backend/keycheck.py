@@ -25,6 +25,8 @@ class Probe(NamedTuple):
     params: Callable[[str], Dict[str, str]]
     invalid: tuple = (401, 403)            # statuses that mean "this key was rejected"
     judge: Optional[Callable[[dict], Optional[str]]] = None   # reads a 200 body for providers that answer 200 either way
+    accepted: tuple = ()                   # extra statuses that still mean "the key works" (VirusSign answers 404 for "no record")
+    notes: Optional[dict] = None           # a specific message for a status, e.g. {403: "..."}
 
 
 def _h(name: str, prefix: str = ""):
@@ -62,10 +64,14 @@ PROBES: Dict[str, Probe] = {
     "ipqs":       Probe("GET", "https://www.ipqualityscore.com/api/json/account/{key}", _NONE, _NONE, judge=_ipqs_judge),
     # OpenAI-compatible gateway: an unknown key gets 401 invalid_api_key.
     "codecraft":  Probe("GET", "https://www.codecraftapi.com/v1/models", _h("Authorization", "Bearer "), _NONE),
+    # VirusSign has no free "who am I" call: one lookup of a well-known domain costs one query unit. 404 (no record) still proves the key.
+    "virussign":  Probe("GET", "https://api.virussign.com/v1/ioc/domains/example.com", _h("x-api-key"), lambda k: {"view": "compact"},
+                        invalid=(401,), accepted=(404,),
+                        notes={403: "VirusSign recognised the key but refused the request: the quota may be used up, the account disabled, or the key lacks permission."}),
 }
 
 NAMES = {"virustotal": "VirusTotal", "abuseipdb": "AbuseIPDB", "shodan": "Shodan", "groq": "Groq", "nvd": "NVD",
-         "urlhaus": "abuse.ch", "otx": "AlienVault OTX", "ipqs": "IPQualityScore", "mxtoolbox": "MxToolbox", "codecraft": "CodeCraft"}
+         "urlhaus": "abuse.ch", "otx": "AlienVault OTX", "ipqs": "IPQualityScore", "mxtoolbox": "MxToolbox", "codecraft": "CodeCraft", "virussign": "VirusSign"}
 
 
 def _result(status: str, message: str) -> dict:
@@ -106,8 +112,10 @@ async def check_key(service: str, key: str, client: Optional[httpx.AsyncClient] 
         if verdict == "invalid":
             return _result("invalid", f"{name} rejected the key. Check that you copied all of it.")
         return _result("unexpected", f"{name} answered, but not in a way that confirms the key.")
-    if code == 200:
+    if code == 200 or code in probe.accepted:
         return _result("valid", f"{name} accepted the key.")
+    if probe.notes and code in probe.notes:
+        return _result("unexpected", probe.notes[code])
     if code in probe.invalid:
         return _result("invalid", f"{name} rejected the key. Check that you copied all of it.")
     if code == 429:

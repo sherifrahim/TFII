@@ -31,12 +31,14 @@ export function IndicatorOverview({ env, canEdit, reload }) {
     } catch (e) { toast(e.message, "error"); }
   }
 
-  const vt = enr.virustotal || {}, ab = enr.abuseipdb || {}, uh = enr.urlhaus || {};
+  const vt = enr.virustotal || {}, ab = enr.abuseipdb || {}, uh = enr.urlhaus || {}, vs = enr.virussign || {};
   const answered = d => d && !d.skipped && Object.keys(d).length;
   const sources = [
     { name: "VirusTotal", d: vt, rows: [["Detections", vt.total !== undefined ? `${vt.malicious ?? 0} / ${vt.total}` : null], ["Score", vt.vt_score !== undefined ? `${vt.vt_score}%` : null], ["AS owner", vt.as_owner], ["Reputation", vt.reputation]] },
     { name: "AbuseIPDB", d: ab, rows: [["Abuse score", ab.abuse_score !== undefined ? `${ab.abuse_score} / 100` : null], ["Reports", ab.total_reports], ["ISP", ab.isp], ["Usage", ab.usage_type]] },
     { name: "URLhaus", d: uh, rows: [["Listed", uh.found === undefined ? null : uh.found ? "Yes" : "No"], ["Threat", uh.threat], ["Status", uh.url_status]] },
+    { name: "VirusSign", d: vs, rows: [["Record", vs.found === false ? "None (not evidence of safety)" : null], ["Assessment", vs.malicious === true ? "Malicious" : vs.malicious === false ? "Not malicious" : null],
+      ["Confidence", typeof vs.confidence === "number" ? `${vs.confidence}%` : null], ["Family", vs.family], ["Severity", vs.severity], ["First seen", vs.first_seen], ["Last seen", vs.last_seen]] },
   ].filter(s => answered(s.d));
   const relGroups = [
     ["Same campaign", related.campaign, ioc.campaign_name],
@@ -77,7 +79,7 @@ export function IndicatorOverview({ env, canEdit, reload }) {
 
         <Panel title="Enrichment" sub={enr.enriched_at ? `updated ${timeAgo(enr.enriched_at)}` : undefined}>
           {sources.length === 0 ? (
-            <div className="small faint">No enrichment source has answered for this indicator{enr.source ? ` (ingested from ${enr.source})` : ""}. Use Re-enrich to query VirusTotal, AbuseIPDB and URLhaus.</div>
+            <div className="small faint">No enrichment source has answered for this indicator{enr.source ? ` (ingested from ${enr.source})` : ""}. Use Re-enrich to query VirusTotal, AbuseIPDB, URLhaus and VirusSign (whichever you have keys for).</div>
           ) : (
             <div className="grid g3">
               {sources.map(s => (
@@ -235,7 +237,7 @@ export function ObservableOverview({ env }) {
     <div className="stack">
       <Callout>This value isn't in the TFII indicator database. Look up its reputation, then track it as an IOC to enrich it, relate it and share it via STIX/TAXII. Anything TFII does know about it (URLs hosted on it, investigations that mention it) appears in the other tabs.</Callout>
       <Panel title="Reputation" actions={<Button size="sm" icon="search" loading={busy} onClick={run}>Look up</Button>}>
-        {!lookup ? <div className="small faint">Not looked up yet. This queries VirusTotal, AbuseIPDB and URLhaus with your keys.</div> : (
+        {!lookup ? <div className="small faint">Not looked up yet. This queries VirusTotal, AbuseIPDB, URLhaus and VirusSign with your keys.</div> : (
           <>
             <div className="row" style={{ gap: 8, marginBottom: 8 }}>
               <Badge tone={tone[lookup.verdict] || "low"} dot>{lookup.verdict}</Badge>

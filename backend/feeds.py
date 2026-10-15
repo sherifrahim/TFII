@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
 
 import security
+import virussign
 
 # ── Reliability ───────────────────────────────────────────────────────────────
 # What TFII believes about a source before looking at a single entry.
@@ -32,7 +33,7 @@ SOURCE_RELIABILITY = {
     "ThreatFox": 0.85, "MalwareBazaar": 0.85, "URLhaus": 0.85,
     "Feodo Tracker": 0.92, "OpenPhish": 0.80, "AlienVault OTX": 0.72,
     "IPsum": 0.60, "CINS Army": 0.62, "Emerging Threats": 0.66, "blocklist.de": 0.55,
-    "Phishing Database": 0.70,
+    "Phishing Database": 0.70, "VirusSign": virussign.DEFAULT_RELIABILITY,
 }
 DEFAULT_RELIABILITY = 0.5
 CONF_CAP = 97          # nothing automated is ever 100% certain
@@ -77,6 +78,7 @@ class Candidate:
     first_seen: Optional[datetime] = None
     description: str = ""
     context: dict = field(default_factory=dict)   # ASN, country, port … kept as enrichment
+    revoked: bool = False                      # the source withdrew this indicator
 
 
 _HASH = {32: "MD5", 40: "SHA1", 64: "SHA256"}
@@ -230,6 +232,40 @@ def parse_otx(text) -> List[Candidate]:
     return out
 
 
+def parse_virussign(text) -> List[Candidate]:
+    """VirusSign feed events, as the JSON {"items": [...]} that virussign.fetch_events collected. Each event's own
+    confidence is its reliability; withdrawn indicators come back flagged `revoked`."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return []
+    parsed = virussign.parse_events(data.get("items") if isinstance(data, dict) else [])
+    out = []
+    for row in parsed["upserts"] + parsed["revocations"]:
+        out.append(Candidate(value=row["value"], type=row["type"], reliability=row["reliability"], family=row["family"], tags=row["tags"],
+                             reference=virussign.HOME, first_seen=row["first_seen"], context=row["context"], revoked=row["revoked"],
+                             description="VirusSign threat intelligence" + (f": {row['family']}" if row["family"] else "")))
+    return out
+
+
+async def fetch_virussign(feed, key: Optional[str], fcfg: dict, state: dict) -> str:
+    """Read the next slice of the VirusSign event feed. `state` (kept between runs) holds the window and cursor; it is
+    updated in place. Returns the events as JSON text for parse_virussign."""
+    if not key:
+        raise RuntimeError("no API key")
+    max_events = int(fcfg.get("limit") or feed.default_limit)
+    async with virussign.client_factory(timeout=60, headers={"User-Agent": "TFII-ThreatIntel/2.0 (+feed-fetcher)"}) as c:
+        try:
+            items, new_state, meta = await virussign.fetch_events(c, key, state, max_events=max_events,
+                                                                   backfill_days=float(fcfg.get("backfill_days") or 1))
+        except virussign.VirusSignError as e:
+            raise RuntimeError(e.message)
+    state.clear()
+    state.update(new_state)
+    state["quota_remaining"] = meta.get("quota_remaining")
+    return json.dumps({"items": items})
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 @dataclass
 class Feed:
@@ -246,6 +282,7 @@ class Feed:
     homepage: str = ""
     about: str = ""
     kinds: str = ""                   # shown in the UI, e.g. "IPv4 · botnet C2"
+    fetch: Optional[Callable] = None  # async (feed, key, feed config, state) -> text, for feeds that are not one plain download
 
 
 FEEDS: Dict[str, Feed] = {f.id: f for f in [
@@ -269,9 +306,13 @@ FEEDS: Dict[str, Feed] = {f.id: f for f in [
          about="Proofpoint ET list of hosts observed attacking or compromised. Used for corroboration."),
     Feed("blocklist_de", "blocklist.de", "https://lists.blocklist.de/lists/all.txt", parse_blocklist_de, group="consensus", ttl_days=7, interval_hours=24,
          default_limit=3000, homepage="https://www.blocklist.de/", kinds="IPv4 · attack sources", about="Attack reports from honeypots and volunteer servers. Noisy alone; useful as a second opinion."),
+    Feed("virussign", "VirusSign threat intelligence", virussign.BASE + "/v1/feed/events", parse_virussign, ttl_days=30, interval_hours=6, default_limit=500,
+         key_env="VIRUSSIGN_API_KEY", key_header="x-api-key", fetch=fetch_virussign, homepage=virussign.HOME, kinds="File hash · domain · IP · URL",
+         about="VirusSign's event feed: malicious files, hosts and URLs with their own confidence, and withdrawals when an indicator is revoked. Needs a VirusSign key with feed access (VIRUSSIGN_API_KEY, or save one in Settings). "
+               "Each run reads at most the limit shown, and VirusSign charges quota per 50 events, so keep the limit modest."),
 ]}
 SOURCE_NAME = {"feodo": "Feodo Tracker", "openphish": "OpenPhish", "otx": "AlienVault OTX", "phishdb": "Phishing Database", "ipsum": "IPsum",
-               "cins": "CINS Army", "et_compromised": "Emerging Threats", "blocklist_de": "blocklist.de"}
+               "cins": "CINS Army", "et_compromised": "Emerging Threats", "blocklist_de": "blocklist.de", "virussign": "VirusSign"}
 MAX_BODY = 40 * 1024 * 1024
 
 
@@ -334,11 +375,13 @@ def corroborate(conn, ioc_id: str, key: str, record_score: Callable, actor: str 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
 async def run_feed(conn, feed_id: str, cfg: dict, *, ingest: Callable, record_score: Callable, defang: Callable, key: Optional[str] = None,
-                   trusted_domains=(), texts: Optional[dict] = None) -> dict:
+                   trusted_domains=(), texts: Optional[dict] = None, state: Optional[dict] = None, revoke: Optional[Callable] = None) -> dict:
     """Run one direct feed, or a whole consensus group when given a consensus feed id.
 
     `ingest(cur, conn, **kw)` is main._ingest_feed_ioc and returns (created, ioc_id).
-    `texts` lets tests hand in downloaded content instead of hitting the network.
+    `texts` lets tests hand in downloaded content instead of hitting the network. `state` is a dict a feed with its own
+    fetcher keeps between runs (a cursor); the caller loads it before and saves it after. `revoke(conn, type, value, source)`
+    handles indicators a source withdrew.
     """
     feed = FEEDS[feed_id]
     fcfg = (cfg.get("feeds") or {}).get(feed_id, {})
@@ -351,12 +394,16 @@ async def run_feed(conn, feed_id: str, cfg: dict, *, ingest: Callable, record_sc
 
     pool: Dict[str, dict] = {}
     errors, received = [], 0
+    revoked: List[tuple] = []
     for f in members:
         try:
             text = (texts or {}).get(f.id)
             if text is None:
                 k = key if f.id == feed_id else None
-                text = await fetch_text(f, k)
+                if f.fetch:
+                    text = await f.fetch(f, k, (cfg.get("feeds") or {}).get(f.id, {}) or {}, state if state is not None else {})
+                else:
+                    text = await fetch_text(f, k)
             cands = f.parser(text)
         except Exception as e:
             errors.append(f"{f.name}: {str(e)[:120] or type(e).__name__}")
@@ -369,6 +416,9 @@ async def run_feed(conn, feed_id: str, cfg: dict, *, ingest: Callable, record_sc
                 break
             c = clean_candidate(c, trusted_domains)
             if not c:
+                continue
+            if c.revoked:
+                revoked.append((c, src))
                 continue
             kept += 1
             slot = pool.setdefault((c.type, c.value), {"cand": c, "sources": {}, "feeds": {}})
@@ -410,11 +460,17 @@ async def run_feed(conn, feed_id: str, cfg: dict, *, ingest: Callable, record_sc
             sightings += 1
         if ioc_id and len(slot["sources"]) >= 1:
             corroborate(conn, ioc_id, value, record_score)
+    withdrawn = expired_by_revocation = 0
+    if revoked and revoke:
+        for c, src in revoked:
+            outcome = revoke(conn, c.type, c.value, src)
+            withdrawn += 1
+            expired_by_revocation += 1 if outcome == "expired" else 0
     conn.commit()
-    res = {"ok": not (errors and added + sightings == 0), "added": added, "skipped": sightings, "total_received": received,
-           "below_floor": below, "errors": errors,
+    res = {"ok": not (errors and added + sightings + withdrawn == 0), "added": added, "skipped": sightings, "total_received": received,
+           "below_floor": below, "errors": errors, "revoked": withdrawn, "expired": expired_by_revocation,
            "created": sorted(created_rows, key=lambda r: -r["confidence"])[:200]}
-    if errors and added + sightings == 0:
+    if errors and added + sightings + withdrawn == 0:
         res["error"] = "; ".join(errors)[:300]
     return res
 
