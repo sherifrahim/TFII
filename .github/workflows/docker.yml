@@ -21,8 +21,12 @@ jobs:
       - name: Run the setup script (HTTP mode, localhost)
         run: |
           # The script pauses so you can edit DOMAIN in .env; do that edit for it, then answer "HTTP only".
-          ( while [ ! -f .env ]; do sleep 0.2; done; sleep 1; sed -i 's|^DOMAIN=.*|DOMAIN=localhost|; s|^ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=http://localhost|' .env ) &
-          ( sleep 3; printf '\n1\n' ) | timeout 900 bash scripts/docker-setup.sh
+          # Enter is only sent once that edit is in place and .env holds its generated secrets, so timing cannot reorder them.
+          (
+            while ! grep -q '^ADMIN_INITIAL_PASSWORD=.\+' .env 2>/dev/null || grep -q 'replace_with_\|change_this_strong_password' .env; do sleep 0.2; done
+            sed -i 's|^DOMAIN=.*|DOMAIN=localhost|; s|^ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=http://localhost|' .env
+            printf '\n1\n'
+          ) | timeout 900 bash scripts/docker-setup.sh
 
       - name: Check what a first-time user needs
         run: |
