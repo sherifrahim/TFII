@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 import security
 import feeds
+import dbmaint
 import keycheck
 import geo as geoloc
 import mailintel
@@ -625,6 +626,10 @@ async def startup():
         print("[scheduler] CVE poll every 6h | Daily brief 08:00 | Weekly Sundays | Connectors every 24h")
     except ImportError:
         print("[scheduler] apscheduler not installed — run: pip install apscheduler")
+
+    # Index build and old-row cleanup run after the app is up, off the event loop, so they never delay startup.
+    if not os.getenv("TFII_SKIP_DB_MAINT"):
+        asyncio.get_event_loop().create_task(asyncio.to_thread(dbmaint.run, get_db_direct))
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ADMIN DAILY BRIEF — CVE digest + Gold rates

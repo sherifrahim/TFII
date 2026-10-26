@@ -38,7 +38,7 @@ def client():
         pytest.skip(f"no PostgreSQL available for tests ({type(e).__name__}: {str(e).splitlines()[0][:80]})")
 
     os.environ.update(DB_NAME=TEST_DB, SECRET_KEY=secrets.token_hex(32), ADMIN_INITIAL_PASSWORD=ADMIN_PW,
-                      ALLOWED_ORIGINS="", ENCRYPTION_KEY="")
+                      ALLOWED_ORIGINS="", ENCRYPTION_KEY="", TFII_SKIP_DB_MAINT="1")
     from fastapi.testclient import TestClient
     import main
     with TestClient(main.app) as tc:

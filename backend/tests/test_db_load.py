@@ -6,9 +6,9 @@ import json
 import httpx
 import pytest
 
+import dbmaint
 import entities
 import feeds
-import migrations
 
 
 def _plan(db, sql, params=()):
@@ -22,6 +22,10 @@ def _plan(db, sql, params=()):
 
 
 def test_the_lower_entity_ref_lookup_has_an_index(client, db):
+    import main
+    first = dbmaint.run(main.get_db_direct, force=True)
+    assert first["index"] in ("created", "present") and "error" not in first
+    assert dbmaint.run(main.get_db_direct)["index"] == "present"                 # repeating it is harmless
     cur = db.cursor()
     cur.execute("SELECT indexdef FROM pg_indexes WHERE tablename = 'entity_observations' AND indexname = 'idx_eo_entity_lower'")
     row = cur.fetchone()
@@ -70,17 +74,46 @@ def test_the_feed_ingest_uses_it_and_provenance_still_names_every_source(client,
     assert _count(db, "refresh-me.example", "ingested")[0] == 1
 
 
-def test_the_migration_collapses_old_sighting_rows_and_keeps_the_count(client, db):
+def test_the_cleanup_collapses_old_sighting_rows_and_keeps_the_count(client, db):
     cur = db.cursor()
     for i in range(5):
         cur.execute("""INSERT INTO entity_observations (entity_kind, entity_ref, obs_type, source, source_type, confidence, ingested_at)
                        VALUES ('indicator', 'Old-Dupes.example', 'sighting', 'IPsum', 'feed', %s, NOW() - %s * INTERVAL '1 day')""", (60 + i, 5 - i))
     cur.execute("INSERT INTO entity_observations (entity_kind, entity_ref, obs_type, source, source_type) VALUES ('indicator', 'old-dupes.example', 'sighting', 'CINS Army', 'feed')")
     cur.execute("INSERT INTO entity_observations (entity_kind, entity_ref, obs_type, source, source_type) VALUES ('indicator', 'old-dupes.example', 'ingested', 'IPsum', 'feed')")
-    collapse = [sql for v, _n, steps in migrations.MIGRATIONS if v == 6 for sql, _o in steps if "ROW_NUMBER" in sql][0]
-    cur.execute(collapse)
+    # a row the new code already refreshed (times_seen 3) plus two older plain rows: 3 + 1 + 1 = 5 sightings in all
+    for i, seen in enumerate((None, None, 3)):
+        cur.execute("""INSERT INTO entity_observations (entity_kind, entity_ref, obs_type, source, source_type, data, ingested_at)
+                       VALUES ('indicator', 'mixed.example', 'sighting', 'OpenPhish', 'feed', %s, NOW() - %s * INTERVAL '1 hour')""",
+                    (json.dumps({"times_seen": seen} if seen else {}), 3 - i))
+    out = dbmaint.collapse_sightings(cur, batch=1, pause=0)                      # one group per batch: exercises the loop
+    assert out == {"groups": 2, "deleted": 6, "batches": 2}              # IPsum (5 rows -> 1) and OpenPhish (3 -> 1), one group per batch
     cur.execute("SELECT obs_type, source, confidence, (data->>'times_seen')::int FROM entity_observations WHERE LOWER(entity_ref) = 'old-dupes.example' ORDER BY obs_type, source")
     assert cur.fetchall() == [("ingested", "IPsum", None, None), ("sighting", "CINS Army", None, None), ("sighting", "IPsum", 64, 5)]      # newest kept, 5 counted
+    cur.execute("SELECT (data->>'times_seen')::int FROM entity_observations WHERE entity_ref = 'mixed.example'")
+    assert cur.fetchall() == [(5,)]
+    assert dbmaint.collapse_sightings(cur, pause=0) == {"groups": 0, "deleted": 0, "batches": 0}      # nothing left to do
+
+
+def test_the_maintenance_job_skips_when_another_worker_has_it_and_remembers_when_done(client, db):
+    import main
+    holder = main.get_db_direct()
+    try:
+        holder.autocommit = True
+        holder.cursor().execute("SELECT pg_advisory_lock(%s)", (dbmaint.LOCK_ID,))
+        assert dbmaint.run(main.get_db_direct) == {"skipped": "another worker is running it"}
+    finally:
+        holder.close()                                                          # closing the session releases its lock
+    done = dbmaint.run(main.get_db_direct, force=True)
+    assert "error" not in done and done["collapse"]["batches"] >= 0
+    again = dbmaint.run(main.get_db_direct)
+    assert again["collapse"] == "already done"
+
+
+def test_startup_does_not_run_the_heavy_work_inside_a_migration():
+    import migrations
+    text = " ".join(sql for _v, _n, steps in migrations.MIGRATIONS for sql, _o in steps)
+    assert "idx_eo_entity_lower" not in text and "ROW_NUMBER" not in text
 
 
 # ── Batched corroboration gives the same answer as the per-indicator query ────
