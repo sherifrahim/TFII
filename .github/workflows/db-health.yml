@@ -1,0 +1,49 @@
+name: Database health (read-only)
+
+# Manual only. Reports what is keeping PostgreSQL busy: long-running or idle-in-transaction sessions, who blocks whom,
+# table and index sizes, scan counts, the plan of the feed corroboration query, and server settings.
+# Every statement runs in a read-only session with a 30 s timeout. It prints counts, sizes, plans and truncated query
+# text (indicator values can appear there); it never prints key values or table contents beyond that.
+on:
+  workflow_dispatch:
+
+jobs:
+  db-health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect the database
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          command_timeout: 10m
+          script: |
+            cd /home/ubuntu/threatfeed && set -a && . ./.env && set +a
+            export PGPASSWORD="$DB_PASS" PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=30000"
+            Q() { psql -h "${DB_HOST:-localhost}" -U "$DB_USER" "$DB_NAME" -X -P pager=off -c "$1" 2>&1 | head -${2:-40}; }
+            echo "=== 1. server: version, memory, key settings ==="
+            Q "SELECT version()" 3
+            free -m | head -2
+            Q "SELECT name, setting, unit FROM pg_settings WHERE name IN ('shared_buffers','work_mem','effective_cache_size','maintenance_work_mem','max_connections','statement_timeout','idle_in_transaction_session_timeout','lock_timeout','autovacuum','random_page_cost') ORDER BY name"
+            echo "=== 2. sessions (oldest transaction first; this session excluded) ==="
+            Q "SELECT pid, state, now() - xact_start AS xact_age, now() - state_change AS in_state, wait_event_type, wait_event, left(regexp_replace(query, '\s+', ' ', 'g'), 150) AS query FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() ORDER BY xact_start NULLS LAST LIMIT 15" 40
+            echo "=== 3. blocked sessions and who blocks them ==="
+            Q "SELECT pid, pg_blocking_pids(pid) AS blocked_by, now() - xact_start AS xact_age, left(regexp_replace(query, '\s+', ' ', 'g'), 120) AS query FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0" 20
+            echo "=== 4. locks held by the oldest open transaction ==="
+            Q "SELECT l.pid, l.locktype, l.mode, l.granted, c.relname FROM pg_locks l LEFT JOIN pg_class c ON c.oid = l.relation WHERE l.pid = (SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND xact_start IS NOT NULL AND pid <> pg_backend_pid() ORDER BY xact_start LIMIT 1) ORDER BY l.granted, c.relname LIMIT 25" 35
+            echo "=== 5. table sizes, row estimates, dead rows, vacuum, and scan counts ==="
+            Q "SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS total, n_live_tup, n_dead_tup, seq_scan, seq_tup_read, idx_scan, last_autovacuum::date AS autovac, last_autoanalyze::date AS autoanalyze FROM pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC LIMIT 12" 25
+            echo "=== 6. indexes on the two big tables ==="
+            Q "SELECT s.relname AS tbl, s.indexrelname AS idx, pg_size_pretty(pg_relation_size(s.indexrelid)) AS size, s.idx_scan, pg_get_indexdef(s.indexrelid) AS def FROM pg_stat_user_indexes s WHERE s.relname IN ('entity_observations','iocs') ORDER BY s.relname, pg_relation_size(s.indexrelid) DESC" 40
+            echo "=== 7. entity_observations: what is in it ==="
+            Q "SELECT obs_type, source_type, COUNT(*) AS rows, MIN(ingested_at)::date AS first, MAX(ingested_at)::date AS last FROM entity_observations GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 12" 20
+            Q "SELECT date_trunc('day', ingested_at)::date AS day, COUNT(*) FROM entity_observations WHERE ingested_at > now() - interval '7 days' GROUP BY 1 ORDER BY 1" 12
+            echo "=== 8. the corroboration query: plan (no execution) for a real indicator ==="
+            REF=$(psql -h "${DB_HOST:-localhost}" -U "$DB_USER" "$DB_NAME" -X -At -c "SELECT entity_ref FROM entity_observations WHERE entity_kind = 'indicator' AND source_type = 'feed' ORDER BY id DESC LIMIT 1" 2>/dev/null | head -1 | sed "s/'/''/g")
+            Q "EXPLAIN SELECT source, MAX(COALESCE(confidence, 0)) FROM entity_observations WHERE entity_kind = 'indicator' AND LOWER(entity_ref) = LOWER('$REF') AND obs_type IN ('ingested','sighting') AND source_type = 'feed' GROUP BY source" 20
+            echo "=== 9. pg_stat_statements (if installed): the most expensive statements ==="
+            Q "SELECT calls, round(total_exec_time/1000)::int AS total_s, round(mean_exec_time)::int AS mean_ms, rows, left(regexp_replace(query, '\s+', ' ', 'g'), 130) AS query FROM pg_stat_statements WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) ORDER BY total_exec_time DESC LIMIT 8" 20
+            echo "=== 10. recent feed runs (from the settings the Connectors page reads) ==="
+            Q "SELECT key, left(value, 220) AS value FROM system_settings WHERE key LIKE 'connector_last_run_%' ORDER BY key" 25
