@@ -415,15 +415,22 @@ def parse_bulk_input(text: str) -> list:
 
 
 # ── DB ────────────────────────────────────────────────────────────────────────
+# A session that sits "idle in transaction" for this long is ended by PostgreSQL, so a stuck job cannot hold locks and
+# block vacuum indefinitely (one transaction was open for 92 minutes). Work is committed well inside this limit.
+IDLE_IN_TRANSACTION_MS = int(os.getenv("DB_IDLE_IN_TRANSACTION_MS", "900000"))
+
+def _connect():
+    return psycopg2.connect(host=os.getenv("DB_HOST"), dbname=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"), password=os.getenv("DB_PASS"),
+        options=f"-c idle_in_transaction_session_timeout={IDLE_IN_TRANSACTION_MS}" if IDLE_IN_TRANSACTION_MS > 0 else None)
+
 def get_db():
-    conn = psycopg2.connect(host=os.getenv("DB_HOST"), dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"), password=os.getenv("DB_PASS"))
+    conn = _connect()
     try: yield conn
     finally: conn.close()
 
 def get_db_direct():
-    return psycopg2.connect(host=os.getenv("DB_HOST"), dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"), password=os.getenv("DB_PASS"))
+    return _connect()
 
 # ── STARTUP ───────────────────────────────────────────────────────────────────
 @app.on_event("startup")
@@ -1431,9 +1438,8 @@ def _ingest_feed_ioc(cur, conn, *, type_, value, defanged, tlp, confidence, desc
                     valid_until = CASE WHEN valid_until IS NULL OR %s THEN valid_until
                                        ELSE GREATEST(valid_until, NOW() + %s * INTERVAL '1 day') END
                 WHERE id = %s""", (bool(row[1]), valid_days, row[0]))
-            entities.record_observation(conn, "indicator", key, "sighting", source, "feed", source_ref=source_ref,
-                                        observed_at=observed_at, confidence=confidence,
-                                        summary=f"Seen again in {source} feed")
+            entities.touch_sighting(conn, "indicator", key, source, "feed", source_ref=source_ref,
+                                    observed_at=observed_at, confidence=confidence, summary=f"Seen again in {source} feed")
             cur.execute("RELEASE SAVEPOINT feed_ioc")
             return False, row[0]
         ioc_id = f"indicator--{uuid.uuid4()}"
@@ -1454,6 +1460,23 @@ def _ingest_feed_ioc(cur, conn, *, type_, value, defanged, tlp, confidence, desc
         cur.execute("ROLLBACK TO SAVEPOINT feed_ioc")
         raise
 
+def _exc_text(e: Exception) -> str:
+    """An exception as readable text. str() of an httpx timeout is empty, which showed up as an error with no message."""
+    return f"{type(e).__name__}: {str(e)[:160]}".rstrip(": ") if str(e) else type(e).__name__
+
+async def _abusech_request(method: str, url: str, **kw):
+    """One abuse.ch API call; a timeout or dropped connection is tried once more before giving up."""
+    last: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=60) as c:
+                return await c.request(method, url, **kw)
+        except httpx.TransportError as e:
+            last = e
+            if attempt == 0:
+                await asyncio.sleep(3)
+    raise last
+
 async def run_threatfox_connector(conn, auth_key: str, days_back: int = 1) -> dict:
     """
     Pull recent IOCs from ThreatFox (abuse.ch).
@@ -1462,10 +1485,8 @@ async def run_threatfox_connector(conn, auth_key: str, days_back: int = 1) -> di
     """
     added = 0; skipped = 0; errors = []
     try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post("https://threatfox-api.abuse.ch/api/v1/",
-                json={"query": "get_iocs", "days": min(days_back, 7)},
-                headers={"Auth-Key": auth_key})
+        r = await _abusech_request("POST", "https://threatfox-api.abuse.ch/api/v1/",
+            json={"query": "get_iocs", "days": min(days_back, 7)}, headers={"Auth-Key": auth_key})
         if r.status_code == 401:
             return {"ok": False, "error": "Invalid Auth-Key"}
         if r.status_code != 200:
@@ -1531,7 +1552,7 @@ async def run_threatfox_connector(conn, auth_key: str, days_back: int = 1) -> di
 
         conn.commit()
     except Exception as e:
-        return {"ok": False, "error": str(e)[:200]}
+        return {"ok": False, "error": _exc_text(e)}
 
     return {"ok": True, "added": added, "skipped": skipped,
             "total_received": len(iocs), "errors": errors[:5]}
@@ -1544,10 +1565,8 @@ async def run_malwarebazaar_connector(conn, auth_key: str, limit: int = 100) -> 
     """
     added = 0; skipped = 0; errors = []
     try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post("https://mb-api.abuse.ch/api/v1/",
-                data={"query": "get_recent", "selector": "time"},
-                headers={"Auth-Key": auth_key})
+        r = await _abusech_request("POST", "https://mb-api.abuse.ch/api/v1/",
+            data={"query": "get_recent", "selector": "time"}, headers={"Auth-Key": auth_key})
         if r.status_code != 200:
             return {"ok": False, "error": f"HTTP {r.status_code}"}
         data = r.json()
@@ -1588,7 +1607,7 @@ async def run_malwarebazaar_connector(conn, auth_key: str, limit: int = 100) -> 
 
         conn.commit()
     except Exception as e:
-        return {"ok": False, "error": str(e)[:200]}
+        return {"ok": False, "error": _exc_text(e)}
 
     return {"ok": True, "added": added, "skipped": skipped,
             "total_received": len(samples), "errors": errors[:5]}
@@ -1600,12 +1619,10 @@ async def run_urlhaus_connector(conn, auth_key: str, limit: int = 100) -> dict:
     """
     added = 0; skipped = 0; errors = []
     try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            # abuse.ch requires GET here — a POST is answered with
-            # {"query_status": "http_get_expected"} and no data, which the
-            # connector then reported as a successful pull of zero URLs.
-            r = await c.get("https://urlhaus-api.abuse.ch/v1/urls/recent/",
-                headers={"Auth-Key": auth_key})
+        # abuse.ch requires GET here — a POST is answered with
+        # {"query_status": "http_get_expected"} and no data, which the
+        # connector then reported as a successful pull of zero URLs.
+        r = await _abusech_request("GET", "https://urlhaus-api.abuse.ch/v1/urls/recent/", headers={"Auth-Key": auth_key})
         if r.status_code == 401:
             return {"ok": False, "error": "Invalid Auth-Key"}
         if r.status_code != 200:
@@ -1647,7 +1664,7 @@ async def run_urlhaus_connector(conn, auth_key: str, limit: int = 100) -> dict:
 
         conn.commit()
     except Exception as e:
-        return {"ok": False, "error": str(e)[:200]}
+        return {"ok": False, "error": _exc_text(e)}
 
     return {"ok": True, "added": added, "skipped": skipped,
             "total_received": len(urls), "errors": errors[:5]}
@@ -1914,6 +1931,7 @@ async def _run_feed_job(feed_id: str, user=None):
                 res = {"ok": False, "error": f"{f.name} needs an API key ({f.key_env} in .env, or Settings → API keys)."}
             else:
                 state = _load_feed_state(conn, feed_id) if f.fetch else None
+                conn.commit()                                       # no transaction stays open while the feeds download
                 res = await feeds.run_feed(conn, feed_id, cfg, ingest=_ingest_feed_ioc, record_score=record_score, defang=defang,
                                            key=key, trusted_domains=tuple(TRUSTED_DOMAINS), state=state, revoke=_revoke_feed_ioc)
                 if state is not None and res.get("ok"):

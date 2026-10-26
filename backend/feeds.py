@@ -18,11 +18,14 @@ Feeds are declared in `FEEDS`; a feed is a URL, a parser and a reliability. Pars
 functions over the downloaded text so they can be tested without a network. Nothing in this
 module imports `main`; the writer functions it needs are passed in.
 """
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
+
+import httpx
 
 import security
 import virussign
@@ -314,9 +317,26 @@ FEEDS: Dict[str, Feed] = {f.id: f for f in [
 SOURCE_NAME = {"feodo": "Feodo Tracker", "openphish": "OpenPhish", "otx": "AlienVault OTX", "phishdb": "Phishing Database", "ipsum": "IPsum",
                "cins": "CINS Army", "et_compromised": "Emerging Threats", "blocklist_de": "blocklist.de", "virussign": "VirusSign"}
 MAX_BODY = 40 * 1024 * 1024
+COMMIT_EVERY = 200                       # indicators per transaction during a run
+FETCH_ATTEMPTS = 3                       # a download that drops or times out is tried again after a short pause
+FETCH_PAUSE = (2.0, 6.0)
 
 
 async def fetch_text(feed: Feed, key: Optional[str] = None) -> str:
+    """Download a feed. Dropped connections and timeouts are retried (CINS Army and others disconnect now and then);
+    an HTTP error status or an oversized answer is not."""
+    last: Optional[Exception] = None
+    for attempt in range(FETCH_ATTEMPTS):
+        try:
+            return await _fetch_text_once(feed, key)
+        except httpx.TransportError as e:                        # includes timeouts, resets and "server disconnected"
+            last = e
+            if attempt + 1 < FETCH_ATTEMPTS:
+                await asyncio.sleep(FETCH_PAUSE[min(attempt, len(FETCH_PAUSE) - 1)])
+    raise RuntimeError(f"{type(last).__name__}: {str(last)[:100] or 'no detail'} (tried {FETCH_ATTEMPTS} times)")
+
+
+async def _fetch_text_once(feed: Feed, key: Optional[str] = None) -> str:
     headers = {"User-Agent": "TFII-ThreatIntel/2.0 (+feed-fetcher)"}
     if feed.key_header and key:
         headers[feed.key_header] = key
@@ -342,15 +362,35 @@ def corroborated_confidence(source_scores: Dict[str, float]) -> int:
     return int(round(100 * min(CONF_CAP / 100.0, noisy_or(source_scores.values()))))
 
 
-def corroborate(conn, ioc_id: str, key: str, record_score: Callable, actor: str = "feed corroboration") -> Optional[int]:
-    """Raise an indicator's confidence to what its distinct feed sources justify (never lowers it).
-    Returns the new confidence when it changed."""
+def observation_scores(conn, keys, chunk: int = 500) -> Dict[str, Dict[str, int]]:
+    """What each feed source has said about each indicator so far: {lower(key): {source: best confidence}}.
+    One query per `chunk` indicators instead of one per indicator (corroborate() would otherwise run once per
+    indicator in a batch). Uses idx_eo_entity_lower."""
+    out: Dict[str, Dict[str, int]] = {}
+    keys = list(dict.fromkeys(k.lower() for k in keys if k))
     cur = conn.cursor()
-    cur.execute("""SELECT source, MAX(COALESCE(confidence, 0)) FROM entity_observations
-        WHERE entity_kind = 'indicator' AND LOWER(entity_ref) = LOWER(%s) AND obs_type IN ('ingested','sighting')
-              AND source_type = 'feed' GROUP BY source""", (key,))
+    for i in range(0, len(keys), chunk):
+        cur.execute("""SELECT LOWER(entity_ref), source, MAX(COALESCE(confidence, 0)) FROM entity_observations
+            WHERE entity_kind = 'indicator' AND LOWER(entity_ref) = ANY(%s) AND obs_type IN ('ingested','sighting')
+                  AND source_type = 'feed' GROUP BY 1, 2""", (keys[i:i + chunk],))
+        for ref, src, conf in cur.fetchall():
+            out.setdefault(ref, {})[src] = int(conf or 0)
+    return out
+
+
+def corroborate(conn, ioc_id: str, key: str, record_score: Callable, actor: str = "feed corroboration",
+                observed: Optional[Dict[str, int]] = None) -> Optional[int]:
+    """Raise an indicator's confidence to what its distinct feed sources justify (never lowers it).
+    `observed` ({source: best confidence}) lets a batch hand in what observation_scores() already read; without it the
+    indicator's observations are queried. Returns the new confidence when it changed."""
+    cur = conn.cursor()
+    if observed is None:
+        cur.execute("""SELECT source, MAX(COALESCE(confidence, 0)) FROM entity_observations
+            WHERE entity_kind = 'indicator' AND LOWER(entity_ref) = LOWER(%s) AND obs_type IN ('ingested','sighting')
+                  AND source_type = 'feed' GROUP BY source""", (key,))
+        observed = {src: conf for src, conf in cur.fetchall()}
     scores = {}
-    for src, conf in cur.fetchall():
+    for src, conf in observed.items():
         scores[src] = (conf / 100.0) if conf else SOURCE_RELIABILITY.get(src, DEFAULT_RELIABILITY)
     scores = independent_scores(scores)
     if len(scores) < 2:
@@ -435,7 +475,8 @@ async def run_feed(conn, feed_id: str, cfg: dict, *, ingest: Callable, record_sc
         cur.execute("SELECT value FROM iocs WHERE value = ANY(%s)", (vals[i:i + 500],))
         existing.update(r[0] for r in cur.fetchall())
 
-    added = sightings = below = 0
+    prior = observation_scores(conn, [v for (_t, v) in pool])      # what every source said before this run, in a few queries
+    added = sightings = below = processed = 0
     created_rows = []
     for (typ, value), slot in pool.items():
         conf = corroborated_confidence(slot["sources"])
@@ -459,7 +500,13 @@ async def run_feed(conn, feed_id: str, cfg: dict, *, ingest: Callable, record_sc
         else:
             sightings += 1
         if ioc_id and len(slot["sources"]) >= 1:
-            corroborate(conn, ioc_id, value, record_score)
+            seen_by = dict(prior.get(value.lower(), {}))
+            for src, rel in slot["sources"].items():                   # plus what this run just recorded for the indicator
+                seen_by[src] = max(seen_by.get(src, 0), int(round(rel * 100)))
+            corroborate(conn, ioc_id, value, record_score, observed=seen_by)
+        processed += 1
+        if processed % COMMIT_EVERY == 0:
+            conn.commit()                                              # never hold one transaction (and its locks) for a whole run
     withdrawn = expired_by_revocation = 0
     if revoked and revoke:
         for c, src in revoked:

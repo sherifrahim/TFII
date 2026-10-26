@@ -214,6 +214,34 @@ def record_observation(conn, kind, ref, obs_type, source, source_type, *, source
         return False
 
 
+def touch_sighting(conn, kind, ref, source, source_type, *, source_ref=None, observed_at=None, confidence=None, summary=None):
+    """Record that a source still lists an indicator. One 'sighting' row per indicator and source is refreshed in place
+    (its time, confidence and data.times_seen), so a feed that lists the same indicator every run does not add a row per run.
+    The first sighting is inserted. Best-effort, like record_observation."""
+    cur = conn.cursor()
+    try:
+        cur.execute("SAVEPOINT touch_obs")
+        cur.execute("""UPDATE entity_observations SET ingested_at = NOW(), confidence = %s, summary = %s,
+                source_ref = COALESCE(%s, source_ref), observed_at = COALESCE(observed_at, %s),
+                data = jsonb_set(COALESCE(data, '{}'::jsonb), '{times_seen}', to_jsonb(COALESCE((data->>'times_seen')::int, 1) + 1))
+            WHERE id = (SELECT id FROM entity_observations WHERE entity_kind = %s AND LOWER(entity_ref) = LOWER(%s)
+                        AND obs_type = 'sighting' AND source = %s AND source_type = %s ORDER BY id DESC LIMIT 1)
+            RETURNING id""", (confidence, (summary or "")[:500], source_ref, observed_at, kind, ref, source[:100], source_type))
+        updated = cur.fetchone()
+        cur.execute("RELEASE SAVEPOINT touch_obs")
+    except Exception as e:
+        try:
+            cur.execute("ROLLBACK TO SAVEPOINT touch_obs")
+        except Exception:
+            pass
+        print(f"[entities] sighting not refreshed: {str(e).splitlines()[0][:120]}")
+        return False
+    if updated:
+        return True
+    return record_observation(conn, kind, ref, "sighting", source, source_type, source_ref=source_ref, observed_at=observed_at,
+                              confidence=confidence, summary=summary, data={"times_seen": 1})
+
+
 ENRICH_SOURCES = (("virustotal", "VirusTotal"), ("abuseipdb", "AbuseIPDB"), ("urlhaus", "URLhaus"), ("virussign", "VirusSign"))
 
 

@@ -232,6 +232,7 @@ sudo certbot --nginx -d your-domain.com
 | `VIRUSSIGN_API_KEY` | Optional | [VirusSign](https://intel.virussign.com/) lookups and IOC feed. The feed is off until an admin enables it on the Connectors page; it reads at most 500 events per run (one quota token per 50) |
 | `GROQ_API_KEY` | Optional | KQL/SPL query builder and the AI assistants ([console.groq.com](https://console.groq.com)) |
 | `CODECRAFT_API_KEY` | Optional | A shared [CodeCraft](https://www.codecraftapi.com/) key for every user (a key saved on an admin account in Settings works the same way). AI features try CodeCraft first, then Groq |
+| `DB_IDLE_IN_TRANSACTION_MS` | Optional | PostgreSQL ends a TFII session that sits idle inside an open transaction for this long (default 900000 = 15 minutes; 0 turns it off), so a stuck job cannot hold locks indefinitely |
 | `AI_SHARED_DAILY_LIMIT` | Optional | AI answers per non-admin person per day on the shared keys (default 40; personal keys are never limited) |
 | `CODECRAFT_MODEL` | Optional | Default model for people who save their own [CodeCraft](https://www.codecraftapi.com/) key (default `deepseek-v4-flash-0731`). Each person can pick another from the list their key offers in Settings → API keys |
 | `VT_API_KEY` | Optional | VirusTotal enrichment |

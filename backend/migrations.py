@@ -159,6 +159,23 @@ MIGRATIONS = [
         R("""CREATE TABLE IF NOT EXISTS user_ai_prefs (
             user_id VARCHAR(100) PRIMARY KEY, codecraft_model VARCHAR(100), updated_at TIMESTAMP DEFAULT NOW())"""),
     ]),
+    (6, "observation_lookup_and_sightings", [
+        # Feed runs look up every indicator's observations by LOWER(entity_ref). The older index is on plain entity_ref, so
+        # the planner could not use it and scanned the whole table for each lookup (production: ~1M scans in a month).
+        O("CREATE INDEX IF NOT EXISTS idx_eo_entity_lower ON entity_observations (entity_kind, LOWER(entity_ref))"),
+        O("ANALYZE entity_observations"),
+        # A feed that still lists an indicator used to add a new "seen again" row on every run. Now one row per
+        # indicator and source is refreshed in place (data.times_seen counts the sightings). Collapse the existing rows to
+        # the latest per indicator and source, keeping the count.
+        O("""WITH ranked AS (
+                SELECT id, ROW_NUMBER() OVER (PARTITION BY entity_kind, LOWER(entity_ref), source ORDER BY ingested_at DESC NULLS LAST, id DESC) AS rn,
+                       COUNT(*) OVER (PARTITION BY entity_kind, LOWER(entity_ref), source) AS n
+                FROM entity_observations WHERE obs_type = 'sighting' AND source_type = 'feed'),
+            kept AS (
+                UPDATE entity_observations o SET data = jsonb_set(COALESCE(o.data, '{}'::jsonb), '{times_seen}', to_jsonb(r.n))
+                FROM ranked r WHERE o.id = r.id AND r.rn = 1 AND r.n > 1 RETURNING o.id)
+            DELETE FROM entity_observations WHERE id IN (SELECT id FROM ranked WHERE rn > 1)"""),
+    ]),
 ]
 
 
