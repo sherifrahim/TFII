@@ -1,6 +1,6 @@
 """Email indicators are judged through their domain, never by a free-mail domain's good name."""
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -8,6 +8,11 @@ import pytest
 import mailintel
 
 NOW = datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+
+def _days_ago(n: int) -> str:
+    """A registration date relative to the real clock, for tests that go through the API (which uses the current time)."""
+    return (datetime.now(timezone.utc) - timedelta(days=n)).date().isoformat()
 REAL_ASYNC_CLIENT = httpx.AsyncClient
 
 
@@ -116,7 +121,7 @@ def stack(client, analyst, monkeypatch):
     async def fake_vt(domain, conn=None, key=None, user_id=None):
         calls["vt"].append(domain)
         return {"source": "VirusTotal", "malicious": 4 if domain == "evil.example" else 0, "total": 90,
-                "registration": {"registrar": "R", "created": "2026-09-28"} if domain == "evil.example" else {"registrar": "R", "created": "2012-01-01"}}
+                "registration": {"registrar": "R", "created": _days_ago(3)} if domain == "evil.example" else {"registrar": "R", "created": "2012-01-01"}}
 
     async def fake_uh(domain, conn=None, key=None, user_id=None):
         calls["uh"].append(domain)

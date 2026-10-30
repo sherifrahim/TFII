@@ -272,7 +272,11 @@ PATTERNS = {
     "CVE":    "[vulnerability:name = '{v}']",
 }
 COLLECTION_ID = "a45ef559-3f21-4b78-9cde-ef0123456789"
-SERVER_URL    = os.getenv("SERVER_URL", "https://YOUR_DOMAIN")
+_DOMAIN       = (os.getenv("DOMAIN") or "").strip()
+# The TAXII discovery document advertises this. Without SERVER_URL it follows DOMAIN, so a fresh install does not
+# advertise a placeholder address.
+SERVER_URL    = (os.getenv("SERVER_URL") or (f"{'http' if _DOMAIN in ('localhost', '127.0.0.1') else 'https'}://{_DOMAIN}"
+                 if _DOMAIN and _DOMAIN != "your-domain.com" else "https://YOUR_DOMAIN")).rstrip("/")
 
 # ── DEFANG ────────────────────────────────────────────────────────────────────
 def refang(v: str) -> str:

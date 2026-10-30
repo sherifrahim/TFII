@@ -22,11 +22,11 @@ the server, copy it back.
 | Backend | `backend/*.py` | `main.py` imports `intel_api.py` (the `/v2/*` API). Always deploy every `*.py` together. |
 | Frontend | `frontend/src/**` | Entry `App.js` → `Root.js`; pages in `pages/`, shell in `shell/`, the original tools in `legacy/`. Built with Vite; `react` and `react-dom` are the only runtime dependencies. |
 
-Schema changes are additive and applied automatically at startup
-(`intel_api.ensure_schema`): new tables `investigations`, `investigation_items`,
-`investigation_events`, `ioc_provenance`, new columns `iocs.last_seen` and
-`admin_notes.investigation_id`, and indexes on the IOC/CVE tables. Nothing is
-dropped or rewritten, so rolling back the code leaves a working database.
+Schema changes are additive and applied automatically at startup by the numbered
+migrations in `backend/migrations.py` (recorded in `schema_migrations`). Slow work that
+would delay startup past the deploy's health check (building an index on a large table,
+cleaning up old rows) runs in the background after the app is up (`backend/dbmaint.py`).
+Nothing is dropped or rewritten, so rolling back the code leaves a working database.
 
 ## Automated deploy (push to master)
 

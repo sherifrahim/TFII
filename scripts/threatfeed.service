@@ -1,0 +1,21 @@
+# TFII backend as a systemd service (manual deployment; see README → Manual Deployment).
+# Assumes the repo at /opt/tfii, its virtualenv at /opt/tfii/venv, settings in /opt/tfii/.env,
+# and a system user `tfii` that owns /opt/tfii. Adjust the paths if you installed elsewhere.
+[Unit]
+Description=TFII ThreatFeed Intelligence Platform (backend)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=tfii
+WorkingDirectory=/opt/tfii/backend
+EnvironmentFile=/opt/tfii/.env
+# Listen on loopback only: nginx terminates HTTPS and proxies to it.
+ExecStart=/opt/tfii/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

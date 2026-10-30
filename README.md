@@ -50,7 +50,7 @@ There is no default password. Username `admin`; the password is the `ADMIN_INITI
 docker compose logs backend | grep "First-run admin"
 ```
 
-Change it right away under Settings → Change Password. Free public feeds (Feodo Tracker, OpenPhish, Phishing.Database, IPsum, CINS, Emerging Threats, blocklist.de, NVD, CISA KEV, EPSS) work without any key; add keys for VirusTotal, AbuseIPDB, abuse.ch and OTX under Settings → Manage API Keys for richer enrichment.
+Change it right away under Settings → Change Password. Free public feeds (Feodo Tracker, OpenPhish, Phishing.Database, IPsum, CINS, Emerging Threats, blocklist.de, NVD, CISA KEV, EPSS) work without any key; add keys for VirusTotal, AbuseIPDB, abuse.ch, OTX and VirusSign under Settings → Manage API Keys (or the account menu → API keys) for richer enrichment.
 
 ## What you get
 
@@ -59,7 +59,7 @@ Change it right away under Settings → Change Password. Free public feeds (Feod
 | **Command Center** | Live metrics and trends (IOCs, high-confidence, new today, CVEs, unpatched, KEV, campaigns), Threat Pulse (actively exploited CVEs in *your* software, malware families with fresh indicators), connector health. Everything drills down. |
 | **IOC Intelligence** | Server-side paginated table (thousands of rows), search, type/source/TLP/confidence/time filters, facets, bulk actions, STIX 2.1 export, TAXII 2.1 server, STIX/TAXII/MISP/CSV import. |
 | **Multi-source feeds** | Feodo Tracker, OpenPhish, Phishing.Database, IPsum, CINS Army, Emerging Threats, blocklist.de, AlienVault OTX, and abuse.ch ThreatFox, MalwareBazaar and URLhaus, plus VirusSign with your own key (including revocations). Per-source reliability, expiry, and consensus rules. |
-| **Entity Intelligence** | One page per indicator: reputation, confidence reasoning, VirusTotal / AbuseIPDB / URLhaus enrichment, provenance, related IOCs, linked CVEs, relationship graph, timeline, notes, generated KQL / SPL / YARA hunting queries. |
+| **Entity Intelligence** | One page per indicator: reputation, confidence reasoning, VirusTotal / AbuseIPDB / URLhaus / VirusSign enrichment, provenance, related IOCs, linked CVEs, relationship graph, timeline, notes, generated KQL / SPL / YARA hunting queries. |
 | **Email addresses** | Judged through their domain (reputation, age, MX / SPF / DMARC, disposable and free-mail detection), with on-request breach exposure (XposedOrNot) and address risk (IPQualityScore) and deep mail-domain tests (MxToolbox), each with your own key. Works in bulk lookup too. |
 | **DNS records** | Name servers, mail servers, TXT, CAA and SOA for a domain, with SPF and DMARC parsed and flagged — via the public NSLookup.io API, cached, rate-limited. |
 | **CVE Intelligence** | Per-product severity mix, KEV, EPSS, affected versions, multi-source lookup (NVD, CVE.org, OSV, exploit references), reports. NVD is polled every 6 hours. |
@@ -94,11 +94,16 @@ frontend/src
 backend
   main.py           FastAPI app, auth/capabilities, v1 API, connectors, schedulers
   feeds.py          multi-source feed parsers, reliability and consensus rules
+  virussign.py      VirusSign lookups and event feed (cursor, quota bounds, revocations)
+  details.py        per-provider answers for the Detailed report
+  mailintel.py      email-address checks through the domain (MX, SPF, DMARC, age, disposable)
+  ai.py, ai_api.py  AI providers (CodeCraft, then Groq) and the assistant endpoints
   geo.py            honest, labelled location facts
   dnsintel.py       DNS record enrichment with throttle and cache
   keycheck.py       API-key validity checks
   security.py       SSRF-safe HTTP client, URL/domain validators, security headers
   migrations.py     numbered, additive schema migrations
+  dbmaint.py        slow maintenance (index builds, old-row cleanup) run after startup
   entities.py       entity headers, relationship engine, provenance, timelines
   search.py         provider-based global search
   entity_api.py     /v2/entity*, /v2/search, relationships, workspace bridge
@@ -106,7 +111,7 @@ backend
   tests/            pytest suite (own throwaway PostgreSQL database)
 ```
 
-The v1 API is unchanged; `/v2/*` is additive. Schema migrations are additive and run at startup.
+The v1 API is unchanged; `/v2/*` is additive. Schema migrations are additive and run at startup; anything slow (building an index on a large table, cleaning up old rows) runs in the background once the app is up, so a deploy never waits on it.
 
 ### Local development
 
@@ -128,7 +133,7 @@ cd frontend && npm run lint && npm test
 
 ## Cost
 
-TFII itself is free. It runs comfortably on a small VM (an Oracle Cloud always-free ARM instance is enough) and every default data source is free: NVD, CISA KEV, EPSS, MITRE ATT&CK, the public blocklists above, and abuse.ch with a free Auth-Key. Optional keys (VirusTotal, AbuseIPDB, Shodan, Groq for the query builder, OTX) are yours and stay within your own quotas. Check each provider's terms for your use — see [docs/DATA_FLOWS.md](docs/DATA_FLOWS.md).
+TFII itself is free. It runs comfortably on a small VM (an Oracle Cloud always-free ARM instance is enough) and every default data source is free: NVD, CISA KEV, EPSS, MITRE ATT&CK, the public blocklists above, and abuse.ch with a free Auth-Key. Optional keys (VirusTotal, AbuseIPDB, Shodan, OTX, VirusSign, and Groq or CodeCraft for the AI features) are yours and stay within your own quotas. Check each provider's terms for your use — see [docs/DATA_FLOWS.md](docs/DATA_FLOWS.md).
 
 ---
 
@@ -170,7 +175,7 @@ docker compose exec postgres psql -U threatfeed threatfeeddb   # DB access
 
 ## Manual Deployment
 
-Tested on Ubuntu 22.04. Requires: Python 3.10+, Node.js 20+, PostgreSQL 15+, Nginx.
+Tested on Ubuntu 22.04. Requires: Python 3.10+, Node.js 20.19+ (for the Vite build), PostgreSQL 14+, Nginx.
 
 ### 1. System setup
 ```bash
@@ -193,9 +198,11 @@ pip install -r backend/requirements.txt
 cp .env.example .env
 nano .env    # Fill in all values
 
-# systemd service
+# systemd service (runs as its own user, listens on 127.0.0.1:8000 only)
+sudo useradd --system --home /opt/tfii --shell /usr/sbin/nologin tfii
+sudo chown -R tfii /opt/tfii
 sudo cp scripts/threatfeed.service /etc/systemd/system/
-sudo systemctl enable --now threatfeed
+sudo systemctl daemon-reload && sudo systemctl enable --now threatfeed
 ```
 
 ### 4. Frontend
@@ -211,6 +218,8 @@ npm ci && npm run build      # output: build/
 sudo certbot --nginx -d your-domain.com
 # Configure nginx to serve /ui/ from the React build and proxy / to port 8000
 ```
+
+[`deploy/nginx/threatfeed.conf`](deploy/nginx/threatfeed.conf) is a working example (cache rules, SPA fallback, 100 MB uploads); change the host name and paths. [`deploy/`](deploy/) also has a nightly backup (`tfii-backup.sh` with a systemd timer) for the database and the file store.
 
 ---
 
@@ -241,6 +250,14 @@ sudo certbot --nginx -d your-domain.com
 | `ABUSEIPDB_API_KEY` | Optional | AbuseIPDB enrichment |
 | `NVD_API_KEY` | Optional | Higher NVD rate limits ([nvd.nist.gov/developers](https://nvd.nist.gov/developers)) |
 | `SHODAN_API_KEY` | Optional | Shodan OSINT |
+| `GROQ_MODEL` | Optional | Groq model for the AI features (default `openai/gpt-oss-120b`) |
+| `TOKEN_EXPIRE_MINUTES` | Optional | How long a login lasts (default 120) |
+| `SERVER_URL` | Optional | Public base URL advertised by the TAXII server (default `https://` + `DOMAIN`) |
+| `ROOT_ADMIN_USERNAME` | Optional | The one account allowed to publish files from the file store (default `admin`); other admins cannot |
+| `UPLOAD_DIR` | Optional | Where the file store keeps uploads (default `uploads` under the backend directory) |
+| `MAX_FILE_MB` / `MAX_STORE_GB` | Optional | File store limits: per file (default 100 MB) and in total (default 5 GB) |
+| `ENABLE_API_DOCS` | Optional | `1` serves the interactive API docs at `/docs`; off by default |
+| `TFII_SKIP_DB_MAINT` | Optional | `1` skips the background database maintenance at startup (the test suite sets it) |
 
 ---
 
