@@ -1,0 +1,67 @@
+name: TLS and DNS check (read-only)
+
+# Manual only. Connects to the public site from a GitHub runner, the way an outside visitor would, and prints what
+# corporate TLS-inspecting proxies (Zscaler, FortiGate and similar) look at: the certificate chain the server sends,
+# its validity, revocation pointers (OCSP / CRL), key and signature types, SNI and no-SNI answers, TLS versions,
+# IPv4/IPv6 reachability and DNS (A, AAAA, CAA). Uses no secrets and changes nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "Host name to check"
+        default: "threatintel.mooo.com"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect
+        env:
+          H: ${{ github.event.inputs.host }}
+        run: |
+          set +e
+          sudo apt-get -qq install -y dnsutils >/dev/null 2>&1
+          echo "=== 1. DNS ==="
+          for t in A AAAA CAA NS; do printf '%-5s ' "$t"; dig +short "$H" "$t" | tr '\n' ' '; echo; done
+          parent="${H#*.}"
+          printf 'CAA (%s) ' "$parent"; dig +short "$parent" CAA | tr '\n' ' '; echo
+          printf 'NS  (%s) ' "$parent"; dig +short "$parent" NS | tr '\n' ' '; echo
+
+          echo "=== 2. chain the server sends (with SNI) ==="
+          echo | openssl s_client -connect "$H:443" -servername "$H" -showcerts 2>/dev/null > chain.txt
+          awk '/BEGIN CERTIFICATE/{n++} {if(n) print > ("cert" n ".pem")} /END CERTIFICATE/{}' chain.txt
+          i=1
+          for f in cert*.pem; do
+            echo "--- certificate $i ($f) ---"
+            openssl x509 -in "$f" -noout -subject -issuer -dates -serial 2>&1
+            openssl x509 -in "$f" -noout -text 2>/dev/null | grep -E "Public Key Algorithm|Public-Key:|ASN1 OID|Signature Algorithm" | sort -u | sed 's/^ */  /'
+            openssl x509 -in "$f" -noout -ext subjectAltName,authorityInfoAccess,crlDistributionPoints,extendedKeyUsage,basicConstraints 2>/dev/null | sed 's/^ */  /'
+            i=$((i+1))
+          done
+          grep -E "Verify return code|Protocol|Cipher|Server Temp Key|Peer signature" chain.txt | sed 's/^ */  /' | sort -u
+
+          echo "=== 3. does the chain verify against the runner's standard root store? ==="
+          cat cert*.pem > sent-chain.pem
+          openssl verify -untrusted sent-chain.pem cert1.pem 2>&1 | tail -2
+          echo "root the chain ends at (issuer of the last certificate sent):"
+          last=$(ls cert*.pem | sort -V | tail -1); openssl x509 -in "$last" -noout -issuer
+
+          echo "=== 4. without SNI (some inspection proxies and IP-based checks see this one) ==="
+          echo | openssl s_client -connect "$H:443" -noservername 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>&1 | sed 's/^/  /'
+
+          echo "=== 5. TLS versions ==="
+          for v in tls1 tls1_1 tls1_2 tls1_3; do
+            r=$(echo | timeout 10 openssl s_client -connect "$H:443" -servername "$H" -$v 2>&1 | grep -E "^ *Protocol *:|Cipher is" | head -1)
+            printf '  %-7s %s\n' "$v" "${r:-refused}"
+          done
+
+          echo "=== 6. IPv4 and IPv6 reachability ==="
+          curl -4 -sS -o /dev/null -m 15 -w '  IPv4: HTTP %{http_code}, TLS verify %{ssl_verify_result}, %{time_total}s\n' "https://$H/ui/" || echo "  IPv4 failed"
+          if [ -n "$(dig +short "$H" AAAA)" ]; then
+            curl -6 -sS -o /dev/null -m 15 -w '  IPv6: HTTP %{http_code}, TLS verify %{ssl_verify_result}, %{time_total}s\n' "https://$H/ui/" || echo "  IPv6 FAILED (an AAAA record exists but the site does not answer on it)"
+          else
+            echo "  IPv6: no AAAA record"
+          fi
+
+          echo "=== 7. certificate transparency: recent certificates for the host (crt.sh) ==="
+          curl -sS -m 30 "https://crt.sh/?q=$H&output=json" | python3 -c "import sys,json; d=json.load(sys.stdin); [print('  ', x['not_before'], '->', x['not_after'], '|', x['issuer_name'][:70]) for x in sorted(d, key=lambda x: x['not_before'], reverse=True)[:6]]" 2>&1 | head -8
