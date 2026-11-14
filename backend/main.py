@@ -5455,7 +5455,54 @@ CVE_FEEDS = [
     ("https://blog.talosintelligence.com/rss/",                           "Cisco Talos",   "Analysis"),
     ("https://blog.rapid7.com/rss/",                                      "Rapid7",        "Analysis"),
     ("https://securelist.com/feed/",                                      "Kaspersky",     "Analysis"),
+    # Actively exploited vulnerabilities (CISA KEV additions and other evidence-backed exploitation), one item per
+    # advisory with its CVE IDs. Dataset licence CC BY 4.0: attribution is the item's source name and link.
+    ("https://ichi.global/api/alerts",                                    "ICHI",          "Exploited"),
 ]
+
+_ADV_BLOCK = re.compile(r"<(item|entry)\b[^>]*>(.*?)</\1>", re.S | re.I)
+
+def _adv_field(block: str, *names: str) -> str:
+    """Text of the first of `names` present in one item block (CDATA unwrapped), else ''."""
+    for name in names:
+        m = re.search(rf"<{re.escape(name)}\b[^>]*>(.*?)</{re.escape(name)}>", block, re.S | re.I)
+        if m:
+            t = m.group(1).strip()
+            c = re.fullmatch(r"<!\[CDATA\[(.*?)\]\]>", t, re.S)
+            return (c.group(1) if c else t).strip()
+    return ""
+
+def parse_advisory_feed(content: str) -> list:
+    """Items of an RSS 2.0, RSS 1.0 (RDF) or Atom advisory feed, each read from its own <item>/<entry> block.
+    The old parser collected titles, links and descriptions into separate lists and paired them by position;
+    a channel-level <description> shifted every description (and the CVEs found in it) onto the next item."""
+    out = []
+    for _tag, block in _ADV_BLOCK.findall(content or ""):
+        title = _html.unescape(re.sub(r"<[^>]+>", "", _adv_field(block, "title"))).strip()
+        if len(title) < 5:
+            continue
+        link = _adv_field(block, "link")
+        if not link:
+            m = re.search(r"""<link\b[^>]*href=["']([^"']+)["']""", block, re.I)
+            link = m.group(1) if m else ""
+        link = _html.unescape(link).strip()
+        raw_date = _adv_field(block, "pubDate", "updated", "dc:date", "published")
+        try:
+            date_str = parsedate_to_datetime(raw_date).strftime("%Y-%m-%d")
+        except Exception:
+            date_str = raw_date[:10] if raw_date else ""
+        # Decode entities BEFORE stripping tags, or escaped markup survives to the UI verbatim — Debian's DSA feed
+        # ships its links double-encoded and rendered as "&lt;a href=&quot;...". Unescape twice for that layer.
+        raw = _html.unescape(_html.unescape(_adv_field(block, "description", "summary", "content:encoded", "content")))
+        desc = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw)).strip()[:300]
+        cves = sorted(set(m.upper() for m in re.findall(r"CVE-\d{4}-\d{4,}", f"{title} {desc}", re.I)))
+        tl = title.lower()
+        sev = ("Critical" if any(w in tl for w in ["critical", "remote code", "rce", "unauthenticated"]) else
+               "High" if any(w in tl for w in ["high", "elevation", "privilege", "bypass"]) else
+               "Low" if any(w in tl for w in ["low", "informational", "denial of service"]) else "Medium")
+        out.append({"title": title, "severity": sev, "date": date_str, "url": link, "description": desc,
+                    "cves_mentioned": cves[:5]})
+    return out
 
 async def fetch_cve_rss(url: str, source: str, category: str) -> dict:
     """Fetch one CVE feed. Returns {source, ok, items, error} rather than a bare
@@ -5473,64 +5520,7 @@ async def fetch_cve_rss(url: str, source: str, category: str) -> dict:
         if r.status_code != 200:
             return {"source": source, "ok": False, "items": [],
                     "error": f"HTTP {r.status_code}"}
-        content = r.text
-        items = []
-        # Extract titles and links
-        titles = re.findall(r"<title><!\[CDATA\[(.*?)\]\]>|<title>(.*?)</title>", content, re.DOTALL)
-        links  = re.findall(r"<link>(.*?)</link>|<link href=[\"'](.*?)[\"']", content, re.DOTALL)
-        dates  = re.findall(r"<pubDate>(.*?)</pubDate>|<updated>(.*?)</updated>|<dc:date>(.*?)</dc:date>", content)
-        descs  = re.findall(r"<description><!\[CDATA\[(.*?)\]\]>|<description>(.*?)</description>", content, re.DOTALL)
-        for i, (t1,t2) in enumerate(titles[1:], 0):  # skip feed title
-            title = (t1 or t2).strip()
-            if not title or len(title) < 5: continue
-            link  = links[i+1][0] or links[i+1][1] if i+1 < len(links) else ""
-            link  = link.strip()
-            raw_date = (dates[i][0] or dates[i][1] or dates[i][2]).strip() if i < len(dates) else ""
-            try:
-                from email.utils import parsedate_to_datetime
-                dt = parsedate_to_datetime(raw_date)
-                date_str = dt.strftime("%Y-%m-%d")
-            except Exception:
-                date_str = raw_date[:10] if raw_date else ""
-            desc = ""
-            if i < len(descs):
-                raw = (descs[i][0] or descs[i][1]).strip()
-                # Decode entities BEFORE stripping tags, or escaped markup
-                # survives to the UI verbatim — Debian's DSA feed ships its
-                # links double-encoded and rendered as "&lt;a href=&quot;...".
-                # Unescape twice to catch that second layer.
-                raw = _html.unescape(_html.unescape(raw))
-                desc = re.sub(r"<[^>]+>", " ", raw)
-                desc = re.sub(r"\s+", " ", desc).strip()[:300]
-            # Extract CVE IDs mentioned
-            # Strip HTML tags and decode entities before extracting CVE IDs
-            clean_title = re.sub(r"<[^>]+>", "", title)
-            clean_desc  = re.sub(r"<[^>]+>", "", desc)
-            # Decode common HTML entities
-            for ent, ch in [("&amp;","&"),("&lt;","<"),("&gt;",">"),("&quot;",'"'),("&#39;","'"),("&nbsp;"," ")]:
-                clean_title = clean_title.replace(ent, ch)
-                clean_desc  = clean_desc.replace(ent, ch)
-            cves_mentioned = list(set(re.findall(r"CVE-\d{4}-\d{4,}", clean_title + " " + clean_desc)))
-            # Severity hint from title
-            sev = "Medium"
-            title_lc = title.lower()
-            if any(w in title_lc for w in ["critical","remote code","rce","unauthenticated"]):
-                sev = "Critical"
-            elif any(w in title_lc for w in ["high","elevation","privilege","bypass"]):
-                sev = "High"
-            elif any(w in title_lc for w in ["low","informational","denial of service"]):
-                sev = "Low"
-            items.append({
-                "title":         title,
-                "source":        source,
-                "category":      category,
-                "severity":      sev,
-                "date":          date_str,
-                "url":           link,
-                "description":   desc,
-                "cves_mentioned": cves_mentioned[:5],
-            })
-            if len(items) >= 8: break
+        items = [{**it, "source": source, "category": category} for it in parse_advisory_feed(r.text)[:8]]
         # Reachable but yielding nothing is its own failure mode — a feed that
         # changed format parses to zero items while still returning 200.
         return {"source": source, "ok": bool(items), "items": items,

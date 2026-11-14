@@ -17,6 +17,7 @@ TFII is self-hosted and has **no telemetry**. It never sends anything to the pro
 | NVD, CVE.org, CISA KEV, FIRST EPSS, OSV | CVE data | optional NVD key |
 | MITRE ATT&CK (GitHub) | Actor and technique data | none |
 | News and advisory RSS (e.g. CISA, Krebs, BleepingComputer, Talos, Securelist) | Headlines | none |
+| ICHI critical-vulnerability advisories (ichi.global) | Actively exploited vulnerabilities (CISA KEV additions and other evidence-backed exploitation) with their CVE IDs, on the Intel Wall | none; dataset licence CC BY 4.0, attributed by source name and link on each item |
 
 ## Lookups (triggered by a user)
 

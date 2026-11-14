@@ -50,6 +50,7 @@ jobs:
             code "AbuseIPDB"         -H "Key: $ABUSEIPDB_API_KEY" -H "Accept: application/json" "https://api.abuseipdb.com/api/v2/check?ipAddress=8.8.8.8"
             code "Shodan"            "https://api.shodan.io/api-info?key=$SHODAN_API_KEY"
             code "Groq"              -H "Authorization: Bearer $GROQ_API_KEY" "https://api.groq.com/openai/v1/models"
+            code "ICHI advisories"   "https://ichi.global/api/alerts"
             for u in "https://feeds.feedburner.com/TheHackersNews" "https://www.bleepingcomputer.com/feed/" "https://www.cisa.gov/cybersecurity-advisories/all.xml" "https://isc.sans.edu/rssfeed_full.xml" "https://krebsonsecurity.com/feed/"; do code "RSS ${u#https://}" -A "Mozilla/5.0" "$u"; done
             echo "=== 4. CVE poller: last runs ==="
             Q "SELECT polled_at, assets_polled, new_cves, patches_detected FROM cve_poll_log ORDER BY polled_at DESC LIMIT 5"

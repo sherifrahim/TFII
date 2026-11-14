@@ -64,7 +64,7 @@ Change it right away under Settings → Change Password. Free public feeds (Feod
 | **DNS records** | Name servers, mail servers, TXT, CAA and SOA for a domain, with SPF and DMARC parsed and flagged — via the public NSLookup.io API, cached, rate-limited. |
 | **CVE Intelligence** | Per-product severity mix, KEV, EPSS, affected versions, multi-source lookup (NVD, CVE.org, OSV, exploit references), reports. NVD is polled every 6 hours. |
 | **Actors & campaigns** | MITRE ATT&CK actor profiles, campaign pages with an infrastructure graph. |
-| **Intel Wall** | News and advisories merged into one classified feed, with an "Affects my software" cross-reference to your monitored assets. |
+| **Intel Wall** | News and advisories merged into one classified feed, including actively exploited vulnerabilities from [ICHI](https://ichi.global/), with an "Affects my software" cross-reference to your monitored assets. |
 | **Workspace** | Investigations (tracked or untracked observables), notes, saved queries, Markdown report export. |
 | **OSINT toolkit** | IOC lookup (DNS / RDAP / Shodan), bulk lookup, URL decoder, safe-link extractor, redirect tracer, diff checker. |
 | **Ctrl+K** | Global search and command palette across everything above. |
